@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { after } from "next/server";
 import crypto from "crypto";
 import {
   getSlackClient,
@@ -7,20 +6,29 @@ import {
   handlePoTestCommand,
 } from "@/lib/slack";
 
+// Vercel Serverless の最大実行時間
+export const maxDuration = 10;
+
 /**
  * Slack Events / Interactive Messages / Slash Commands の統一エンドポイント
  *
  * 重要: Slackは3秒以内のレスポンスを要求する。
- * next/server の after() を使い、即座に200を返してから
- * バックグラウンドでSlack API呼び出しを行う。
+ * 処理を fire-and-forget で起動し、即座に200を返す。
  */
 export async function POST(request: NextRequest) {
+  console.log("[slack] POST received", {
+    url: request.url,
+    contentType: request.headers.get("content-type"),
+  });
+
   const body = await request.text();
   const timestamp = request.headers.get("x-slack-request-timestamp") || "";
   const slackSignature = request.headers.get("x-slack-signature") || "";
 
   // 署名検証
-  if (!verifySlackSignature(body, timestamp, slackSignature)) {
+  const sigValid = verifySlackSignature(body, timestamp, slackSignature);
+  console.log("[slack] signature valid:", sigValid);
+  if (!sigValid) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 403 });
   }
 
@@ -39,25 +47,26 @@ export async function POST(request: NextRequest) {
     payload = JSON.parse(body);
   }
 
+  console.log("[slack] payload type:", payload.type || payload.command || "unknown");
+
   // URL Verification
   if (payload.type === "url_verification") {
     return NextResponse.json({ challenge: payload.challenge });
   }
 
-  // after() でバックグラウンド処理: レスポンス送信後に実行される
-  after(async () => {
-    try {
-      if (payload.type === "block_actions") {
-        await handleBlockActions(payload);
-      } else if (typeof payload.command === "string") {
-        await handleSlashCommand(payload);
-      }
-    } catch (error) {
-      console.error("Slack event processing error:", error);
-    }
-  });
+  // fire-and-forget: awaitせずに処理を開始し、即座にレスポンスを返す
+  // .catch() でエラーを握りつぶす（レスポンスはすでに返却済み）
+  if (payload.type === "block_actions") {
+    handleBlockActions(payload).catch((e) =>
+      console.error("[slack] block_actions error:", e)
+    );
+  } else if (typeof payload.command === "string") {
+    handleSlashCommand(payload).catch((e) =>
+      console.error("[slack] slash command error:", e)
+    );
+  }
 
-  // 即座に200を返す（3秒ルール対応）
+  // 即座に200を返す
   return new NextResponse("", { status: 200 });
 }
 
