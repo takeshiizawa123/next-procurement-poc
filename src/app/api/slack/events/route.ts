@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import crypto from "crypto";
 import {
   getSlackClient,
@@ -9,10 +10,9 @@ import {
 /**
  * Slack Events / Interactive Messages / Slash Commands の統一エンドポイント
  *
- * Slack App設定で以下のURLをすべてこのエンドポイントに向ける:
- *   - Event Subscriptions Request URL
- *   - Interactivity & Shortcuts Request URL
- *   - Slash Commands Request URL
+ * 重要: Slackは3秒以内のレスポンスを要求する。
+ * next/server の after() を使い、即座に200を返してから
+ * バックグラウンドでSlack API呼び出しを行う。
  */
 export async function POST(request: NextRequest) {
   const body = await request.text();
@@ -31,35 +31,34 @@ export async function POST(request: NextRequest) {
   if (contentType.includes("application/x-www-form-urlencoded")) {
     const params = new URLSearchParams(body);
     if (params.has("payload")) {
-      // Interactive Messages（ボタンクリック等）
       payload = JSON.parse(params.get("payload")!);
     } else {
-      // Slash Commands
       payload = Object.fromEntries(params.entries());
     }
   } else {
-    // Events API (JSON)
     payload = JSON.parse(body);
   }
 
-  // URL Verification（Slack App初回設定時のチャレンジ）
+  // URL Verification
   if (payload.type === "url_verification") {
     return NextResponse.json({ challenge: payload.challenge });
   }
 
-  // 非同期処理（Slackには即座に200を返す）
-  try {
-    if (payload.type === "block_actions") {
-      await handleBlockActions(payload);
-    } else if (typeof payload.command === "string") {
-      await handleSlashCommand(payload);
+  // after() でバックグラウンド処理: レスポンス送信後に実行される
+  after(async () => {
+    try {
+      if (payload.type === "block_actions") {
+        await handleBlockActions(payload);
+      } else if (typeof payload.command === "string") {
+        await handleSlashCommand(payload);
+      }
+    } catch (error) {
+      console.error("Slack event processing error:", error);
     }
-    // event_callback は将来的に追加
-  } catch (error) {
-    console.error("Slack event processing error:", error);
-  }
+  });
 
-  return NextResponse.json({ ok: true });
+  // 即座に200を返す（3秒ルール対応）
+  return new NextResponse("", { status: 200 });
 }
 
 // --- 署名検証 ---
@@ -71,7 +70,6 @@ function verifySlackSignature(
 ): boolean {
   const signingSecret = process.env.SLACK_SIGNING_SECRET || "";
 
-  // 開発時はスキップ可能（本番では必須）
   if (!signingSecret) {
     console.warn("SLACK_SIGNING_SECRET not set. Skipping verification.");
     return true;
@@ -79,7 +77,6 @@ function verifySlackSignature(
 
   if (!timestamp || !signature) return false;
 
-  // リプレイ攻撃防止（5分）
   const now = Math.floor(Date.now() / 1000);
   if (Math.abs(now - parseInt(timestamp)) > 300) return false;
 
@@ -108,7 +105,11 @@ async function handleBlockActions(
 ): Promise<void> {
   const client = getSlackClient();
 
-  const user = payload.user as { id: string; name?: string; username?: string };
+  const user = payload.user as {
+    id: string;
+    name?: string;
+    username?: string;
+  };
   const actions = payload.actions as Array<{
     action_id: string;
     value: string;
