@@ -1,0 +1,31 @@
+display_information:
+  name: Procurement POC Bot
+  description: 購買管理POC - 承認フローテスト
+  background_color: "#1E40AF"
+
+features:
+  bot_user:
+    display_name: procurement-bot
+    always_online: true
+  slash_commands:
+    - command: /po-test
+      url: https://YOUR_VERCEL_DOMAIN/api/slack/events
+      description: 購買申請テスト（ボタン付きメッセージを投稿）
+      usage_hint: ""
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      - chat:write        # メッセージ投稿・更新
+      - commands           # スラッシュコマンド
+      - im:write           # DM送信
+      - users:read         # ユーザー情報取得
+
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://YOUR_VERCEL_DOMAIN/api/slack/events
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
