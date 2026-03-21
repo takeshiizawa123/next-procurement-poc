@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useActionState } from "react";
+import { Suspense, useActionState, useState, useCallback, useRef } from "react";
 
 type FormState = {
   ok: boolean;
@@ -28,12 +28,153 @@ async function submitPurchase(
   }
 }
 
+// --- ファイルアップロードUI ---
+
+interface FileItem {
+  file: File;
+  preview: string | null;
+}
+
+function FileUpload({ required }: { required: boolean }) {
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const addFiles = useCallback((newFiles: FileList | null) => {
+    if (!newFiles) return;
+    const items: FileItem[] = Array.from(newFiles).map((file) => ({
+      file,
+      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+    }));
+    setFiles((prev) => [...prev, ...items]);
+  }, []);
+
+  const removeFile = useCallback((index: number) => {
+    setFiles((prev) => {
+      const removed = prev[index];
+      if (removed.preview) URL.revokeObjectURL(removed.preview);
+      return prev.filter((_, i) => i !== index);
+    });
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      addFiles(e.dataTransfer.files);
+    },
+    [addFiles],
+  );
+
+  return (
+    <div>
+      {/* hidden file inputs for form submission */}
+      {files.map((item, i) => {
+        const dt = new DataTransfer();
+        dt.items.add(item.file);
+        return (
+          <input
+            key={`input-${i}`}
+            type="file"
+            name="vouchers"
+            style={{ display: "none" }}
+            ref={(el) => {
+              if (el) el.files = dt.files;
+            }}
+          />
+        );
+      })}
+
+      {/* drop zone */}
+      <div
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={handleDrop}
+        onClick={() => inputRef.current?.click()}
+        className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
+      >
+        <p className="text-gray-500">
+          📎 ファイルをドラッグ&ドロップ、またはクリックして選択
+        </p>
+        <p className="text-xs text-gray-400 mt-1">
+          画像・PDF・Excel対応（複数可）
+        </p>
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept="image/*,.pdf,.xlsx,.xls,.csv"
+          className="hidden"
+          onChange={(e) => {
+            addFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
+      </div>
+
+      {/* validation for required */}
+      {required && files.length === 0 && (
+        <input type="text" required value="" readOnly className="hidden" tabIndex={-1} />
+      )}
+
+      {/* file list */}
+      {files.length > 0 && (
+        <ul className="mt-3 space-y-2">
+          {files.map((item, i) => (
+            <li
+              key={i}
+              className="flex items-center gap-3 bg-gray-50 rounded-lg p-2"
+            >
+              {item.preview ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={item.preview}
+                  alt=""
+                  className="w-12 h-12 object-cover rounded"
+                />
+              ) : (
+                <span className="w-12 h-12 flex items-center justify-center bg-gray-200 rounded text-lg">
+                  {item.file.name.endsWith(".pdf") ? "📄" : "📊"}
+                </span>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm truncate">{item.file.name}</p>
+                <p className="text-xs text-gray-400">
+                  {(item.file.size / 1024).toFixed(0)} KB
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeFile(i);
+                }}
+                className="text-red-400 hover:text-red-600 px-2"
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// --- メインフォーム ---
+
 function PurchaseFormInner() {
   const params = useSearchParams();
   const userId = params.get("user_id") || "";
   const channelId = params.get("channel_id") || "";
 
   const [state, action, pending] = useActionState(submitPurchase, null);
+
+  // 条件分岐用 state
+  const [requestType, setRequestType] = useState("");
+  const [amount, setAmount] = useState(0);
+  const [quantity, setQuantity] = useState(1);
+
+  const isPurchased = requestType === "購入済";
+  const totalAmount = amount * quantity;
+  const isHighValue = totalAmount >= 100000;
 
   if (!userId) {
     return (
@@ -89,15 +230,33 @@ function PurchaseFormInner() {
           <legend className="block text-sm font-medium mb-1">
             申請区分 <span className="text-red-500">*</span>
           </legend>
-          <select
-            name="request_type"
-            required
-            className="w-full border rounded-lg px-3 py-2 bg-white"
-          >
-            <option value="">選択してください</option>
-            <option value="購入前">購入前</option>
-            <option value="購入済">購入済</option>
-          </select>
+          <div className="flex gap-4">
+            {["購入前", "購入済"].map((v) => (
+              <label
+                key={v}
+                className={`flex-1 text-center py-3 rounded-lg border-2 cursor-pointer transition-colors ${
+                  requestType === v
+                    ? "border-blue-500 bg-blue-50 text-blue-700 font-bold"
+                    : "border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="request_type"
+                  value={v}
+                  required
+                  className="sr-only"
+                  onChange={(e) => setRequestType(e.target.value)}
+                />
+                {v === "購入前" ? "🛒 購入前" : "📦 購入済"}
+              </label>
+            ))}
+          </div>
+          {isPurchased && (
+            <p className="text-sm text-amber-600 mt-2">
+              ⚡ 購入済のため承認・発注ステップはスキップされます。証憑の添付が必須です。
+            </p>
+          )}
         </fieldset>
 
         {/* 品目名 */}
@@ -114,34 +273,49 @@ function PurchaseFormInner() {
           />
         </fieldset>
 
-        {/* 金額・数量 */}
-        <div className="grid grid-cols-2 gap-4">
-          <fieldset>
-            <legend className="block text-sm font-medium mb-1">
-              金額（税込・円） <span className="text-red-500">*</span>
-            </legend>
-            <input
-              type="number"
-              name="amount"
-              required
-              min="1"
-              placeholder="165000"
-              className="w-full border rounded-lg px-3 py-2"
-            />
-          </fieldset>
-          <fieldset>
-            <legend className="block text-sm font-medium mb-1">
-              数量 <span className="text-red-500">*</span>
-            </legend>
-            <input
-              type="number"
-              name="quantity"
-              required
-              min="1"
-              defaultValue="1"
-              className="w-full border rounded-lg px-3 py-2"
-            />
-          </fieldset>
+        {/* 金額・数量・合計 */}
+        <div>
+          <div className="grid grid-cols-2 gap-4">
+            <fieldset>
+              <legend className="block text-sm font-medium mb-1">
+                単価（税込・円） <span className="text-red-500">*</span>
+              </legend>
+              <input
+                type="number"
+                name="amount"
+                required
+                min="1"
+                placeholder="165000"
+                className="w-full border rounded-lg px-3 py-2"
+                onChange={(e) => setAmount(parseInt(e.target.value) || 0)}
+              />
+            </fieldset>
+            <fieldset>
+              <legend className="block text-sm font-medium mb-1">
+                数量 <span className="text-red-500">*</span>
+              </legend>
+              <input
+                type="number"
+                name="quantity"
+                required
+                min="1"
+                defaultValue="1"
+                className="w-full border rounded-lg px-3 py-2"
+                onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
+              />
+            </fieldset>
+          </div>
+          {/* 合計額リアルタイム表示 */}
+          {totalAmount > 0 && (
+            <div className={`mt-2 text-right text-lg font-bold ${isHighValue ? "text-red-600" : "text-gray-700"}`}>
+              合計: ¥{totalAmount.toLocaleString()}
+              {isHighValue && (
+                <span className="text-sm font-normal text-red-500 ml-2">
+                  （10万円以上: 用途・理由の入力が必要です）
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* 支払方法 */}
@@ -189,26 +363,27 @@ function PurchaseFormInner() {
           />
         </fieldset>
 
-        {/* 購入品の用途 */}
-        <fieldset>
-          <legend className="block text-sm font-medium mb-1">
-            購入品の用途
-          </legend>
-          <select
-            name="asset_usage"
-            className="w-full border rounded-lg px-3 py-2 bg-white"
-          >
-            <option value="">10万円以上の場合に選択</option>
-            <option value="顧客案件">
-              顧客案件に使用する（納品・組込等）
-            </option>
-            <option value="社内使用">社内で使用する</option>
-            <option value="予備品">予備品として保管する</option>
-          </select>
-          <p className="text-xs text-gray-500 mt-1">
-            単価10万円以上の場合のみ回答してください
-          </p>
-        </fieldset>
+        {/* 購入品の用途 — 10万以上で必須化 */}
+        {(isHighValue || !requestType) && (
+          <fieldset>
+            <legend className="block text-sm font-medium mb-1">
+              購入品の用途
+              {isHighValue && <span className="text-red-500"> *</span>}
+            </legend>
+            <select
+              name="asset_usage"
+              required={isHighValue}
+              className="w-full border rounded-lg px-3 py-2 bg-white"
+            >
+              <option value="">選択してください</option>
+              <option value="顧客案件">
+                顧客案件に使用する（納品・組込等）
+              </option>
+              <option value="社内使用">社内で使用する</option>
+              <option value="予備品">予備品として保管する</option>
+            </select>
+          </fieldset>
+        )}
 
         {/* KATANA PO番号 */}
         <fieldset>
@@ -221,9 +396,7 @@ function PurchaseFormInner() {
             placeholder="例: PO-12345"
             className="w-full border rounded-lg px-3 py-2"
           />
-          <p className="text-xs text-gray-500 mt-1">
-            製品部品の場合に入力
-          </p>
+          <p className="text-xs text-gray-500 mt-1">製品部品の場合に入力</p>
         </fieldset>
 
         {/* HubSpot案件番号 */}
@@ -255,24 +428,48 @@ function PurchaseFormInner() {
           />
         </fieldset>
 
-        {/* 購入理由 */}
+        {/* 購入理由 — 10万以上で必須化 */}
         <fieldset>
-          <legend className="block text-sm font-medium mb-1">購入理由</legend>
+          <legend className="block text-sm font-medium mb-1">
+            購入理由
+            {isHighValue && <span className="text-red-500"> *</span>}
+          </legend>
           <textarea
             name="notes"
             rows={3}
+            required={isHighValue}
             placeholder="購入の目的・理由を記入"
             className="w-full border rounded-lg px-3 py-2"
           />
-          <p className="text-xs text-gray-500 mt-1">
-            単価10万円以上、または案件外の購入は必ず記入してください
-          </p>
+          {isHighValue ? (
+            <p className="text-xs text-red-500 mt-1">
+              10万円以上のため必須です
+            </p>
+          ) : (
+            <p className="text-xs text-gray-500 mt-1">
+              単価10万円以上、または案件外の購入は必ず記入してください
+            </p>
+          )}
         </fieldset>
 
-        {/* 証憑案内 */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
-          📎 証憑（納品書・領収書等）は申請後にSlackスレッドへ添付してください。購入済の場合は必須です。
-        </div>
+        {/* 証憑アップロード — 購入済の場合は必須 */}
+        <fieldset>
+          <legend className="block text-sm font-medium mb-1">
+            証憑（納品書・領収書等）
+            {isPurchased && <span className="text-red-500"> *</span>}
+          </legend>
+          {isPurchased && (
+            <p className="text-sm text-red-500 mb-2">
+              購入済のため証憑の添付が必須です
+            </p>
+          )}
+          <FileUpload required={isPurchased} />
+          {!isPurchased && (
+            <p className="text-xs text-gray-500 mt-2">
+              購入前の場合は後からSlackスレッドに添付することもできます
+            </p>
+          )}
+        </fieldset>
 
         <button
           type="submit"
