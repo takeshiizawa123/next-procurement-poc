@@ -12,6 +12,8 @@ export async function GET() {
       hasSlackToken: !!process.env.SLACK_BOT_TOKEN,
       hasSigningSecret: !!process.env.SLACK_SIGNING_SECRET,
       hasGasUrl: !!process.env.GAS_WEB_APP_URL,
+      hasPurchaseChannel: !!process.env.SLACK_PURCHASE_CHANNEL,
+      purchaseChannelPrefix: (process.env.SLACK_PURCHASE_CHANNEL || "").substring(0, 3),
     },
   });
 }

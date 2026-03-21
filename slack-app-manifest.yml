@@ -13,11 +13,17 @@ features:
       description: 購買申請テスト（ボタン付きメッセージを投稿）
       usage_hint: ""
       should_escape: false
+    - command: /purchase
+      url: https://YOUR_VERCEL_DOMAIN/api/slack/events
+      description: 購買申請（フォーム入力→承認フロー開始）
+      usage_hint: ""
+      should_escape: false
 
 oauth_config:
   scopes:
     bot:
-      - chat:write        # メッセージ投稿・更新
+      - chat:write        # メッセージ投稿・更新（公開チャンネル）
+      - groups:write       # 非公開チャンネルへの投稿・更新
       - commands           # スラッシュコマンド
       - im:write           # DM送信
       - users:read         # ユーザー情報取得

@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import {
   getSlackClient,
   actionHandlers,
   handlePoTestCommand,
+  handlePurchaseCommand,
+  parsePurchaseFormValues,
+  buildNewRequestBlocks,
+  type PurchaseFormData,
 } from "@/lib/slack";
 
 // Vercel Serverless の最大実行時間
@@ -48,7 +53,29 @@ export async function POST(request: NextRequest) {
           return new NextResponse("", { status: 200 });
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
-          // エラーをSlackにエフェメラルメッセージとして返す
+          return NextResponse.json({
+            response_type: "ephemeral",
+            text: `Error: ${msg}`,
+          });
+        }
+      }
+
+      if (command === "/purchase") {
+        const triggerId = payload.trigger_id as string;
+        if (!triggerId) {
+          return NextResponse.json({
+            response_type: "ephemeral",
+            text: "Error: trigger_id が取得できませんでした",
+          });
+        }
+        try {
+          const client = getSlackClient();
+          // コマンド実行元のチャンネルIDをモーダルに埋め込む
+          const sourceChannelId = channelId;
+          await handlePurchaseCommand(client, triggerId, sourceChannelId);
+          return new NextResponse("", { status: 200 });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
           return NextResponse.json({
             response_type: "ephemeral",
             text: `Error: ${msg}`,
@@ -60,6 +87,34 @@ export async function POST(request: NextRequest) {
         response_type: "ephemeral",
         text: `Unknown command: ${command}`,
       });
+    }
+
+    // モーダル送信（view_submission）
+    if (payload.type === "view_submission") {
+      const view = payload.view as {
+        callback_id: string;
+        private_metadata: string;
+        state: { values: Record<string, Record<string, { value?: string; selected_option?: { value: string } }>> };
+      };
+
+      if (view.callback_id === "purchase_submit") {
+        const userId = (payload.user as { id: string }).id;
+        const userName = (payload.user as { name?: string; username?: string }).name
+          || (payload.user as { username?: string }).username
+          || userId;
+        const formData = parsePurchaseFormValues(view.state.values);
+        const targetChannelId = view.private_metadata || PURCHASE_CHANNEL;
+
+        // モーダルを即座に閉じる（3秒制限対策）
+        // バックグラウンドで後続処理
+        after(async () => {
+          await handlePurchaseSubmission(userId, userName, formData, targetChannelId);
+        });
+
+        return NextResponse.json({ response_action: "clear" });
+      }
+
+      return NextResponse.json({ response_action: "clear" });
     }
 
     // Interactive Messages（ボタン）
@@ -77,6 +132,79 @@ export async function POST(request: NextRequest) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error("[slack] fatal error:", msg);
     return NextResponse.json({ error: msg }, { status: 200 });
+  }
+}
+
+// --- 購買申請 submit ハンドラー ---
+
+const PURCHASE_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
+
+async function handlePurchaseSubmission(
+  userId: string,
+  userName: string,
+  formData: PurchaseFormData,
+  targetChannelId: string
+): Promise<void> {
+  try {
+    const client = getSlackClient();
+
+    // TODO: GAS連携でPO番号発番・スプレッドシート登録（Sprint 1-3で実装）
+    const now = new Date();
+    const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const seq = String(Math.floor(Math.random() * 9999) + 1).padStart(4, "0");
+    const poNumber = `PO-${yyyymm}-${seq}`;
+
+    const amount = `¥${formData.amount.toLocaleString()}`;
+
+    // #purchase-request にメッセージ投稿
+    const channelId = targetChannelId || PURCHASE_CHANNEL;
+    if (!channelId) {
+      console.error("[purchase] SLACK_PURCHASE_CHANNEL is not set");
+      // フォールバック: 申請者にDMでエラー通知
+      await client.chat.postMessage({
+        channel: userId,
+        text: `⚠️ 購買申請の投稿先チャンネルが設定されていません。管理者に連絡してください。\n申請内容: ${formData.itemName} ${amount}`,
+      });
+      return;
+    }
+
+    const result = await client.chat.postMessage({
+      channel: channelId,
+      blocks: buildNewRequestBlocks({
+        poNumber,
+        itemName: formData.itemName,
+        amount,
+        applicant: `<@${userId}>`,
+        department: "", // TODO: 従業員マスタから取得（Sprint 1-6）
+        supplierName: formData.supplierName,
+        paymentMethod: formData.paymentMethod,
+        applicantSlackId: userId,
+      }),
+      text: `購買申請: ${poNumber} ${formData.itemName} ${amount}`,
+    });
+
+    console.log("[purchase] Posted to channel:", {
+      poNumber,
+      channelId,
+      messageTs: result.ts,
+      userId,
+    });
+
+    // TODO: GASにステータス登録（Sprint 1-5）
+    // TODO: 承認者にDM送信（Sprint 2-2）
+
+  } catch (error) {
+    console.error("[purchase] submission error:", error);
+    // 申請者にDMでエラー通知
+    try {
+      const client = getSlackClient();
+      await client.chat.postMessage({
+        channel: userId,
+        text: `⚠️ 購買申請の処理中にエラーが発生しました。再度お試しください。\nエラー: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    } catch {
+      console.error("[purchase] Failed to send error DM");
+    }
   }
 }
 
