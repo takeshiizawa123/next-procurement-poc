@@ -7,7 +7,9 @@ import {
   handlePurchaseCommand,
   parsePurchaseFormValues,
   buildNewRequestBlocks,
+  buildPurchasedRequestBlocks,
   sendApprovalDM,
+  notifyOps,
   type PurchaseFormData,
   type RequestInfo,
 } from "@/lib/slack";
@@ -175,6 +177,8 @@ async function handlePurchaseSubmission(
       return;
     }
 
+    const isPurchased = formData.requestType === "購入済";
+
     const requestInfo: RequestInfo = {
       poNumber,
       itemName: formData.itemName,
@@ -184,13 +188,19 @@ async function handlePurchaseSubmission(
       supplierName: formData.supplierName,
       paymentMethod: formData.paymentMethod,
       applicantSlackId: userId,
-      approverSlackId,
+      approverSlackId: isPurchased ? "" : approverSlackId,
       inspectorSlackId: formData.inspectorSlackId || userId,
     };
 
+    // 購入済 → 承認・発注スキップ、即「検収済・証憑待ち」
+    // 購入前 → 通常の承認フロー
+    const blocks = isPurchased
+      ? buildPurchasedRequestBlocks(requestInfo)
+      : buildNewRequestBlocks(requestInfo);
+
     const result = await client.chat.postMessage({
       channel: channelId,
-      blocks: buildNewRequestBlocks(requestInfo),
+      blocks,
       text: `購買申請: ${poNumber} ${formData.itemName} ${amount}`,
     });
 
@@ -199,19 +209,36 @@ async function handlePurchaseSubmission(
       channelId,
       messageTs: result.ts,
       userId,
-      approverSlackId,
+      isPurchased,
     });
 
-    // 承認者にDM送信
-    if (approverSlackId && result.ts) {
-      try {
-        await sendApprovalDM(client, requestInfo, channelId, result.ts);
-        console.log("[purchase] Sent approval DM to:", approverSlackId);
-      } catch (dmError) {
-        console.error("[purchase] Failed to send approval DM:", dmError);
+    if (isPurchased) {
+      // 購入済: スレッドに証憑催促を投稿
+      if (result.ts) {
+        await client.chat.postMessage({
+          channel: channelId,
+          thread_ts: result.ts,
+          text: [
+            `📦 購入済申請を受け付けました（${userName}）`,
+            `📎 納品書・領収書をこのスレッドに添付してください。`,
+            `⏸️ 証憑が添付されるまで、経理処理は保留されます。`,
+          ].join("\n"),
+        });
       }
-    } else if (!approverSlackId) {
-      console.warn("[purchase] No approver set (SLACK_DEFAULT_APPROVER not configured)");
+      // ops通知
+      await notifyOps(client, `📦 *購入済申請* ${poNumber} — ${formData.itemName} ${amount}（<@${userId}>）— 証憑待ち`);
+    } else {
+      // 購入前: 承認者にDM送信
+      if (approverSlackId && result.ts) {
+        try {
+          await sendApprovalDM(client, requestInfo, channelId, result.ts);
+          console.log("[purchase] Sent approval DM to:", approverSlackId);
+        } catch (dmError) {
+          console.error("[purchase] Failed to send approval DM:", dmError);
+        }
+      }
+      // ops通知
+      await notifyOps(client, `🔵 *新規申請* ${poNumber} — ${formData.itemName} ${amount}（<@${userId}>）— 承認待ち`);
     }
 
     // TODO: GASにステータス登録（Sprint 1-5）

@@ -98,6 +98,8 @@ export const handleApprove: SlackActionHandler = async ({
     blocks: buildApprovedBlocks(poNumber, userName, actionValue, info),
     text: `承認済（${userName}）`,
   });
+
+  await notifyOps(client, `✅ *承認完了* ${poNumber}（${userName} が承認）— ${info?.itemName || ""} ${info?.amount || ""}`);
 };
 
 /**
@@ -180,6 +182,8 @@ export const handleOrderComplete: SlackActionHandler = async ({
     blocks: buildOrderedBlocks(poNumber, userName, actionValue, info),
     text: `発注済（${userName}）`,
   });
+
+  await notifyOps(client, `🛒 *発注完了* ${poNumber}（${userName} が発注）— ${info?.itemName || ""} ${info?.amount || ""}`);
 };
 
 /**
@@ -227,6 +231,8 @@ export const handleInspectionComplete: SlackActionHandler = async ({
       `⏸️ 証憑が添付されるまで、この案件の経理処理は保留されます。`,
     ].join("\n"),
   });
+
+  await notifyOps(client, `📦 *検収完了* ${poNumber}（${userName} が検収）— 証憑待ち`);
 };
 
 /**
@@ -1115,4 +1121,79 @@ function buildInspectedBlocks(
       },
     },
   ];
+}
+
+// --- 購入済フロー（承認・発注スキップ） ---
+
+/**
+ * 購入済申請用のメッセージブロック（即「検収済・証憑待ち」）
+ */
+export function buildPurchasedRequestBlocks(info: RequestInfo) {
+  return [
+    {
+      type: "header",
+      text: { type: "plain_text", text: `📋 購買申請 ${info.poNumber}` },
+    },
+    {
+      type: "section",
+      fields: [
+        { type: "mrkdwn", text: `*品目:* ${info.itemName}` },
+        { type: "mrkdwn", text: `*金額:* ${info.amount}` },
+        { type: "mrkdwn", text: `*申請者:* ${info.applicant}` },
+        { type: "mrkdwn", text: `*部門:* ${info.department}` },
+        { type: "mrkdwn", text: `*購入先:* ${info.supplierName}` },
+        { type: "mrkdwn", text: `*支払:* ${info.paymentMethod}` },
+      ],
+    },
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: "📦 *購入済申請* — 承認・発注ステップをスキップ",
+        },
+      ],
+    },
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `🟠 ステータス: *検収済・証憑待ち*`,
+        },
+      ],
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "📎 *納品書・領収書をこのスレッドに添付してください*\n⏸️ 証憑が揃うまで経理処理は保留されます",
+      },
+    },
+  ];
+}
+
+// --- #purchase-ops 通知 ---
+
+const OPS_CHANNEL = process.env.SLACK_OPS_CHANNEL || "";
+
+/**
+ * #purchase-ops に通知を送信
+ */
+export async function notifyOps(
+  slackClient: WebClient,
+  text: string,
+): Promise<void> {
+  if (!OPS_CHANNEL) {
+    console.warn("[ops] SLACK_OPS_CHANNEL is not set, skipping notification");
+    return;
+  }
+  try {
+    await slackClient.chat.postMessage({
+      channel: OPS_CHANNEL,
+      text,
+    });
+  } catch (error) {
+    console.error("[ops] Failed to notify:", error);
+  }
 }

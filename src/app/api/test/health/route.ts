@@ -16,6 +16,7 @@ export async function GET() {
       purchaseChannelPrefix: (process.env.SLACK_PURCHASE_CHANNEL || "").substring(0, 3),
       hasDefaultApprover: !!process.env.SLACK_DEFAULT_APPROVER,
       hasAdminMembers: !!process.env.SLACK_ADMIN_MEMBERS,
+      hasOpsChannel: !!process.env.SLACK_OPS_CHANNEL,
     },
   });
 }

@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   getSlackClient,
   buildNewRequestBlocks,
+  buildPurchasedRequestBlocks,
   sendApprovalDM,
+  notifyOps,
   type RequestInfo,
 } from "@/lib/slack";
 
@@ -71,6 +73,8 @@ export async function POST(request: NextRequest) {
       console.warn("[web-purchase] Could not fetch user info for", userId);
     }
 
+    const isPurchased = requestType === "購入済";
+
     const requestInfo: RequestInfo = {
       poNumber,
       itemName,
@@ -80,14 +84,17 @@ export async function POST(request: NextRequest) {
       supplierName,
       paymentMethod,
       applicantSlackId: userId,
-      approverSlackId,
-      inspectorSlackId: userId, // Webフォームではデフォルトで申請者本人
+      approverSlackId: isPurchased ? "" : approverSlackId,
+      inspectorSlackId: userId,
     };
 
-    // チャンネルにメッセージ投稿
+    const blocks = isPurchased
+      ? buildPurchasedRequestBlocks(requestInfo)
+      : buildNewRequestBlocks(requestInfo);
+
     const result = await client.chat.postMessage({
       channel: channelId,
-      blocks: buildNewRequestBlocks(requestInfo),
+      blocks,
       text: `購買申請: ${poNumber} ${itemName} ${amountStr}`,
     });
 
@@ -96,16 +103,32 @@ export async function POST(request: NextRequest) {
       channelId,
       messageTs: result.ts,
       userId,
+      isPurchased,
       source: "web",
     });
 
-    // 承認者にDM送信
-    if (approverSlackId && result.ts) {
-      try {
-        await sendApprovalDM(client, requestInfo, channelId, result.ts);
-      } catch (dmError) {
-        console.error("[web-purchase] Failed to send approval DM:", dmError);
+    if (isPurchased) {
+      if (result.ts) {
+        await client.chat.postMessage({
+          channel: channelId,
+          thread_ts: result.ts,
+          text: [
+            `📦 購入済申請を受け付けました（${userName}）`,
+            `📎 納品書・領収書をこのスレッドに添付してください。`,
+            `⏸️ 証憑が添付されるまで、経理処理は保留されます。`,
+          ].join("\n"),
+        });
       }
+      await notifyOps(client, `📦 *購入済申請* ${poNumber} — ${itemName} ${amountStr}（<@${userId}>）— 証憑待ち`);
+    } else {
+      if (approverSlackId && result.ts) {
+        try {
+          await sendApprovalDM(client, requestInfo, channelId, result.ts);
+        } catch (dmError) {
+          console.error("[web-purchase] Failed to send approval DM:", dmError);
+        }
+      }
+      await notifyOps(client, `🔵 *新規申請* ${poNumber} — ${itemName} ${amountStr}（<@${userId}>）— 承認待ち`);
     }
 
     // 追加フィールドをログに記録（Sprint 1-3でGAS登録に移行）
