@@ -345,6 +345,14 @@ function PurchaseFormInner() {
   const [budgetNumber, setBudgetNumber] = useState("");
   const [notes, setNotes] = useState("");
 
+  // URL解析
+  const [urlLoading, setUrlLoading] = useState(false);
+  const [urlResult, setUrlResult] = useState<{
+    title: string;
+    price: number | null;
+    siteName: string;
+  } | null>(null);
+
   // 確認画面
   const [showConfirm, setShowConfirm] = useState(false);
 
@@ -686,7 +694,7 @@ function PurchaseFormInner() {
               </p>
             </fieldset>
 
-            {/* 購入先URL */}
+            {/* 購入先URL + 自動解析 */}
             <fieldset>
               <legend className="block text-sm font-medium mb-1">
                 購入先URL
@@ -695,10 +703,105 @@ function PurchaseFormInner() {
                 type="url"
                 name="url"
                 value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://www.amazon.co.jp/..."
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setUrl(v);
+                  setUrlResult(null);
+                }}
+                onPaste={(e) => {
+                  // 貼り付け時に自動解析
+                  const pasted = e.clipboardData.getData("text");
+                  if (pasted && /^https?:\/\/.+/.test(pasted.trim())) {
+                    const pastedUrl = pasted.trim();
+                    setUrl(pastedUrl);
+                    setUrlLoading(true);
+                    setUrlResult(null);
+                    fetch(`/api/util/ogp?url=${encodeURIComponent(pastedUrl)}`)
+                      .then((r) => r.json())
+                      .then((data) => {
+                        if (data.title || data.price) {
+                          setUrlResult({
+                            title: data.title || "",
+                            price: data.price,
+                            siteName: data.siteName || "",
+                          });
+                        }
+                        // 購入先名を自動設定
+                        if (data.siteName && !supplierName) {
+                          setSupplierName(data.siteName);
+                        }
+                      })
+                      .catch(() => {})
+                      .finally(() => setUrlLoading(false));
+                    e.preventDefault();
+                  }
+                }}
+                placeholder="https://www.amazon.co.jp/... （貼り付けで自動解析）"
                 className="w-full border rounded-lg px-3 py-2"
               />
+
+              {urlLoading && (
+                <p className="text-xs text-blue-500 mt-1 animate-pulse">
+                  商品情報を取得中...
+                </p>
+              )}
+
+              {urlResult && (
+                <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <p className="text-sm font-medium text-blue-800 mb-2">
+                    {urlResult.siteName && `${urlResult.siteName}: `}商品情報を取得しました
+                  </p>
+                  {urlResult.title && (
+                    <div className="flex items-center justify-between text-sm mb-1">
+                      <span className="text-gray-600 truncate mr-2">
+                        {urlResult.title}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setItemName(urlResult.title)}
+                        className="shrink-0 text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                      >
+                        品目名に反映
+                      </button>
+                    </div>
+                  )}
+                  {urlResult.price && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-600">
+                        {formatCurrency(urlResult.price)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAmount(urlResult.price!);
+                          setAmountDisplay(
+                            urlResult.price!.toLocaleString(),
+                          );
+                        }}
+                        className="shrink-0 text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                      >
+                        金額に反映
+                      </button>
+                    </div>
+                  )}
+                  {urlResult.title && urlResult.price && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setItemName(urlResult.title);
+                        setAmount(urlResult.price!);
+                        setAmountDisplay(urlResult.price!.toLocaleString());
+                        if (urlResult.siteName && !supplierName) {
+                          setSupplierName(urlResult.siteName);
+                        }
+                      }}
+                      className="mt-2 w-full text-sm py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"
+                    >
+                      すべて反映
+                    </button>
+                  )}
+                </div>
+              )}
             </fieldset>
 
             {/* 購入品の用途 — 10万以上で必須化 */}
