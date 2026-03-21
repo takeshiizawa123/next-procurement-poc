@@ -7,7 +7,9 @@ import {
   handlePurchaseCommand,
   parsePurchaseFormValues,
   buildNewRequestBlocks,
+  sendApprovalDM,
   type PurchaseFormData,
+  type RequestInfo,
 } from "@/lib/slack";
 
 // Vercel Serverless の最大実行時間
@@ -70,10 +72,10 @@ export async function POST(request: NextRequest) {
         }
         try {
           const client = getSlackClient();
-          // コマンド実行元のチャンネルIDをモーダルに埋め込む
-          const sourceChannelId = channelId;
-          await handlePurchaseCommand(client, triggerId, sourceChannelId);
-          return new NextResponse("", { status: 200 });
+          const result = await handlePurchaseCommand(client, triggerId, channelId, userId);
+          // chooser の場合はエフェメラルを投稿済みなので空レスポンス
+          // modal の場合も views.open 済みなので空レスポンス
+          return new NextResponse(result === "chooser" ? "" : "", { status: 200 });
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           return NextResponse.json({
@@ -139,6 +141,9 @@ export async function POST(request: NextRequest) {
 
 const PURCHASE_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
 
+// 暫定承認者（従業員マスタ実装まで環境変数で指定）
+const DEFAULT_APPROVER = process.env.SLACK_DEFAULT_APPROVER || "";
+
 async function handlePurchaseSubmission(
   userId: string,
   userName: string,
@@ -156,11 +161,13 @@ async function handlePurchaseSubmission(
 
     const amount = `¥${formData.amount.toLocaleString()}`;
 
+    // TODO: 従業員マスタから承認者を取得（Sprint 1-6）
+    const approverSlackId = DEFAULT_APPROVER;
+
     // #purchase-request にメッセージ投稿
     const channelId = targetChannelId || PURCHASE_CHANNEL;
     if (!channelId) {
       console.error("[purchase] SLACK_PURCHASE_CHANNEL is not set");
-      // フォールバック: 申請者にDMでエラー通知
       await client.chat.postMessage({
         channel: userId,
         text: `⚠️ 購買申請の投稿先チャンネルが設定されていません。管理者に連絡してください。\n申請内容: ${formData.itemName} ${amount}`,
@@ -168,18 +175,22 @@ async function handlePurchaseSubmission(
       return;
     }
 
+    const requestInfo: RequestInfo = {
+      poNumber,
+      itemName: formData.itemName,
+      amount,
+      applicant: `<@${userId}>`,
+      department: "", // TODO: 従業員マスタから取得（Sprint 1-6）
+      supplierName: formData.supplierName,
+      paymentMethod: formData.paymentMethod,
+      applicantSlackId: userId,
+      approverSlackId,
+      inspectorSlackId: formData.inspectorSlackId || userId,
+    };
+
     const result = await client.chat.postMessage({
       channel: channelId,
-      blocks: buildNewRequestBlocks({
-        poNumber,
-        itemName: formData.itemName,
-        amount,
-        applicant: `<@${userId}>`,
-        department: "", // TODO: 従業員マスタから取得（Sprint 1-6）
-        supplierName: formData.supplierName,
-        paymentMethod: formData.paymentMethod,
-        applicantSlackId: userId,
-      }),
+      blocks: buildNewRequestBlocks(requestInfo),
       text: `購買申請: ${poNumber} ${formData.itemName} ${amount}`,
     });
 
@@ -188,14 +199,25 @@ async function handlePurchaseSubmission(
       channelId,
       messageTs: result.ts,
       userId,
+      approverSlackId,
     });
 
+    // 承認者にDM送信
+    if (approverSlackId && result.ts) {
+      try {
+        await sendApprovalDM(client, requestInfo, channelId, result.ts);
+        console.log("[purchase] Sent approval DM to:", approverSlackId);
+      } catch (dmError) {
+        console.error("[purchase] Failed to send approval DM:", dmError);
+      }
+    } else if (!approverSlackId) {
+      console.warn("[purchase] No approver set (SLACK_DEFAULT_APPROVER not configured)");
+    }
+
     // TODO: GASにステータス登録（Sprint 1-5）
-    // TODO: 承認者にDM送信（Sprint 2-2）
 
   } catch (error) {
     console.error("[purchase] submission error:", error);
-    // 申請者にDMでエラー通知
     try {
       const client = getSlackClient();
       await client.chat.postMessage({

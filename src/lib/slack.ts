@@ -20,6 +20,39 @@ export function getSlackClient(): WebClient {
   return client;
 }
 
+// --- ヘルパー ---
+
+/**
+ * payload.message.blocks から申請情報（品目・金額・申請者・部門・購入先・支払）を抽出
+ */
+function extractRequestInfoFromBlocks(
+  blocks: Array<{ type: string; fields?: Array<{ text: string }>; text?: { text: string } }>
+): { itemName: string; amount: string; applicant: string; department: string; supplierName: string; paymentMethod: string } {
+  const defaults = { itemName: "", amount: "", applicant: "", department: "", supplierName: "", paymentMethod: "" };
+  const section = blocks.find((b) => b.type === "section" && b.fields);
+  if (!section?.fields) return defaults;
+
+  for (const f of section.fields) {
+    const t = f.text;
+    if (t.startsWith("*品目:*")) defaults.itemName = t.replace("*品目:* ", "");
+    else if (t.startsWith("*金額:*")) defaults.amount = t.replace("*金額:* ", "");
+    else if (t.startsWith("*申請者:*")) defaults.applicant = t.replace("*申請者:* ", "");
+    else if (t.startsWith("*部門:*")) defaults.department = t.replace("*部門:* ", "");
+    else if (t.startsWith("*購入先:*")) defaults.supplierName = t.replace("*購入先:* ", "");
+    else if (t.startsWith("*支払:*")) defaults.paymentMethod = t.replace("*支払:* ", "");
+  }
+  return defaults;
+}
+
+/**
+ * actionValue からパイプ区切りの値を分解
+ * 形式: "poNumber|applicantSlackId|approverSlackId|inspectorSlackId"
+ */
+function parseActionValue(value: string) {
+  const [poNumber = "", applicantSlackId = "", approverSlackId = "", inspectorSlackId = ""] = value.split("|");
+  return { poNumber, applicantSlackId, approverSlackId, inspectorSlackId };
+}
+
 // --- アクションハンドラー ---
 
 export type SlackActionHandler = (params: {
@@ -33,73 +66,154 @@ export type SlackActionHandler = (params: {
 }) => Promise<void>;
 
 /**
- * 承認ボタン押下時の処理
+ * 承認ボタン押下時の処理（承認者のみ）
  */
 export const handleApprove: SlackActionHandler = async ({
   client,
+  body,
+  userId,
   userName,
   channelId,
   messageTs,
   actionValue,
 }) => {
+  const { poNumber, approverSlackId } = parseActionValue(actionValue);
+
+  // 権限チェック: 指定された承認者のみ
+  if (approverSlackId && userId !== approverSlackId) {
+    await client.chat.postEphemeral({
+      channel: channelId,
+      user: userId,
+      text: "⚠️ この申請の承認権限がありません。承認者として指定された方のみ操作できます。",
+    });
+    return;
+  }
+
+  const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
+  const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
+
   await client.chat.update({
     channel: channelId,
     ts: messageTs,
-    blocks: buildApprovedBlocks(actionValue, userName),
+    blocks: buildApprovedBlocks(poNumber, userName, actionValue, info),
     text: `承認済（${userName}）`,
   });
 };
 
 /**
- * 差戻しボタン押下時の処理
+ * 差戻しボタン押下時の処理（承認者のみ）
  */
 export const handleReject: SlackActionHandler = async ({
   client,
+  body,
+  userId,
   userName,
   channelId,
   messageTs,
   actionValue,
 }) => {
+  const { poNumber, approverSlackId } = parseActionValue(actionValue);
+
+  if (approverSlackId && userId !== approverSlackId) {
+    await client.chat.postEphemeral({
+      channel: channelId,
+      user: userId,
+      text: "⚠️ この申請の差戻し権限がありません。承認者として指定された方のみ操作できます。",
+    });
+    return;
+  }
+
+  const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
+  const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
+
   await client.chat.update({
     channel: channelId,
     ts: messageTs,
-    blocks: buildRejectedBlocks(actionValue, userName),
+    blocks: buildRejectedBlocks(poNumber, userName, info),
     text: `差戻し（${userName}）`,
   });
+
+  // 申請者にDMで差戻し通知
+  const { applicantSlackId } = parseActionValue(actionValue);
+  if (applicantSlackId) {
+    await client.chat.postMessage({
+      channel: applicantSlackId,
+      text: `↩️ 購買申請 ${poNumber} が差戻しされました（${userName}）。内容を確認のうえ、必要に応じて再申請してください。`,
+    });
+  }
 };
 
 /**
- * 発注完了ボタン押下時の処理
+ * 発注完了ボタン押下時の処理（申請者 or 管理本部）
+ * 設計: 10万未満カード決済は申請者委任、10万以上/請求書払いは管理本部
+ * 暫定: 申請者 + 承認者 + 管理本部メンバーが押せる
  */
 export const handleOrderComplete: SlackActionHandler = async ({
   client,
+  body,
+  userId,
   userName,
   channelId,
   messageTs,
   actionValue,
 }) => {
+  const { poNumber, applicantSlackId, approverSlackId } = parseActionValue(actionValue);
+  const adminMembers = (process.env.SLACK_ADMIN_MEMBERS || "").split(",").filter(Boolean);
+
+  // 権限チェック: 申請者・承認者・管理本部メンバー
+  const allowed = [applicantSlackId, approverSlackId, ...adminMembers].filter(Boolean);
+  if (allowed.length > 0 && !allowed.includes(userId)) {
+    await client.chat.postEphemeral({
+      channel: channelId,
+      user: userId,
+      text: "⚠️ 発注完了の操作権限がありません。",
+    });
+    return;
+  }
+
+  const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
+  const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
+
   await client.chat.update({
     channel: channelId,
     ts: messageTs,
-    blocks: buildOrderedBlocks(actionValue, userName),
+    blocks: buildOrderedBlocks(poNumber, userName, actionValue, info),
     text: `発注済（${userName}）`,
   });
 };
 
 /**
- * 検収完了ボタン押下時の処理
+ * 検収完了ボタン押下時の処理（検収者 or 申請者のみ）
  */
 export const handleInspectionComplete: SlackActionHandler = async ({
   client,
+  body,
+  userId,
   userName,
   channelId,
   messageTs,
   actionValue,
 }) => {
+  const { poNumber, applicantSlackId, inspectorSlackId } = parseActionValue(actionValue);
+
+  // 権限チェック: 検収者 or 申請者
+  const allowed = [inspectorSlackId, applicantSlackId].filter(Boolean);
+  if (allowed.length > 0 && !allowed.includes(userId)) {
+    await client.chat.postEphemeral({
+      channel: channelId,
+      user: userId,
+      text: "⚠️ 検収完了の操作権限がありません。検収者または申請者のみ操作できます。",
+    });
+    return;
+  }
+
+  const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
+  const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
+
   await client.chat.update({
     channel: channelId,
     ts: messageTs,
-    blocks: buildInspectedBlocks(actionValue, userName),
+    blocks: buildInspectedBlocks(poNumber, userName, info),
     text: `検収済（${userName}）`,
   });
 
@@ -126,8 +240,7 @@ export const handleCancel: SlackActionHandler = async ({
   messageTs,
   actionValue,
 }) => {
-  // actionValue: "PO-XXXXXX|applicantSlackId"
-  const [poNumber, applicantSlackId] = actionValue.split("|");
+  const { poNumber, applicantSlackId } = parseActionValue(actionValue);
 
   // 権限チェック: 申請者のみ取消可能
   if (userId !== applicantSlackId) {
@@ -165,6 +278,165 @@ function buildCancelledBlocks(poNumber: string, canceller: string) {
   ];
 }
 
+/**
+ * DM承認ボタン押下時の処理
+ * actionValue: "dm|channelId|messageTs|poNumber|applicantSlackId|approverSlackId|inspectorSlackId"
+ */
+export const handleDmApprove: SlackActionHandler = async ({
+  client,
+  userId,
+  userName,
+  channelId: dmChannelId,
+  messageTs: dmMessageTs,
+  actionValue,
+}) => {
+  const parts = actionValue.split("|");
+  // parts: [dm, channelId, messageTs, poNumber, applicantSlackId, approverSlackId, inspectorSlackId]
+  const origChannelId = parts[1];
+  const origMessageTs = parts[2];
+  const poNumber = parts[3];
+  const approverSlackId = parts[5];
+
+  if (approverSlackId && userId !== approverSlackId) {
+    await client.chat.postEphemeral({
+      channel: dmChannelId,
+      user: userId,
+      text: "⚠️ この申請の承認権限がありません。",
+    });
+    return;
+  }
+
+  // 元チャンネルのメッセージを取得して情報を引き継ぐ
+  let info = null;
+  try {
+    const result = await client.conversations.history({
+      channel: origChannelId,
+      latest: origMessageTs,
+      inclusive: true,
+      limit: 1,
+    });
+    const origMessage = result.messages?.[0];
+    if (origMessage?.blocks) {
+      info = extractRequestInfoFromBlocks(origMessage.blocks as Array<{ type: string; fields?: Array<{ text: string }> }>);
+    }
+  } catch {
+    console.warn("[dm_approve] Could not fetch original message");
+  }
+
+  // 元チャンネルのメッセージを更新
+  await client.chat.update({
+    channel: origChannelId,
+    ts: origMessageTs,
+    blocks: buildApprovedBlocks(poNumber, userName, actionValue.substring(actionValue.indexOf("|", actionValue.indexOf("|", actionValue.indexOf("|") + 1) + 1) + 1), info),
+    text: `承認済（${userName}）`,
+  });
+
+  // DMのボタンを完了表示に更新
+  await client.chat.update({
+    channel: dmChannelId,
+    ts: dmMessageTs,
+    blocks: [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: `✅ *${poNumber}* を承認しました` },
+      },
+    ],
+    text: `承認済 ${poNumber}`,
+  });
+};
+
+/**
+ * DM差戻しボタン押下時の処理
+ */
+export const handleDmReject: SlackActionHandler = async ({
+  client,
+  userId,
+  userName,
+  channelId: dmChannelId,
+  messageTs: dmMessageTs,
+  actionValue,
+}) => {
+  const parts = actionValue.split("|");
+  const origChannelId = parts[1];
+  const origMessageTs = parts[2];
+  const poNumber = parts[3];
+  const applicantSlackId = parts[4];
+  const approverSlackId = parts[5];
+
+  if (approverSlackId && userId !== approverSlackId) {
+    await client.chat.postEphemeral({
+      channel: dmChannelId,
+      user: userId,
+      text: "⚠️ この申請の差戻し権限がありません。",
+    });
+    return;
+  }
+
+  let info = null;
+  try {
+    const result = await client.conversations.history({
+      channel: origChannelId,
+      latest: origMessageTs,
+      inclusive: true,
+      limit: 1,
+    });
+    const origMessage = result.messages?.[0];
+    if (origMessage?.blocks) {
+      info = extractRequestInfoFromBlocks(origMessage.blocks as Array<{ type: string; fields?: Array<{ text: string }> }>);
+    }
+  } catch {
+    console.warn("[dm_reject] Could not fetch original message");
+  }
+
+  await client.chat.update({
+    channel: origChannelId,
+    ts: origMessageTs,
+    blocks: buildRejectedBlocks(poNumber, userName, info),
+    text: `差戻し（${userName}）`,
+  });
+
+  await client.chat.update({
+    channel: dmChannelId,
+    ts: dmMessageTs,
+    blocks: [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: `↩️ *${poNumber}* を差戻ししました` },
+      },
+    ],
+    text: `差戻し ${poNumber}`,
+  });
+
+  // 申請者にDMで差戻し通知
+  if (applicantSlackId) {
+    await client.chat.postMessage({
+      channel: applicantSlackId,
+      text: `↩️ 購買申請 ${poNumber} が差戻しされました（${userName}）。内容を確認のうえ、必要に応じて再申請してください。`,
+    });
+  }
+};
+
+/**
+ * 「Slackモーダルで入力」ボタン押下時 — モーダルを開く
+ * ※ block_actionsでは trigger_id が使えるため、ここからモーダルを開ける
+ */
+export const handleOpenModal: SlackActionHandler = async ({
+  client,
+  body,
+  actionValue,
+}) => {
+  const triggerId = (body as { trigger_id?: string }).trigger_id;
+  if (!triggerId) {
+    console.error("[purchase_open_modal] No trigger_id in payload");
+    return;
+  }
+  const channelId = actionValue; // value にチャンネルIDを入れている
+  await client.views.open({
+    trigger_id: triggerId,
+    view: buildPurchaseModal(channelId),
+  });
+};
+
 // アクションIDとハンドラーのマッピング
 export const actionHandlers: Record<string, SlackActionHandler> = {
   approve_button: handleApprove,
@@ -172,22 +444,78 @@ export const actionHandlers: Record<string, SlackActionHandler> = {
   order_complete_button: handleOrderComplete,
   inspection_complete_button: handleInspectionComplete,
   cancel_button: handleCancel,
+  dm_approve_button: handleDmApprove,
+  dm_reject_button: handleDmReject,
+  purchase_open_modal: handleOpenModal,
 };
 
 // --- /purchase モーダル ---
 
 /**
- * /purchase コマンド → モーダル表示
+ * /purchase コマンド → モーダル or Webフォーム選択
  */
 export async function handlePurchaseCommand(
   slackClient: WebClient,
   triggerId: string,
-  channelId: string
-): Promise<void> {
-  await slackClient.views.open({
-    trigger_id: triggerId,
-    view: buildPurchaseModal(channelId),
+  channelId: string,
+  userId: string,
+): Promise<"modal" | "chooser"> {
+  const webFormUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL;
+
+  // Webフォーム URL が設定されていない場合はモーダル直接表示
+  if (!webFormUrl) {
+    await slackClient.views.open({
+      trigger_id: triggerId,
+      view: buildPurchaseModal(channelId),
+    });
+    return "modal";
+  }
+
+  // 2択をエフェメラルメッセージで表示
+  const formUrl = `${webFormUrl.startsWith("http") ? webFormUrl : `https://${webFormUrl}`}/purchase/new?user_id=${userId}&channel_id=${channelId}`;
+
+  await slackClient.chat.postEphemeral({
+    channel: channelId,
+    user: userId,
+    text: "購買申請の入力方法を選択してください",
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "*購買申請* — 入力方法を選んでください",
+        },
+      },
+      {
+        type: "actions",
+        block_id: "purchase_chooser",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "📱 Slackモーダルで入力" },
+            value: channelId,
+            action_id: "purchase_open_modal",
+          },
+          {
+            type: "button",
+            text: { type: "plain_text", text: "🌐 Webフォームで入力" },
+            url: formUrl,
+            action_id: "purchase_open_web",
+          },
+        ],
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "💡 Webフォームではファイルアップロードや入力補助が利用できます",
+          },
+        ],
+      },
+    ],
   });
+  return "chooser";
 }
 
 /**
@@ -445,18 +773,24 @@ export async function handlePoTestCommand(
 ): Promise<void> {
   const poNumber = `PO-${new Date().getFullYear()}-TEST`;
 
+  const approverSlackId = process.env.SLACK_DEFAULT_APPROVER || "";
+
+  const requestInfo: RequestInfo = {
+    poNumber,
+    itemName: "テスト品目（ノートPC）",
+    amount: "¥150,000",
+    applicant: `<@${userId}>`,
+    department: "テスト部門",
+    supplierName: "Amazon",
+    paymentMethod: "会社カード",
+    applicantSlackId: userId,
+    approverSlackId,
+    inspectorSlackId: userId,
+  };
+
   await slackClient.chat.postMessage({
     channel: channelId,
-    blocks: buildNewRequestBlocks({
-      poNumber,
-      itemName: "テスト品目（ノートPC）",
-      amount: "¥150,000",
-      applicant: `<@${userId}>`,
-      department: "テスト部門",
-      supplierName: "Amazon",
-      paymentMethod: "会社カード",
-      applicantSlackId: userId,
-    }),
+    blocks: buildNewRequestBlocks(requestInfo),
     text: `購買申請: ${poNumber}`,
   });
 }
@@ -472,9 +806,19 @@ export interface RequestInfo {
   supplierName: string;
   paymentMethod: string;
   applicantSlackId: string;
+  approverSlackId: string;
+  inspectorSlackId: string;
+}
+
+/**
+ * actionValue 共通形式: "poNumber|applicantSlackId|approverSlackId|inspectorSlackId"
+ */
+function buildActionValue(info: RequestInfo): string {
+  return `${info.poNumber}|${info.applicantSlackId}|${info.approverSlackId}|${info.inspectorSlackId}`;
 }
 
 export function buildNewRequestBlocks(info: RequestInfo) {
+  const av = buildActionValue(info);
   return [
     {
       type: "header",
@@ -504,20 +848,20 @@ export function buildNewRequestBlocks(info: RequestInfo) {
           type: "button",
           text: { type: "plain_text", text: "✅ 承認" },
           style: "primary",
-          value: info.poNumber,
+          value: av,
           action_id: "approve_button",
         },
         {
           type: "button",
           text: { type: "plain_text", text: "↩️ 差戻し" },
           style: "danger",
-          value: info.poNumber,
+          value: av,
           action_id: "reject_button",
         },
         {
           type: "button",
           text: { type: "plain_text", text: "🚫 取消" },
-          value: `${info.poNumber}|${info.applicantSlackId}`,
+          value: av,
           action_id: "cancel_button",
         },
       ],
@@ -525,19 +869,95 @@ export function buildNewRequestBlocks(info: RequestInfo) {
   ];
 }
 
-function buildApprovedBlocks(poNumber: string, approver: string) {
+/**
+ * 承認者にDMで承認依頼を送信
+ */
+export async function sendApprovalDM(
+  slackClient: WebClient,
+  info: RequestInfo,
+  channelId: string,
+  messageTs: string,
+): Promise<void> {
+  if (!info.approverSlackId) return;
+
+  const av = buildActionValue(info);
+  const channelLink = `https://slack.com/archives/${channelId}/p${messageTs.replace(".", "")}`;
+
+  await slackClient.chat.postMessage({
+    channel: info.approverSlackId,
+    text: `📋 承認依頼: ${info.poNumber} ${info.itemName} ${info.amount}（申請者: ${info.applicant}）`,
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: `📋 承認依頼 ${info.poNumber}` },
+      },
+      {
+        type: "section",
+        fields: [
+          { type: "mrkdwn", text: `*品目:* ${info.itemName}` },
+          { type: "mrkdwn", text: `*金額:* ${info.amount}` },
+          { type: "mrkdwn", text: `*申請者:* ${info.applicant}` },
+          { type: "mrkdwn", text: `*購入先:* ${info.supplierName}` },
+          { type: "mrkdwn", text: `*支払:* ${info.paymentMethod}` },
+        ],
+      },
+      {
+        type: "context",
+        elements: [
+          { type: "mrkdwn", text: `<${channelLink}|チャンネルで確認>` },
+        ],
+      },
+      { type: "divider" },
+      {
+        type: "actions",
+        block_id: "dm_approval_actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "✅ 承認" },
+            style: "primary",
+            value: `dm|${channelId}|${messageTs}|${av}`,
+            action_id: "dm_approve_button",
+          },
+          {
+            type: "button",
+            text: { type: "plain_text", text: "↩️ 差戻し" },
+            style: "danger",
+            value: `dm|${channelId}|${messageTs}|${av}`,
+            action_id: "dm_reject_button",
+          },
+        ],
+      },
+    ],
+  });
+}
+
+function buildApprovedBlocks(
+  poNumber: string,
+  approver: string,
+  actionValue: string,
+  info: { itemName: string; amount: string; applicant: string; department: string; supplierName: string; paymentMethod: string } | null,
+) {
+  const fields = info
+    ? [
+        { type: "mrkdwn", text: `*品目:* ${info.itemName}` },
+        { type: "mrkdwn", text: `*金額:* ${info.amount}` },
+        { type: "mrkdwn", text: `*申請者:* ${info.applicant}` },
+        { type: "mrkdwn", text: `*部門:* ${info.department}` },
+        { type: "mrkdwn", text: `*購入先:* ${info.supplierName}` },
+        { type: "mrkdwn", text: `*支払:* ${info.paymentMethod}` },
+      ]
+    : [
+        { type: "mrkdwn", text: `*品目:* (情報なし)` },
+        { type: "mrkdwn", text: `*金額:* (情報なし)` },
+      ];
+
   return [
     {
       type: "header",
       text: { type: "plain_text", text: `📋 購買申請 ${poNumber}` },
     },
-    {
-      type: "section",
-      fields: [
-        { type: "mrkdwn", text: "*品目:* テスト品目（ノートPC）" },
-        { type: "mrkdwn", text: "*金額:* ¥150,000" },
-      ],
-    },
+    { type: "section", fields },
     {
       type: "context",
       elements: [
@@ -556,7 +976,7 @@ function buildApprovedBlocks(poNumber: string, approver: string) {
           type: "button",
           text: { type: "plain_text", text: "🛒 発注完了" },
           style: "primary",
-          value: poNumber,
+          value: actionValue,
           action_id: "order_complete_button",
         },
       ],
@@ -564,19 +984,31 @@ function buildApprovedBlocks(poNumber: string, approver: string) {
   ];
 }
 
-function buildRejectedBlocks(poNumber: string, rejector: string) {
+function buildRejectedBlocks(
+  poNumber: string,
+  rejector: string,
+  info: { itemName: string; amount: string; applicant: string; department: string; supplierName: string; paymentMethod: string } | null,
+) {
+  const fields = info
+    ? [
+        { type: "mrkdwn", text: `*品目:* ${info.itemName}` },
+        { type: "mrkdwn", text: `*金額:* ${info.amount}` },
+        { type: "mrkdwn", text: `*申請者:* ${info.applicant}` },
+        { type: "mrkdwn", text: `*部門:* ${info.department}` },
+        { type: "mrkdwn", text: `*購入先:* ${info.supplierName}` },
+        { type: "mrkdwn", text: `*支払:* ${info.paymentMethod}` },
+      ]
+    : [
+        { type: "mrkdwn", text: `*品目:* (情報なし)` },
+        { type: "mrkdwn", text: `*金額:* (情報なし)` },
+      ];
+
   return [
     {
       type: "header",
       text: { type: "plain_text", text: `📋 購買申請 ${poNumber}` },
     },
-    {
-      type: "section",
-      fields: [
-        { type: "mrkdwn", text: "*品目:* テスト品目（ノートPC）" },
-        { type: "mrkdwn", text: "*金額:* ¥150,000" },
-      ],
-    },
+    { type: "section", fields },
     {
       type: "context",
       elements: [
@@ -589,19 +1021,32 @@ function buildRejectedBlocks(poNumber: string, rejector: string) {
   ];
 }
 
-function buildOrderedBlocks(poNumber: string, orderer: string) {
+function buildOrderedBlocks(
+  poNumber: string,
+  orderer: string,
+  actionValue: string,
+  info: { itemName: string; amount: string; applicant: string; department: string; supplierName: string; paymentMethod: string } | null,
+) {
+  const fields = info
+    ? [
+        { type: "mrkdwn", text: `*品目:* ${info.itemName}` },
+        { type: "mrkdwn", text: `*金額:* ${info.amount}` },
+        { type: "mrkdwn", text: `*申請者:* ${info.applicant}` },
+        { type: "mrkdwn", text: `*部門:* ${info.department}` },
+        { type: "mrkdwn", text: `*購入先:* ${info.supplierName}` },
+        { type: "mrkdwn", text: `*支払:* ${info.paymentMethod}` },
+      ]
+    : [
+        { type: "mrkdwn", text: `*品目:* (情報なし)` },
+        { type: "mrkdwn", text: `*金額:* (情報なし)` },
+      ];
+
   return [
     {
       type: "header",
       text: { type: "plain_text", text: `📋 購買申請 ${poNumber}` },
     },
-    {
-      type: "section",
-      fields: [
-        { type: "mrkdwn", text: "*品目:* テスト品目（ノートPC）" },
-        { type: "mrkdwn", text: "*金額:* ¥150,000" },
-      ],
-    },
+    { type: "section", fields },
     {
       type: "context",
       elements: [
@@ -620,7 +1065,7 @@ function buildOrderedBlocks(poNumber: string, orderer: string) {
           type: "button",
           text: { type: "plain_text", text: "✅ 検収完了" },
           style: "primary",
-          value: poNumber,
+          value: actionValue,
           action_id: "inspection_complete_button",
         },
       ],
@@ -628,19 +1073,31 @@ function buildOrderedBlocks(poNumber: string, orderer: string) {
   ];
 }
 
-function buildInspectedBlocks(poNumber: string, inspector: string) {
+function buildInspectedBlocks(
+  poNumber: string,
+  inspector: string,
+  info: { itemName: string; amount: string; applicant: string; department: string; supplierName: string; paymentMethod: string } | null,
+) {
+  const fields = info
+    ? [
+        { type: "mrkdwn", text: `*品目:* ${info.itemName}` },
+        { type: "mrkdwn", text: `*金額:* ${info.amount}` },
+        { type: "mrkdwn", text: `*申請者:* ${info.applicant}` },
+        { type: "mrkdwn", text: `*部門:* ${info.department}` },
+        { type: "mrkdwn", text: `*購入先:* ${info.supplierName}` },
+        { type: "mrkdwn", text: `*支払:* ${info.paymentMethod}` },
+      ]
+    : [
+        { type: "mrkdwn", text: `*品目:* (情報なし)` },
+        { type: "mrkdwn", text: `*金額:* (情報なし)` },
+      ];
+
   return [
     {
       type: "header",
       text: { type: "plain_text", text: `📋 購買申請 ${poNumber}` },
     },
-    {
-      type: "section",
-      fields: [
-        { type: "mrkdwn", text: "*品目:* テスト品目（ノートPC）" },
-        { type: "mrkdwn", text: "*金額:* ¥150,000" },
-      ],
-    },
+    { type: "section", fields },
     {
       type: "context",
       elements: [

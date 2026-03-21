@@ -14,6 +14,8 @@ export async function GET() {
       hasGasUrl: !!process.env.GAS_WEB_APP_URL,
       hasPurchaseChannel: !!process.env.SLACK_PURCHASE_CHANNEL,
       purchaseChannelPrefix: (process.env.SLACK_PURCHASE_CHANNEL || "").substring(0, 3),
+      hasDefaultApprover: !!process.env.SLACK_DEFAULT_APPROVER,
+      hasAdminMembers: !!process.env.SLACK_ADMIN_MEMBERS,
     },
   });
 }
