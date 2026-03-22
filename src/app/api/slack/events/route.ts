@@ -14,6 +14,7 @@ import {
   type RequestInfo,
 } from "@/lib/slack";
 import { registerPurchase, getEmployees } from "@/lib/gas-client";
+import { estimateAccount } from "@/lib/account-estimator";
 
 // Vercel Serverless の最大実行時間
 export const maxDuration = 10;
@@ -269,12 +270,15 @@ async function handlePurchaseSubmission(
       : "";
 
     try {
+      const estimation = estimateAccount(formData.itemName, formData.supplierName, formData.amount);
+
       const gasResult = await registerPurchase({
         applicant: userName,
         itemName: formData.itemName,
         totalAmount: formData.amount,
         purchaseSource: formData.supplierName,
         paymentMethod: formData.paymentMethod,
+        accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
         poNumber,
         slackTs: result.ts || "",
         slackLink,

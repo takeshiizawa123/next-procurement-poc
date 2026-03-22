@@ -381,6 +381,10 @@ function PurchaseFormInner() {
   const [approvalSummary, setApprovalSummary] = useState("");
   const [requiresDeptHead, setRequiresDeptHead] = useState(false);
 
+  // 勘定科目推定
+  type AccountEstimation = { account: string; subAccount: string; confidence: "high" | "medium" | "low"; reason: string };
+  const [accountEstimation, setAccountEstimation] = useState<AccountEstimation | null>(null);
+
   // 下書き復元通知
   const [draftRestored, setDraftRestored] = useState(false);
 
@@ -552,21 +556,33 @@ function PurchaseFormInner() {
     setShowPastRequests(false);
   };
 
-  // フォームsubmit前に確認画面を挟む（重複チェック付き）
+  // フォームsubmit前に確認画面を挟む（重複チェック + 勘定科目推定）
   const handleFormAction = async (formData: FormData) => {
     if (!showConfirm) {
-      // 確認画面表示前に重複チェック
-      try {
-        const params = new URLSearchParams({ itemName });
-        if (totalAmount > 0) params.set("totalAmount", String(totalAmount));
-        const res = await fetch(`/api/purchase/check-duplicate?${params}`);
-        const data = await res.json();
-        setDuplicates(data.duplicates || []);
-        setDupChecked(true);
-      } catch {
-        setDuplicates([]);
-        setDupChecked(true);
+      // 重複チェックと勘定科目推定を並行実行
+      const dupParams = new URLSearchParams({ itemName });
+      if (totalAmount > 0) dupParams.set("totalAmount", String(totalAmount));
+
+      const acctParams = new URLSearchParams({
+        itemName,
+        supplierName,
+        totalAmount: String(totalAmount),
+      });
+
+      const [dupRes, acctRes] = await Promise.allSettled([
+        fetch(`/api/purchase/check-duplicate?${dupParams}`).then((r) => r.json()),
+        fetch(`/api/purchase/estimate-account?${acctParams}`).then((r) => r.json()),
+      ]);
+
+      if (dupRes.status === "fulfilled") {
+        setDuplicates(dupRes.value.duplicates || []);
       }
+      setDupChecked(true);
+
+      if (acctRes.status === "fulfilled" && acctRes.value.account) {
+        setAccountEstimation(acctRes.value);
+      }
+
       setShowConfirm(true);
       return;
     }
@@ -690,6 +706,31 @@ function PurchaseFormInner() {
                 </p>
               </div>
             )}
+
+            {/* 勘定科目推定 */}
+            {accountEstimation && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-green-800">推定勘定科目:</span>
+                  <span className="font-bold text-green-900">
+                    {accountEstimation.account}
+                    {accountEstimation.subAccount && (
+                      <span className="font-normal text-green-700 ml-1">/ {accountEstimation.subAccount}</span>
+                    )}
+                  </span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                    accountEstimation.confidence === "high" ? "bg-green-200 text-green-800" :
+                    accountEstimation.confidence === "medium" ? "bg-yellow-200 text-yellow-800" :
+                    "bg-gray-200 text-gray-600"
+                  }`}>
+                    {accountEstimation.confidence === "high" ? "確度高" :
+                     accountEstimation.confidence === "medium" ? "確度中" : "確度低"}
+                  </span>
+                </div>
+                <p className="text-xs text-green-600 mt-1">{accountEstimation.reason}</p>
+              </div>
+            )}
+
           <ConfirmationView
             values={{
               requestType,

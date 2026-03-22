@@ -8,6 +8,7 @@ import {
   type RequestInfo,
 } from "@/lib/slack";
 import { registerPurchase, getEmployees } from "@/lib/gas-client";
+import { estimateAccount } from "@/lib/account-estimator";
 
 const PURCHASE_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
 const DEFAULT_APPROVER = process.env.SLACK_DEFAULT_APPROVER || "";
@@ -181,6 +182,9 @@ export async function POST(request: NextRequest) {
       : "";
 
     try {
+      // 勘定科目を推定
+      const estimation = estimateAccount(itemName, supplierName, totalAmount);
+
       const gasResult = await registerPurchase({
         applicant: userName,
         itemName,
@@ -193,6 +197,7 @@ export async function POST(request: NextRequest) {
         budgetNumber: (formData.get("budget_number") as string)?.trim() || "",
         paymentMethod,
         purpose: (formData.get("asset_usage") as string)?.trim() || "",
+        accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
         poNumber,
         remarks: (formData.get("notes") as string)?.trim() || "",
         slackTs: result.ts || "",

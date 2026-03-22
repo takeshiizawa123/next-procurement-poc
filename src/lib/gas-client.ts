@@ -138,6 +138,7 @@ export async function registerPurchase(data: {
   deliveryLocation?: string;
   useLocation?: string;
   poNumber?: string;
+  accountTitle?: string;
   remarks?: string;
   slackTs?: string;
   slackLink?: string;
