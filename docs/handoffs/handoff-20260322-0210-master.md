@@ -1,6 +1,6 @@
 # CURRENT_WORK
 
-## [Handoff] "購買管理Phase1 - Wave2完了・GAS連携調査前" — 2026-03-22 02:20 (branch: master)
+## [Handoff] "購買管理Phase1 - Wave2完了・GAS連携調査前" — 2026-03-22 02:10 (branch: master)
 
 ### Goal / Scope
 - Phase 1: 購買申請Bot + 証憑ブロック + Webフォームの実装
@@ -37,8 +37,7 @@
 - [ ] Wave 1: 購入先名サジェスト、重複チェック、過去申請複製（GAS連携後）
 - [ ] Wave 2残: HubSpot案件サジェスト（トークン取得待ち）
 - [ ] Wave 3: 承認ルートプレビュー、勘定科目推定、ステップ分割（マスタ後）
-- [ ] origin への push（9コミット先行中）
-- [ ] viewport修正コミット済み（モバイル見切れ対応）
+- [ ] origin への push（8コミット先行中）
 
 ### Next actions
 1. 既存GASコード調査（Procurement-Assistant/src/gas/）
