@@ -7,6 +7,7 @@ import {
   notifyOps,
   type RequestInfo,
 } from "@/lib/slack";
+import { registerPurchase, getEmployees } from "@/lib/gas-client";
 
 const PURCHASE_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
 const DEFAULT_APPROVER = process.env.SLACK_DEFAULT_APPROVER || "";
@@ -41,7 +42,19 @@ export async function POST(request: NextRequest) {
     const requestType = formData.get("request_type") as string;
 
     if (!itemName || !amountRaw || !paymentMethod || !supplierName || !requestType) {
-      return NextResponse.json({ error: "必須項目を入力してください" }, { status: 400 });
+      const missing = [];
+      if (!itemName) missing.push("品目名");
+      if (!amountRaw) missing.push("金額");
+      if (!paymentMethod) missing.push("支払方法");
+      if (!supplierName) missing.push("購入先名");
+      if (!requestType) missing.push("申請区分");
+      console.error("[web-purchase] Missing fields:", missing.join(", "), {
+        itemName, amountRaw, paymentMethod, supplierName, requestType,
+      });
+      return NextResponse.json(
+        { error: `必須項目が不足しています: ${missing.join("、")}` },
+        { status: 400 },
+      );
     }
 
     const amount = parseInt(amountRaw.replace(/[,，]/g, ""), 10);
@@ -64,28 +77,59 @@ export async function POST(request: NextRequest) {
 
     const client = getSlackClient();
 
-    // ユーザー名を取得
-    let userName = userId;
-    try {
-      const userInfo = await client.users.info({ user: userId });
-      userName = userInfo.user?.real_name || userInfo.user?.name || userId;
-    } catch {
-      console.warn("[web-purchase] Could not fetch user info for", userId);
+    // フォームから従業員情報を取得（従業員マスタ選択済みの場合）
+    const formApplicantName = (formData.get("applicant_name") as string)?.trim() || "";
+    const formDepartment = (formData.get("department") as string)?.trim() || "";
+
+    // ユーザー名を取得（Slack ID経由 or フォーム直接入力）
+    let userName = formApplicantName || userId;
+    if (!formApplicantName && userId) {
+      try {
+        const userInfo = await client.users.info({ user: userId });
+        userName = userInfo.user?.real_name || userInfo.user?.name || userId;
+      } catch {
+        console.warn("[web-purchase] Could not fetch user info for", userId);
+      }
     }
 
     const isPurchased = requestType === "購入済";
+
+    // 部門名: フォームから取得済みならそれを使い、なければ従業員マスタから検索
+    let department = formDepartment;
+    if (!department) {
+      try {
+        const empResult = await getEmployees();
+        if (empResult.success && empResult.data?.employees) {
+          const match = empResult.data.employees.find((emp) => {
+            const aliases = emp.slackAliases
+              .split(/[,、]/)
+              .map((a) => a.trim().toLowerCase());
+            const uname = userName.toLowerCase();
+            return (
+              emp.name === userName ||
+              emp.name.includes(userName) ||
+              userName.includes(emp.name) ||
+              aliases.some((a) => a && (a === uname || uname.includes(a)))
+            );
+          });
+          if (match) department = match.departmentName;
+        }
+      } catch {
+        console.warn("[web-purchase] Could not fetch employee master");
+      }
+    }
 
     const requestInfo: RequestInfo = {
       poNumber,
       itemName,
       amount: amountStr,
-      applicant: `<@${userId}>`,
-      department: "", // TODO: 従業員マスタから取得
+      applicant: userId.startsWith("U") ? `<@${userId}>` : userName,
+      department,
       supplierName,
       paymentMethod,
-      applicantSlackId: userId,
+      applicantSlackId: userId.startsWith("U") ? userId : "",
       approverSlackId: isPurchased ? "" : approverSlackId,
-      inspectorSlackId: userId,
+      inspectorSlackId: userId.startsWith("U") ? userId : "",
     };
 
     const blocks = isPurchased
@@ -131,18 +175,44 @@ export async function POST(request: NextRequest) {
       await notifyOps(client, `🔵 *新規申請* ${poNumber} — ${itemName} ${amountStr}（<@${userId}>）— 承認待ち`);
     }
 
-    // 追加フィールドをログに記録（Sprint 1-3でGAS登録に移行）
-    console.log("[web-purchase] Form details:", {
-      poNumber,
-      requestType,
-      quantity,
-      url: formData.get("url") || "",
-      assetUsage: formData.get("asset_usage") || "",
-      katanaPo: formData.get("katana_po") || "",
-      hubspotDealId: formData.get("hubspot_deal_id") || "",
-      budgetNumber: formData.get("budget_number") || "",
-      notes: formData.get("notes") || "",
-    });
+    // GAS（スプレッドシート）に購買申請を登録
+    const slackLink = result.ts
+      ? `https://slack.com/archives/${channelId}/p${result.ts.replace(".", "")}`
+      : "";
+
+    try {
+      const gasResult = await registerPurchase({
+        applicant: userName,
+        itemName,
+        totalAmount,
+        unitPrice: amount,
+        quantity,
+        purchaseSource: supplierName,
+        purchaseSourceUrl: (formData.get("url") as string)?.trim() || "",
+        hubspotInfo: (formData.get("hubspot_deal_id") as string)?.trim() || "",
+        budgetNumber: (formData.get("budget_number") as string)?.trim() || "",
+        paymentMethod,
+        purpose: (formData.get("asset_usage") as string)?.trim() || "",
+        poNumber,
+        remarks: (formData.get("notes") as string)?.trim() || "",
+        slackTs: result.ts || "",
+        slackLink,
+        isPurchased,
+      });
+
+      if (gasResult.success && gasResult.data) {
+        console.log("[web-purchase] GAS registered:", {
+          prNumber: gasResult.data.prNumber,
+          rowNumber: gasResult.data.rowNumber,
+          poNumber,
+        });
+      } else {
+        console.error("[web-purchase] GAS registration failed:", gasResult.error);
+      }
+    } catch (gasError) {
+      // GAS登録失敗はSlack投稿には影響させない（ログのみ）
+      console.error("[web-purchase] GAS registration error:", gasError);
+    }
 
     return NextResponse.json({ ok: true, poNumber });
   } catch (error) {

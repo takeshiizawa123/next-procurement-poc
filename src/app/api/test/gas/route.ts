@@ -1,19 +1,16 @@
 import { NextResponse } from "next/server";
-import {
-  testGasConnection,
-  updatePurchaseStatus,
-} from "@/lib/gas-client";
+import { testConnection, updateStatus } from "@/lib/gas-client";
 
 /**
  * GAS連携テスト用エンドポイント
  *
- * GET /api/test/gas        — GAS接続テスト（ping）
+ * GET /api/test/gas        — GAS接続テスト（health check）
  * POST /api/test/gas       — ステータス更新テスト
  */
 
 export async function GET() {
   try {
-    const result = await testGasConnection();
+    const result = await testConnection();
     return NextResponse.json({
       ok: true,
       message: "GAS connection test",
@@ -27,11 +24,9 @@ export async function GET() {
 
 export async function POST() {
   try {
-    const result = await updatePurchaseStatus(
-      "PO-2025-TEST",
-      "承認済",
-      "test-user"
-    );
+    const result = await updateStatus("PO-2025-TEST", {
+      発注承認ステータス: "承認済",
+    });
     return NextResponse.json({
       ok: true,
       message: "Status update test",

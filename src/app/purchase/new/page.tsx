@@ -330,6 +330,14 @@ function PurchaseFormInner() {
   const [state, action, pending] = useActionState(submitPurchase, null);
   const formRef = useRef<HTMLFormElement>(null);
 
+  // 従業員マスタ
+  type Employee = { name: string; departmentCode: string; departmentName: string; slackAliases: string };
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+
+  // 購入先サジェスト
+  const [supplierSuggestions, setSupplierSuggestions] = useState<string[]>([]);
+
   // フォーム state
   const [requestType, setRequestType] = useState("");
   const [itemName, setItemName] = useState("");
@@ -363,8 +371,47 @@ function PurchaseFormInner() {
   const totalAmount = amount * quantity;
   const isHighValue = totalAmount >= 100000;
 
-  // 下書き復元（初回マウント時）
+  // 従業員マスタ・購入先一覧を取得
   useEffect(() => {
+    fetch("/api/employees")
+      .then((r) => r.json())
+      .then((d: { employees?: Employee[] }) => {
+        if (d.employees) setEmployees(d.employees);
+      })
+      .catch(() => {});
+    fetch("/api/suppliers")
+      .then((r) => r.json())
+      .then((d: { suppliers?: string[] }) => {
+        if (d.suppliers) setSupplierSuggestions(d.suppliers);
+      })
+      .catch(() => {});
+  }, []);
+
+  // 下書き復元 or クエリパラメータからの自動入力（初回マウント時）
+  useEffect(() => {
+    // クエリパラメータからの自動入力（Bookmarklet等から）
+    const qItemName = params.get("item_name");
+    const qPrice = params.get("price");
+    const qSupplier = params.get("supplier_name");
+    const qUrl = params.get("url");
+    const qRequestType = params.get("request_type");
+
+    if (qItemName || qPrice || qSupplier || qUrl) {
+      if (qItemName) setItemName(qItemName);
+      if (qPrice) {
+        const v = parseInt(qPrice.replace(/[,，￥¥]/g, ""), 10) || 0;
+        if (v > 0) {
+          setAmount(v);
+          setAmountDisplay(v.toLocaleString());
+        }
+      }
+      if (qSupplier) setSupplierName(qSupplier);
+      if (qUrl) setUrl(qUrl);
+      if (qRequestType) setRequestType(qRequestType);
+      return; // クエリパラメータがある場合は下書き復元をスキップ
+    }
+
+    // 下書き復元
     const draft = loadDraft();
     if (!draft) return;
 
@@ -385,7 +432,7 @@ function PurchaseFormInner() {
     if (draft.budget_number) setBudgetNumber(draft.budget_number);
     if (draft.notes) setNotes(draft.notes);
     setDraftRestored(true);
-  }, []);
+  }, [params]);
 
   // 下書き自動保存（値変更時）
   useEffect(() => {
@@ -447,12 +494,12 @@ function PurchaseFormInner() {
     return action(formData);
   };
 
-  if (!userId) {
+  if (!userId && employees.length === 0) {
     return (
       <div className="max-w-2xl mx-auto p-4 sm:p-6">
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">
-          <p className="font-bold">エラー</p>
-          <p>Slackの /purchase コマンドからアクセスしてください。</p>
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-yellow-800">
+          <p className="font-bold">読み込み中...</p>
+          <p>従業員マスタを取得しています。しばらくお待ちください。</p>
         </div>
       </div>
     );
@@ -525,10 +572,23 @@ function PurchaseFormInner() {
       )}
 
       <form ref={formRef} action={handleFormAction} className="space-y-5">
-        <input type="hidden" name="user_id" value={userId} />
+        <input type="hidden" name="user_id" value={userId || selectedEmployee?.name || ""} />
         <input type="hidden" name="channel_id" value={channelId} />
-        {/* hidden: 実際のamount値（カンマなし） */}
+        <input type="hidden" name="applicant_name" value={selectedEmployee?.name || ""} />
+        <input type="hidden" name="department" value={selectedEmployee?.departmentName || ""} />
+        {/* hidden: 確認画面でDOMから消えるフィールドの値を保持 */}
+        <input type="hidden" name="request_type" value={requestType} />
+        <input type="hidden" name="item_name" value={itemName} />
         <input type="hidden" name="amount" value={amount || ""} />
+        <input type="hidden" name="quantity" value={quantity} />
+        <input type="hidden" name="payment_method" value={paymentMethod} />
+        <input type="hidden" name="supplier_name" value={supplierName} />
+        <input type="hidden" name="url" value={url} />
+        <input type="hidden" name="asset_usage" value={assetUsage} />
+        <input type="hidden" name="katana_po" value={katanaPo} />
+        <input type="hidden" name="hubspot_deal_id" value={hubspotDealId} />
+        <input type="hidden" name="budget_number" value={budgetNumber} />
+        <input type="hidden" name="notes" value={notes} />
 
         {/* 確認画面 */}
         {showConfirm ? (
@@ -554,6 +614,38 @@ function PurchaseFormInner() {
           />
         ) : (
           <>
+            {/* 申請者（user_idがない場合は従業員マスタから選択） */}
+            {!userId && employees.length > 0 && (
+              <fieldset>
+                <legend className="block text-sm font-medium mb-1">
+                  申請者 <span className="text-red-500">*</span>
+                </legend>
+                <select
+                  required
+                  value={selectedEmployee?.name || ""}
+                  onChange={(e) => {
+                    const emp = employees.find((x) => x.name === e.target.value);
+                    setSelectedEmployee(emp || null);
+                  }}
+                  className="w-full border rounded-lg px-3 py-2"
+                >
+                  <option value="">選択してください</option>
+                  {employees.map((emp) => (
+                    <option key={emp.name} value={emp.name}>
+                      {emp.name}（{emp.departmentName}）
+                    </option>
+                  ))}
+                </select>
+              </fieldset>
+            )}
+
+            {/* userId経由の場合：選択された従業員情報を表示 */}
+            {userId && selectedEmployee && (
+              <div className="bg-blue-50 rounded-lg px-3 py-2 text-sm text-blue-800">
+                申請者: {selectedEmployee.name}（{selectedEmployee.departmentName}）
+              </div>
+            )}
+
             {/* 申請区分 */}
             <fieldset>
               <legend className="block text-sm font-medium mb-1">
@@ -684,11 +776,19 @@ function PurchaseFormInner() {
                 type="text"
                 name="supplier_name"
                 required
+                list="supplier-list"
                 value={supplierName}
                 onChange={(e) => setSupplierName(e.target.value)}
                 placeholder="例: Amazon、モノタロウ、ASKUL等"
                 className="w-full border rounded-lg px-3 py-2"
               />
+              {supplierSuggestions.length > 0 && (
+                <datalist id="supplier-list">
+                  {supplierSuggestions.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
+              )}
               <p className="text-xs text-gray-500 mt-1">
                 Amazonマーケットプレイスの場合は出品者名を記入してください
               </p>
@@ -725,6 +825,14 @@ function PurchaseFormInner() {
                             price: data.price,
                             siteName: data.siteName || "",
                           });
+                          // 品名・価格を自動入力
+                          if (data.title && !itemName) {
+                            setItemName(data.title);
+                          }
+                          if (data.price && !amount) {
+                            setAmount(data.price);
+                            setAmountDisplay(data.price.toLocaleString());
+                          }
                         }
                         // 購入先名を自動設定
                         if (data.siteName && !supplierName) {
