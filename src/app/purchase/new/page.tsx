@@ -361,6 +361,9 @@ function PurchaseFormInner() {
     siteName: string;
   } | null>(null);
 
+  // ステップ管理（1: 申請区分, 2: 商品情報, 3: 詳細情報, 4: 確認）
+  const [step, setStep] = useState(1);
+
   // 確認画面
   const [showConfirm, setShowConfirm] = useState(false);
 
@@ -556,34 +559,57 @@ function PurchaseFormInner() {
     setShowPastRequests(false);
   };
 
-  // フォームsubmit前に確認画面を挟む（重複チェック + 勘定科目推定）
-  const handleFormAction = async (formData: FormData) => {
+  // ステップ進行バリデーション
+  const canProceedStep1 = requestType !== "" && (userId || selectedEmployee);
+  const canProceedStep2 = itemName && amount > 0 && supplierName;
+  const canProceedStep3 = paymentMethod !== "" && (!isHighValue || (assetUsage && notes));
+
+  const goNextStep = () => {
+    if (step < 3) {
+      setStep(step + 1);
+    } else if (step === 3) {
+      // Step 3 → 確認画面（Step 4）
+      setStep(4);
+    }
+  };
+
+  const goPrevStep = () => {
+    if (step > 1) setStep(step - 1);
+  };
+
+  // Step 3→4遷移時に重複チェック + 勘定科目推定を実行
+  const goToConfirm = async () => {
+    const dupParams = new URLSearchParams({ itemName });
+    if (totalAmount > 0) dupParams.set("totalAmount", String(totalAmount));
+
+    const acctParams = new URLSearchParams({
+      itemName,
+      supplierName,
+      totalAmount: String(totalAmount),
+    });
+
+    const [dupRes, acctRes] = await Promise.allSettled([
+      fetch(`/api/purchase/check-duplicate?${dupParams}`).then((r) => r.json()),
+      fetch(`/api/purchase/estimate-account?${acctParams}`).then((r) => r.json()),
+    ]);
+
+    if (dupRes.status === "fulfilled") {
+      setDuplicates(dupRes.value.duplicates || []);
+    }
+    setDupChecked(true);
+
+    if (acctRes.status === "fulfilled" && acctRes.value.account) {
+      setAccountEstimation(acctRes.value);
+    }
+
+    setShowConfirm(true);
+    setStep(4);
+  };
+
+  // フォーム送信ハンドラ
+  const handleFormAction = (formData: FormData) => {
     if (!showConfirm) {
-      // 重複チェックと勘定科目推定を並行実行
-      const dupParams = new URLSearchParams({ itemName });
-      if (totalAmount > 0) dupParams.set("totalAmount", String(totalAmount));
-
-      const acctParams = new URLSearchParams({
-        itemName,
-        supplierName,
-        totalAmount: String(totalAmount),
-      });
-
-      const [dupRes, acctRes] = await Promise.allSettled([
-        fetch(`/api/purchase/check-duplicate?${dupParams}`).then((r) => r.json()),
-        fetch(`/api/purchase/estimate-account?${acctParams}`).then((r) => r.json()),
-      ]);
-
-      if (dupRes.status === "fulfilled") {
-        setDuplicates(dupRes.value.duplicates || []);
-      }
-      setDupChecked(true);
-
-      if (acctRes.status === "fulfilled" && acctRes.value.account) {
-        setAccountEstimation(acctRes.value);
-      }
-
-      setShowConfirm(true);
+      // Step 4以外でのsubmitを無視
       return;
     }
     return action(formData);
@@ -685,8 +711,32 @@ function PurchaseFormInner() {
         <input type="hidden" name="budget_number" value={budgetNumber} />
         <input type="hidden" name="notes" value={notes} />
 
-        {/* 確認画面 */}
-        {showConfirm ? (
+        {/* ステップインジケーター */}
+        {!state?.ok && (
+          <div className="flex items-center justify-between mb-2">
+            {["申請区分", "商品情報", "詳細情報", "確認"].map((label, i) => {
+              const stepNum = i + 1;
+              const isActive = step === stepNum;
+              const isDone = step > stepNum;
+              return (
+                <div key={label} className="flex items-center flex-1">
+                  <div className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold shrink-0 ${
+                    isActive ? "bg-blue-600 text-white" : isDone ? "bg-green-500 text-white" : "bg-gray-200 text-gray-500"
+                  }`}>
+                    {isDone ? "✓" : stepNum}
+                  </div>
+                  <span className={`ml-1 text-xs hidden sm:inline ${isActive ? "text-blue-700 font-medium" : "text-gray-400"}`}>
+                    {label}
+                  </span>
+                  {i < 3 && <div className={`flex-1 h-0.5 mx-2 ${isDone ? "bg-green-400" : "bg-gray-200"}`} />}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Step 4: 確認画面 */}
+        {step === 4 && showConfirm ? (
           <>
             {/* 重複警告 */}
             {dupChecked && duplicates.length > 0 && (
@@ -747,60 +797,55 @@ function PurchaseFormInner() {
               budgetNumber,
               notes,
             }}
-            onBack={() => { setShowConfirm(false); setDupChecked(false); }}
+            onBack={() => { setShowConfirm(false); setDupChecked(false); setStep(3); }}
             onSubmit={handleConfirmSubmit}
             pending={pending}
           />
           </>
         ) : (
           <>
-            {/* 過去の申請から入力 */}
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={loadPastRequests}
-                disabled={pastLoading}
-                className="text-sm text-blue-600 hover:text-blue-800 underline"
-              >
-                {pastLoading ? "読み込み中..." : "過去の申請から入力"}
-              </button>
-            </div>
-
-            {/* 過去申請一覧モーダル */}
-            {showPastRequests && pastRequests.length > 0 && (
-              <div className="bg-gray-50 border rounded-lg p-3 max-h-60 overflow-y-auto">
-                <div className="flex justify-between items-center mb-2">
-                  <p className="text-sm font-medium">過去の申請（クリックで入力）</p>
+            {/* Step 1: 申請区分 */}
+            {step === 1 && (
+              <>
+                {/* 過去の申請から入力 */}
+                <div className="flex justify-end">
                   <button
                     type="button"
-                    onClick={() => setShowPastRequests(false)}
-                    className="text-gray-400 hover:text-gray-600 text-lg leading-none"
-                  >&times;</button>
+                    onClick={loadPastRequests}
+                    disabled={pastLoading}
+                    className="text-sm text-blue-600 hover:text-blue-800 underline"
+                  >
+                    {pastLoading ? "読み込み中..." : "過去の申請から入力"}
+                  </button>
                 </div>
-                <ul className="space-y-1">
-                  {pastRequests.map((req) => (
-                    <li key={req.prNumber}>
-                      <button
-                        type="button"
-                        onClick={() => applyPastRequest(req)}
-                        className="w-full text-left px-2 py-1.5 rounded hover:bg-blue-50 text-sm transition-colors"
-                      >
-                        <span className="font-medium">{req.itemName}</span>
-                        <span className="text-gray-500 ml-2">
-                          ¥{req.totalAmount.toLocaleString()} — {req.supplierName}
-                        </span>
-                        <span className="text-gray-400 ml-2 text-xs">{req.applicationDate}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {showPastRequests && pastRequests.length === 0 && !pastLoading && (
-              <div className="bg-gray-50 border rounded-lg p-3 text-sm text-gray-500">
-                過去の申請が見つかりませんでした
-              </div>
-            )}
+
+                {/* 過去申請一覧 */}
+                {showPastRequests && pastRequests.length > 0 && (
+                  <div className="bg-gray-50 border rounded-lg p-3 max-h-60 overflow-y-auto">
+                    <div className="flex justify-between items-center mb-2">
+                      <p className="text-sm font-medium">過去の申請（クリックで入力）</p>
+                      <button type="button" onClick={() => setShowPastRequests(false)} className="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
+                    </div>
+                    <ul className="space-y-1">
+                      {pastRequests.map((req) => (
+                        <li key={req.prNumber}>
+                          <button
+                            type="button"
+                            onClick={() => { applyPastRequest(req); setStep(2); }}
+                            className="w-full text-left px-2 py-1.5 rounded hover:bg-blue-50 text-sm transition-colors"
+                          >
+                            <span className="font-medium">{req.itemName}</span>
+                            <span className="text-gray-500 ml-2">¥{req.totalAmount.toLocaleString()} — {req.supplierName}</span>
+                            <span className="text-gray-400 ml-2 text-xs">{req.applicationDate}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {showPastRequests && pastRequests.length === 0 && !pastLoading && (
+                  <div className="bg-gray-50 border rounded-lg p-3 text-sm text-gray-500">過去の申請が見つかりませんでした</div>
+                )}
 
             {/* 申請者（user_idがない場合は従業員マスタから選択） */}
             {!userId && employees.length > 0 && (
@@ -870,6 +915,21 @@ function PurchaseFormInner() {
               )}
             </fieldset>
 
+                {/* Step 1 ナビゲーション */}
+                <button
+                  type="button"
+                  disabled={!canProceedStep1}
+                  onClick={goNextStep}
+                  className="w-full py-3 px-4 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  次へ: 商品情報
+                </button>
+              </>
+            )}
+
+            {/* Step 2: 商品情報 */}
+            {step === 2 && (
+              <>
             {/* 品目名 */}
             <fieldset>
               <legend className="block text-sm font-medium mb-1">
@@ -1125,6 +1185,26 @@ function PurchaseFormInner() {
               )}
             </fieldset>
 
+                {/* Step 2 ナビゲーション */}
+                <div className="flex gap-3">
+                  <button type="button" onClick={goPrevStep} className="flex-1 py-3 px-4 border-2 border-gray-300 text-gray-700 font-bold rounded-lg hover:bg-gray-50">
+                    戻る
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canProceedStep2}
+                    onClick={goNextStep}
+                    className="flex-1 py-3 px-4 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                  >
+                    次へ: 詳細情報
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Step 3: 詳細情報 */}
+            {step === 3 && (
+              <>
             {/* 購入品の用途 — 10万以上で必須化 */}
             {(isHighValue || !requestType) && (
               <fieldset>
@@ -1245,18 +1325,27 @@ function PurchaseFormInner() {
               )}
             </fieldset>
 
-            <button
-              type="submit"
-              disabled={pending}
-              className="w-full py-3 px-4 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              確認画面へ
-            </button>
+                {/* Step 3 ナビゲーション */}
+                <div className="flex gap-3">
+                  <button type="button" onClick={goPrevStep} className="flex-1 py-3 px-4 border-2 border-gray-300 text-gray-700 font-bold rounded-lg hover:bg-gray-50">
+                    戻る
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canProceedStep3}
+                    onClick={goToConfirm}
+                    className="flex-1 py-3 px-4 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                  >
+                    確認画面へ
+                  </button>
+                </div>
 
-            {/* 下書き保存の案内 */}
-            <p className="text-xs text-center text-gray-400">
-              入力内容は自動的に下書き保存されます
-            </p>
+                {/* 下書き保存の案内 */}
+                <p className="text-xs text-center text-gray-400">
+                  入力内容は自動的に下書き保存されます
+                </p>
+              </>
+            )}
           </>
         )}
       </form>
