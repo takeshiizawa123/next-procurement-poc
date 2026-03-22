@@ -13,6 +13,7 @@ import {
   type PurchaseFormData,
   type RequestInfo,
 } from "@/lib/slack";
+import { registerPurchase, getEmployees } from "@/lib/gas-client";
 
 // Vercel Serverless の最大実行時間
 export const maxDuration = 10;
@@ -155,7 +156,6 @@ async function handlePurchaseSubmission(
   try {
     const client = getSlackClient();
 
-    // TODO: GAS連携でPO番号発番・スプレッドシート登録（Sprint 1-3で実装）
     const now = new Date();
     const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
     const seq = String(Math.floor(Math.random() * 9999) + 1).padStart(4, "0");
@@ -163,8 +163,30 @@ async function handlePurchaseSubmission(
 
     const amount = `¥${formData.amount.toLocaleString()}`;
 
-    // TODO: 従業員マスタから承認者を取得（Sprint 1-6）
     const approverSlackId = DEFAULT_APPROVER;
+
+    // 従業員マスタから部門名を取得
+    let department = "";
+    try {
+      const empResult = await getEmployees();
+      if (empResult.success && empResult.data?.employees) {
+        const match = empResult.data.employees.find((emp) => {
+          const aliases = emp.slackAliases
+            .split(/[,、]/)
+            .map((a) => a.trim().toLowerCase());
+          const uname = userName.toLowerCase();
+          return (
+            emp.name === userName ||
+            emp.name.includes(userName) ||
+            userName.includes(emp.name) ||
+            aliases.some((a) => a && (a === uname || uname.includes(a)))
+          );
+        });
+        if (match) department = match.departmentName;
+      }
+    } catch {
+      console.warn("[purchase] Could not fetch employee master");
+    }
 
     // #purchase-request にメッセージ投稿
     const channelId = targetChannelId || PURCHASE_CHANNEL;
@@ -184,7 +206,7 @@ async function handlePurchaseSubmission(
       itemName: formData.itemName,
       amount,
       applicant: `<@${userId}>`,
-      department: "", // TODO: 従業員マスタから取得（Sprint 1-6）
+      department,
       supplierName: formData.supplierName,
       paymentMethod: formData.paymentMethod,
       applicantSlackId: userId,
@@ -241,7 +263,31 @@ async function handlePurchaseSubmission(
       await notifyOps(client, `🔵 *新規申請* ${poNumber} — ${formData.itemName} ${amount}（<@${userId}>）— 承認待ち`);
     }
 
-    // TODO: GASにステータス登録（Sprint 1-5）
+    // GAS（スプレッドシート）に購買申請を登録
+    const slackLink = result.ts
+      ? `https://slack.com/archives/${channelId}/p${result.ts.replace(".", "")}`
+      : "";
+
+    try {
+      const gasResult = await registerPurchase({
+        applicant: userName,
+        itemName: formData.itemName,
+        totalAmount: formData.amount,
+        purchaseSource: formData.supplierName,
+        paymentMethod: formData.paymentMethod,
+        poNumber,
+        slackTs: result.ts || "",
+        slackLink,
+        isPurchased,
+      });
+      if (gasResult.success) {
+        console.log("[purchase] GAS registered:", gasResult.data);
+      } else {
+        console.error("[purchase] GAS register failed:", gasResult.error);
+      }
+    } catch (gasError) {
+      console.error("[purchase] GAS register error:", gasError);
+    }
 
   } catch (error) {
     console.error("[purchase] submission error:", error);
