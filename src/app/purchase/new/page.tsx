@@ -364,6 +364,17 @@ function PurchaseFormInner() {
   // 確認画面
   const [showConfirm, setShowConfirm] = useState(false);
 
+  // 重複チェック
+  type Duplicate = { prNumber: string; itemName: string; totalAmount: number; applicationDate: string; applicant: string; status: string };
+  const [duplicates, setDuplicates] = useState<Duplicate[]>([]);
+  const [dupChecked, setDupChecked] = useState(false);
+
+  // 過去申請複製
+  type PastRequest = { prNumber: string; applicationDate: string; itemName: string; totalAmount: number; unitPrice: number; quantity: number; supplierName: string; supplierUrl: string; paymentMethod: string; purpose: string };
+  const [pastRequests, setPastRequests] = useState<PastRequest[]>([]);
+  const [showPastRequests, setShowPastRequests] = useState(false);
+  const [pastLoading, setPastLoading] = useState(false);
+
   // 下書き復元通知
   const [draftRestored, setDraftRestored] = useState(false);
 
@@ -485,9 +496,54 @@ function PurchaseFormInner() {
     formRef.current?.requestSubmit();
   };
 
-  // フォームsubmit前に確認画面を挟む
-  const handleFormAction = (formData: FormData) => {
+  // 過去申請一覧を取得
+  const loadPastRequests = async () => {
+    setPastLoading(true);
+    try {
+      const res = await fetch("/api/purchase/recent?limit=20");
+      const data = await res.json();
+      setPastRequests(data.requests || []);
+      setShowPastRequests(true);
+    } catch {
+      setPastRequests([]);
+    } finally {
+      setPastLoading(false);
+    }
+  };
+
+  // 過去申請からフォームに値を複製
+  const applyPastRequest = (req: PastRequest) => {
+    setItemName(req.itemName);
+    if (req.unitPrice > 0) {
+      setAmount(req.unitPrice);
+      setAmountDisplay(req.unitPrice.toLocaleString());
+    } else if (req.totalAmount > 0) {
+      setAmount(req.totalAmount);
+      setAmountDisplay(req.totalAmount.toLocaleString());
+    }
+    setQuantity(req.quantity || 1);
+    setSupplierName(req.supplierName);
+    setUrl(req.supplierUrl);
+    setPaymentMethod(req.paymentMethod);
+    setAssetUsage(req.purpose);
+    setShowPastRequests(false);
+  };
+
+  // フォームsubmit前に確認画面を挟む（重複チェック付き）
+  const handleFormAction = async (formData: FormData) => {
     if (!showConfirm) {
+      // 確認画面表示前に重複チェック
+      try {
+        const params = new URLSearchParams({ itemName });
+        if (totalAmount > 0) params.set("totalAmount", String(totalAmount));
+        const res = await fetch(`/api/purchase/check-duplicate?${params}`);
+        const data = await res.json();
+        setDuplicates(data.duplicates || []);
+        setDupChecked(true);
+      } catch {
+        setDuplicates([]);
+        setDupChecked(true);
+      }
       setShowConfirm(true);
       return;
     }
@@ -592,6 +648,25 @@ function PurchaseFormInner() {
 
         {/* 確認画面 */}
         {showConfirm ? (
+          <>
+            {/* 重複警告 */}
+            {dupChecked && duplicates.length > 0 && (
+              <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 mb-4">
+                <p className="font-bold text-amber-800 mb-2">
+                  類似の申請が {duplicates.length} 件見つかりました
+                </p>
+                <ul className="text-sm text-amber-700 space-y-1">
+                  {duplicates.map((d) => (
+                    <li key={d.prNumber}>
+                      {d.prNumber} — {d.itemName}（{d.totalAmount ? `¥${d.totalAmount.toLocaleString()}` : ""}）{d.applicationDate} {d.applicant} [{d.status}]
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-amber-600 mt-2">
+                  重複でない場合はそのまま送信してください
+                </p>
+              </div>
+            )}
           <ConfirmationView
             values={{
               requestType,
@@ -608,12 +683,61 @@ function PurchaseFormInner() {
               budgetNumber,
               notes,
             }}
-            onBack={() => setShowConfirm(false)}
+            onBack={() => { setShowConfirm(false); setDupChecked(false); }}
             onSubmit={handleConfirmSubmit}
             pending={pending}
           />
+          </>
         ) : (
           <>
+            {/* 過去の申請から入力 */}
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={loadPastRequests}
+                disabled={pastLoading}
+                className="text-sm text-blue-600 hover:text-blue-800 underline"
+              >
+                {pastLoading ? "読み込み中..." : "過去の申請から入力"}
+              </button>
+            </div>
+
+            {/* 過去申請一覧モーダル */}
+            {showPastRequests && pastRequests.length > 0 && (
+              <div className="bg-gray-50 border rounded-lg p-3 max-h-60 overflow-y-auto">
+                <div className="flex justify-between items-center mb-2">
+                  <p className="text-sm font-medium">過去の申請（クリックで入力）</p>
+                  <button
+                    type="button"
+                    onClick={() => setShowPastRequests(false)}
+                    className="text-gray-400 hover:text-gray-600 text-lg leading-none"
+                  >&times;</button>
+                </div>
+                <ul className="space-y-1">
+                  {pastRequests.map((req) => (
+                    <li key={req.prNumber}>
+                      <button
+                        type="button"
+                        onClick={() => applyPastRequest(req)}
+                        className="w-full text-left px-2 py-1.5 rounded hover:bg-blue-50 text-sm transition-colors"
+                      >
+                        <span className="font-medium">{req.itemName}</span>
+                        <span className="text-gray-500 ml-2">
+                          ¥{req.totalAmount.toLocaleString()} — {req.supplierName}
+                        </span>
+                        <span className="text-gray-400 ml-2 text-xs">{req.applicationDate}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {showPastRequests && pastRequests.length === 0 && !pastLoading && (
+              <div className="bg-gray-50 border rounded-lg p-3 text-sm text-gray-500">
+                過去の申請が見つかりませんでした
+              </div>
+            )}
+
             {/* 申請者（user_idがない場合は従業員マスタから選択） */}
             {!userId && employees.length > 0 && (
               <fieldset>

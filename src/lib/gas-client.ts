@@ -185,6 +185,55 @@ export async function getEmployees(): Promise<
   return callGasGet<{ employees: Employee[] }>({ action: "employees" });
 }
 
+export interface DuplicateResult {
+  prNumber: string;
+  itemName: string;
+  totalAmount: number;
+  applicationDate: string;
+  applicant: string;
+  status: string;
+}
+
+export interface PastRequest {
+  prNumber: string;
+  applicationDate: string;
+  itemName: string;
+  totalAmount: number;
+  unitPrice: number;
+  quantity: number;
+  supplierName: string;
+  supplierUrl: string;
+  applicant: string;
+  paymentMethod: string;
+  purpose: string;
+}
+
+/**
+ * 重複チェック
+ */
+export async function checkDuplicate(
+  itemName: string,
+  totalAmount?: number,
+): Promise<GasResponse<{ duplicates: DuplicateResult[] }>> {
+  return callGasPost<{ duplicates: DuplicateResult[] }>("checkDuplicate", {
+    itemName,
+    ...(totalAmount ? { totalAmount } : {}),
+  });
+}
+
+/**
+ * 過去申請一覧を取得
+ */
+export async function getRecentRequests(
+  applicant?: string,
+  limit?: number,
+): Promise<GasResponse<{ requests: PastRequest[] }>> {
+  return callGasPost<{ requests: PastRequest[] }>("recentRequests", {
+    ...(applicant ? { applicant } : {}),
+    ...(limit ? { limit } : {}),
+  });
+}
+
 /**
  * 購入先名一覧を取得（サジェスト用）
  */
