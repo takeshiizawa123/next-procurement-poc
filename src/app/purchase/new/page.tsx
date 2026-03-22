@@ -375,6 +375,12 @@ function PurchaseFormInner() {
   const [showPastRequests, setShowPastRequests] = useState(false);
   const [pastLoading, setPastLoading] = useState(false);
 
+  // 承認ルートプレビュー
+  type ApprovalStep = { role: string; name: string; slackId: string };
+  const [approvalSteps, setApprovalSteps] = useState<ApprovalStep[]>([]);
+  const [approvalSummary, setApprovalSummary] = useState("");
+  const [requiresDeptHead, setRequiresDeptHead] = useState(false);
+
   // 下書き復元通知
   const [draftRestored, setDraftRestored] = useState(false);
 
@@ -397,6 +403,23 @@ function PurchaseFormInner() {
       })
       .catch(() => {});
   }, []);
+
+  // 承認ルート取得（金額・区分が変わるたび）
+  useEffect(() => {
+    if (!requestType) return;
+    const params = new URLSearchParams({
+      amount: String(totalAmount),
+      isPurchased: String(isPurchased),
+    });
+    fetch(`/api/purchase/approval-route?${params}`)
+      .then((r) => r.json())
+      .then((d: { steps?: ApprovalStep[]; summary?: string; requiresDeptHead?: boolean }) => {
+        setApprovalSteps(d.steps || []);
+        setApprovalSummary(d.summary || "");
+        setRequiresDeptHead(d.requiresDeptHead || false);
+      })
+      .catch(() => {});
+  }, [totalAmount, isPurchased, requestType]);
 
   // 下書き復元 or クエリパラメータからの自動入力（初回マウント時）
   useEffect(() => {
@@ -868,6 +891,31 @@ function PurchaseFormInner() {
                       （10万円以上: 用途・理由の入力が必要です）
                     </span>
                   )}
+                </div>
+              )}
+
+              {/* 承認ルートプレビュー */}
+              {requestType && approvalSummary && (
+                <div className={`mt-3 rounded-lg px-3 py-2 text-sm ${requiresDeptHead ? "bg-red-50 border border-red-200" : "bg-blue-50 border border-blue-200"}`}>
+                  <div className="flex items-center gap-2">
+                    <span className={`font-medium ${requiresDeptHead ? "text-red-700" : "text-blue-700"}`}>
+                      承認ルート:
+                    </span>
+                    {isPurchased ? (
+                      <span className="text-gray-500">承認不要（購入済）</span>
+                    ) : (
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {approvalSteps.map((step, i) => (
+                          <span key={i} className="flex items-center gap-1">
+                            {i > 0 && <span className="text-gray-400">→</span>}
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${step.slackId ? "bg-blue-100 text-blue-800" : "bg-amber-100 text-amber-800"}`}>
+                              {step.role}: {step.name}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
