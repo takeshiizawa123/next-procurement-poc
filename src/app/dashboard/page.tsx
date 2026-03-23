@@ -15,6 +15,7 @@ interface PurchaseRequest {
   voucherStatus: string;
   type: string;
   department: string;
+  accountTitle: string;
 }
 
 function overallLabel(req: PurchaseRequest): string {
@@ -51,6 +52,7 @@ function DashboardInner() {
   const deptStats: Record<string, { count: number; amount: number }> = {};
   const supplierStats: Record<string, { count: number; amount: number }> = {};
   const monthlyStats: Record<string, { count: number; amount: number }> = {};
+  const accountStats: Record<string, { count: number; amount: number }> = {};
 
   for (const req of requests) {
     // ステータス別
@@ -68,6 +70,12 @@ function DashboardInner() {
     if (!supplierStats[sup]) supplierStats[sup] = { count: 0, amount: 0 };
     supplierStats[sup].count++;
     supplierStats[sup].amount += req.totalAmount || 0;
+
+    // 勘定科目別
+    const acct = req.accountTitle || "未分類";
+    if (!accountStats[acct]) accountStats[acct] = { count: 0, amount: 0 };
+    accountStats[acct].count++;
+    accountStats[acct].amount += req.totalAmount || 0;
 
     // 月別
     const dateStr = String(req.applicationDate);
@@ -91,6 +99,9 @@ function DashboardInner() {
   const sortedDepts = Object.entries(deptStats).sort((a, b) => b[1].amount - a[1].amount);
   const sortedSuppliers = Object.entries(supplierStats).sort((a, b) => b[1].amount - a[1].amount).slice(0, 10);
   const sortedMonths = Object.entries(monthlyStats).sort((a, b) => a[0].localeCompare(b[0]));
+  const sortedAccounts = Object.entries(accountStats).sort((a, b) => b[1].amount - a[1].amount);
+  const maxMonthlyAmount = Math.max(...sortedMonths.map(([, v]) => v.amount), 1);
+  const maxAccountAmount = Math.max(...sortedAccounts.map(([, v]) => v.amount), 1);
 
   // 最大値（バーの幅計算用）
   const maxDeptAmount = Math.max(...sortedDepts.map(([, v]) => v.amount), 1);
@@ -208,29 +219,50 @@ function DashboardInner() {
         </div>
       </div>
 
-      {/* 月別推移 */}
+      {/* 月別支出トレンド */}
       {sortedMonths.length > 0 && (
+        <div className="bg-white border rounded-xl p-4 shadow-sm mb-6">
+          <h2 className="text-sm font-bold text-gray-700 mb-3">月別支出トレンド</h2>
+          <div className="flex items-end gap-2 h-40">
+            {sortedMonths.map(([month, stat]) => (
+              <div key={month} className="flex-1 flex flex-col items-center">
+                <div className="text-xs text-gray-500 mb-1">
+                  ¥{(stat.amount / 1000).toFixed(0)}k
+                </div>
+                <div
+                  className="w-full bg-blue-500 rounded-t-md min-h-[4px] transition-all"
+                  style={{ height: `${(stat.amount / maxMonthlyAmount) * 120}px` }}
+                  title={`${month}: ${stat.count}件 / ¥${stat.amount.toLocaleString()}`}
+                />
+                <div className="text-xs text-gray-400 mt-1 whitespace-nowrap">
+                  {month.split("/")[1]}月
+                </div>
+                <div className="text-xs text-gray-300">{stat.count}件</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 勘定科目別内訳 */}
+      {sortedAccounts.length > 0 && (
         <div className="bg-white border rounded-xl p-4 shadow-sm">
-          <h2 className="text-sm font-bold text-gray-700 mb-3">月別推移</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-gray-500">
-                  <th className="py-2 pr-4">月</th>
-                  <th className="py-2 pr-4 text-right">件数</th>
-                  <th className="py-2 text-right">金額</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedMonths.map(([month, stat]) => (
-                  <tr key={month} className="border-b last:border-0">
-                    <td className="py-2 pr-4 font-medium">{month}</td>
-                    <td className="py-2 pr-4 text-right">{stat.count}件</td>
-                    <td className="py-2 text-right">¥{stat.amount.toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <h2 className="text-sm font-bold text-gray-700 mb-3">勘定科目別内訳</h2>
+          <div className="space-y-2">
+            {sortedAccounts.map(([acct, stat]) => (
+              <div key={acct}>
+                <div className="flex justify-between text-sm mb-0.5">
+                  <span>{acct}</span>
+                  <span className="text-gray-500">{stat.count}件 / ¥{stat.amount.toLocaleString()}</span>
+                </div>
+                <div className="bg-gray-100 rounded-full h-2">
+                  <div
+                    className="bg-emerald-500 rounded-full h-2"
+                    style={{ width: `${(stat.amount / maxAccountAmount) * 100}%` }}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

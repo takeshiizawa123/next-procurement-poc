@@ -214,6 +214,7 @@ export interface PastRequest {
   slackLink: string;
   type: string;
   department: string;
+  accountTitle: string;
 }
 
 /**
