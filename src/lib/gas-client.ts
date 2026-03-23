@@ -207,6 +207,13 @@ export interface PastRequest {
   applicant: string;
   paymentMethod: string;
   purpose: string;
+  approvalStatus: string;
+  orderStatus: string;
+  inspectionStatus: string;
+  voucherStatus: string;
+  slackLink: string;
+  type: string;
+  department: string;
 }
 
 /**
