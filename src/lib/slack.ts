@@ -1,5 +1,5 @@
 import { WebClient } from "@slack/web-api";
-import { updateStatus } from "./gas-client";
+import { updateStatus, getPendingVouchers } from "./gas-client";
 
 /**
  * Slack Web API クライアント
@@ -203,19 +203,36 @@ export const handleOrderComplete: SlackActionHandler = async ({
   const { poNumber, applicantSlackId, approverSlackId } = parseActionValue(actionValue);
   const adminMembers = (process.env.SLACK_ADMIN_MEMBERS || "").split(",").filter(Boolean);
 
-  // 権限チェック: 申請者・承認者・管理本部メンバー
-  const allowed = [applicantSlackId, approverSlackId, ...adminMembers].filter(Boolean);
-  if (allowed.length > 0 && !allowed.includes(userId)) {
-    await client.chat.postEphemeral({
-      channel: channelId,
-      user: userId,
-      text: "⚠️ 発注完了の操作権限がありません。",
-    });
-    return;
-  }
-
   const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
   const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
+
+  // 発注権限分岐: 支払方法×金額で委任先を判定
+  const amountNum = parseInt((info?.amount || "0").replace(/[^\d]/g, "")) || 0;
+  const payMethod = info?.paymentMethod || "";
+  const isAdminOrder = amountNum >= 100000 || payMethod === "請求書払い";
+
+  if (isAdminOrder) {
+    // 管理本部発注: 管理本部メンバーのみ
+    if (adminMembers.length > 0 && !adminMembers.includes(userId)) {
+      await client.chat.postEphemeral({
+        channel: channelId,
+        user: userId,
+        text: "⚠️ この申請は管理本部が発注する案件です（10万円以上または請求書払い）。",
+      });
+      return;
+    }
+  } else {
+    // 申請者委任: 申請者・承認者・管理本部メンバー
+    const allowed = [applicantSlackId, approverSlackId, ...adminMembers].filter(Boolean);
+    if (allowed.length > 0 && !allowed.includes(userId)) {
+      await client.chat.postEphemeral({
+        channel: channelId,
+        user: userId,
+        text: "⚠️ 発注完了の操作権限がありません。",
+      });
+      return;
+    }
+  }
 
   await client.chat.update({
     channel: channelId,
@@ -949,33 +966,54 @@ export async function sendApprovalDM(
   const av = buildActionValue(info);
   const channelLink = `https://slack.com/archives/${channelId}/p${messageTs.replace(".", "")}`;
 
-  await slackClient.chat.postMessage({
-    channel: info.approverSlackId,
-    text: `📋 承認依頼: ${info.poNumber} ${info.itemName} ${info.amount}（申請者: ${info.applicant}）`,
-    blocks: [
-      {
-        type: "header",
-        text: { type: "plain_text", text: `📋 承認依頼 ${info.poNumber}` },
-      },
-      {
-        type: "section",
-        fields: [
-          { type: "mrkdwn", text: `*品目:* ${info.itemName}` },
-          { type: "mrkdwn", text: `*金額:* ${info.amount}` },
-          { type: "mrkdwn", text: `*申請者:* ${info.applicant}` },
-          { type: "mrkdwn", text: `*購入先:* ${info.supplierName}` },
-          { type: "mrkdwn", text: `*支払:* ${info.paymentMethod}` },
-        ],
-      },
-      {
-        type: "context",
-        elements: [
-          { type: "mrkdwn", text: `<${channelLink}|チャンネルで確認>` },
-        ],
-      },
-      { type: "divider" },
-      {
-        type: "actions",
+  // 申請者の証憑未提出一覧を取得
+  let pendingWarning = "";
+  try {
+    const pendingResult = await getPendingVouchers(info.applicant);
+    if (pendingResult.success && pendingResult.data?.pending?.length) {
+      const items = pendingResult.data.pending;
+      pendingWarning = `\n⚠️ *${info.applicant} の証憑未提出案件: ${items.length}件*\n` +
+        items.map((p) => `  • ${p.prNumber}: ${p.itemName}（${p.daysElapsed}日経過）`).join("\n");
+    }
+  } catch { /* ignore */ }
+
+  const blocks = [
+    {
+      type: "header" as const,
+      text: { type: "plain_text" as const, text: `📋 承認依頼 ${info.poNumber}` },
+    },
+    {
+      type: "section" as const,
+      fields: [
+        { type: "mrkdwn" as const, text: `*品目:* ${info.itemName}` },
+        { type: "mrkdwn" as const, text: `*金額:* ${info.amount}` },
+        { type: "mrkdwn" as const, text: `*申請者:* ${info.applicant}` },
+        { type: "mrkdwn" as const, text: `*購入先:* ${info.supplierName}` },
+        { type: "mrkdwn" as const, text: `*支払:* ${info.paymentMethod}` },
+      ],
+    },
+    {
+      type: "context" as const,
+      elements: [
+        { type: "mrkdwn" as const, text: `<${channelLink}|チャンネルで確認>` },
+      ],
+    },
+  ];
+
+  // 未提出案件がある場合に警告セクションを追加
+  if (pendingWarning) {
+    blocks.push({
+      type: "section" as const,
+      fields: [{ type: "mrkdwn" as const, text: pendingWarning }],
+    });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allBlocks: any[] = [
+    ...blocks,
+    { type: "divider" },
+    {
+      type: "actions",
         block_id: "dm_approval_actions",
         elements: [
           {
@@ -994,7 +1032,12 @@ export async function sendApprovalDM(
           },
         ],
       },
-    ],
+  ];
+
+  await slackClient.chat.postMessage({
+    channel: info.approverSlackId,
+    text: `📋 承認依頼: ${info.poNumber} ${info.itemName} ${info.amount}（申請者: ${info.applicant}）${pendingWarning}`,
+    blocks: allBlocks,
   });
 }
 

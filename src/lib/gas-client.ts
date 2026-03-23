@@ -245,6 +245,23 @@ export async function getRecentRequests(
   });
 }
 
+export interface PendingVoucher {
+  prNumber: string;
+  itemName: string;
+  totalAmount: number;
+  applicationDate: string;
+  daysElapsed: number;
+}
+
+/**
+ * 証憑未提出一覧を取得
+ */
+export async function getPendingVouchers(
+  applicant: string,
+): Promise<GasResponse<{ pending: PendingVoucher[] }>> {
+  return callGasPost<{ pending: PendingVoucher[] }>("pendingVouchers", { applicant });
+}
+
 /**
  * 購入先名一覧を取得（サジェスト用）
  */
