@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSlackClient } from "@/lib/slack";
-
-const DEFAULT_APPROVER = process.env.SLACK_DEFAULT_APPROVER || "";
+import { resolveApprovalRoute } from "@/lib/approval-router";
 
 interface ApprovalStep {
   role: string;
@@ -9,18 +8,28 @@ interface ApprovalStep {
   slackId: string;
 }
 
+async function resolveSlackName(slackId: string): Promise<string> {
+  if (!slackId) return "";
+  try {
+    const client = getSlackClient();
+    const info = await client.users.info({ user: slackId });
+    return info.user?.real_name || info.user?.name || slackId;
+  } catch {
+    return slackId;
+  }
+}
+
 /**
  * 承認ルートプレビュー
- * GET /api/purchase/approval-route?amount=50000&isPurchased=false
- *
- * 金額に応じた承認ルートを返す
+ * GET /api/purchase/approval-route?amount=50000&isPurchased=false&userId=xxx
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const amount = Number(searchParams.get("amount") || "0");
   const isPurchased = searchParams.get("isPurchased") === "true";
+  const userId = searchParams.get("userId") || "";
+  const applicantName = searchParams.get("applicantName") || "";
 
-  // 購入済は承認不要
   if (isPurchased) {
     return NextResponse.json({
       steps: [],
@@ -29,44 +38,34 @@ export async function GET(request: NextRequest) {
     });
   }
 
+  const route = await resolveApprovalRoute(applicantName, userId, amount);
   const steps: ApprovalStep[] = [];
-  const isHighValue = amount >= 100000;
 
-  // デフォルト承認者を解決
-  if (DEFAULT_APPROVER) {
-    let approverName = DEFAULT_APPROVER;
-    try {
-      const client = getSlackClient();
-      const info = await client.users.info({ user: DEFAULT_APPROVER });
-      approverName = info.user?.real_name || info.user?.name || DEFAULT_APPROVER;
-    } catch {
-      // Slack API失敗時はIDのまま
-    }
+  if (route.primaryApprover) {
+    const name = await resolveSlackName(route.primaryApprover);
     steps.push({
-      role: "承認者",
-      name: approverName,
-      slackId: DEFAULT_APPROVER,
+      role: "部門長",
+      name,
+      slackId: route.primaryApprover,
     });
   }
 
-  // 10万円以上は部門長承認が追加
-  if (isHighValue) {
+  if (route.requiresSecondApproval && route.secondaryApprover) {
+    const name = await resolveSlackName(route.secondaryApprover);
     steps.push({
-      role: "部門長",
-      name: "（部門長の承認が必要）",
-      slackId: "",
+      role: "管理本部",
+      name,
+      slackId: route.secondaryApprover,
     });
   }
 
   const summary = steps.length === 0
-    ? "承認者が設定されていません"
-    : isHighValue
-      ? `${steps[0].name} + 部門長承認（10万円以上）`
-      : steps[0].name;
+    ? "承認者が設定されていません（従業員マスタに部門長SlackIDを設定してください）"
+    : steps.map((s) => s.name).join(" → ");
 
   return NextResponse.json({
     steps,
     summary,
-    requiresDeptHead: isHighValue,
+    requiresDeptHead: route.requiresSecondApproval,
   });
 }

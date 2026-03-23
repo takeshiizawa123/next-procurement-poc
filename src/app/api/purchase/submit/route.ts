@@ -7,11 +7,11 @@ import {
   notifyOps,
   type RequestInfo,
 } from "@/lib/slack";
-import { registerPurchase, getEmployees } from "@/lib/gas-client";
+import { registerPurchase } from "@/lib/gas-client";
 import { estimateAccount } from "@/lib/account-estimator";
+import { resolveApprovalRoute } from "@/lib/approval-router";
 
 const PURCHASE_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
-const DEFAULT_APPROVER = process.env.SLACK_DEFAULT_APPROVER || "";
 
 /**
  * Webフォームからの購買申請受付
@@ -74,15 +74,13 @@ export async function POST(request: NextRequest) {
     const totalAmount = amount * quantity;
     const amountStr = `¥${totalAmount.toLocaleString()}`;
 
-    const approverSlackId = DEFAULT_APPROVER;
-
     const client = getSlackClient();
 
-    // フォームから従業員情報を取得（従業員マスタ選択済みの場合）
+    // フォームから従業員情報を取得
     const formApplicantName = (formData.get("applicant_name") as string)?.trim() || "";
     const formDepartment = (formData.get("department") as string)?.trim() || "";
 
-    // ユーザー名を取得（Slack ID経由 or フォーム直接入力）
+    // ユーザー名を取得
     let userName = formApplicantName || userId;
     if (!formApplicantName && userId) {
       try {
@@ -95,30 +93,10 @@ export async function POST(request: NextRequest) {
 
     const isPurchased = requestType === "購入済";
 
-    // 部門名: フォームから取得済みならそれを使い、なければ従業員マスタから検索
-    let department = formDepartment;
-    if (!department) {
-      try {
-        const empResult = await getEmployees();
-        if (empResult.success && empResult.data?.employees) {
-          const match = empResult.data.employees.find((emp) => {
-            const aliases = emp.slackAliases
-              .split(/[,、]/)
-              .map((a) => a.trim().toLowerCase());
-            const uname = userName.toLowerCase();
-            return (
-              emp.name === userName ||
-              emp.name.includes(userName) ||
-              userName.includes(emp.name) ||
-              aliases.some((a) => a && (a === uname || uname.includes(a)))
-            );
-          });
-          if (match) department = match.departmentName;
-        }
-      } catch {
-        console.warn("[web-purchase] Could not fetch employee master");
-      }
-    }
+    // 承認ルート解決（従業員マスタから部門長を取得）
+    const approvalRoute = await resolveApprovalRoute(userName, userId, totalAmount);
+    const department = formDepartment || approvalRoute.employee?.departmentName || "";
+    const approverSlackId = isPurchased ? "" : approvalRoute.primaryApprover;
 
     const requestInfo: RequestInfo = {
       poNumber,
@@ -129,7 +107,7 @@ export async function POST(request: NextRequest) {
       supplierName,
       paymentMethod,
       applicantSlackId: userId.startsWith("U") ? userId : "",
-      approverSlackId: isPurchased ? "" : approverSlackId,
+      approverSlackId,
       inspectorSlackId: userId.startsWith("U") ? userId : "",
     };
 
@@ -137,11 +115,28 @@ export async function POST(request: NextRequest) {
       ? buildPurchasedRequestBlocks(requestInfo)
       : buildNewRequestBlocks(requestInfo);
 
+    // チャンネル投稿（承認者メンション付き）
+    const mentionText = !isPurchased && approverSlackId
+      ? ` — 承認者: <@${approverSlackId}>`
+      : "";
     const result = await client.chat.postMessage({
       channel: channelId,
       blocks,
-      text: `購買申請: ${poNumber} ${itemName} ${amountStr}`,
+      text: `購買申請: ${poNumber} ${itemName} ${amountStr}${mentionText}`,
     });
+
+    // 承認者メンションをスレッドに投稿（チャンネル投稿のテキストはブロック表示時に見えないため）
+    if (!isPurchased && approverSlackId && result.ts) {
+      const approverMention = `<@${approverSlackId}>`;
+      const secondMention = approvalRoute.requiresSecondApproval && approvalRoute.secondaryApprover
+        ? ` → <@${approvalRoute.secondaryApprover}>`
+        : "";
+      await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: result.ts,
+        text: `📋 承認依頼: ${approverMention}${secondMention}\n${approvalRoute.requiresSecondApproval ? "（10万円以上: 二段階承認）" : ""}`,
+      });
+    }
 
     console.log("[web-purchase] Posted:", {
       poNumber,
@@ -149,6 +144,7 @@ export async function POST(request: NextRequest) {
       messageTs: result.ts,
       userId,
       isPurchased,
+      approver: approverSlackId,
       source: "web",
     });
 

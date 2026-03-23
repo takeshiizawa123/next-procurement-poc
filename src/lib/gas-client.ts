@@ -175,6 +175,8 @@ export interface Employee {
   departmentCode: string;
   departmentName: string;
   slackAliases: string;
+  slackId: string;
+  deptHeadSlackId: string;
 }
 
 /**

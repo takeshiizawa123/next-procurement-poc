@@ -13,8 +13,9 @@ import {
   type PurchaseFormData,
   type RequestInfo,
 } from "@/lib/slack";
-import { registerPurchase, getEmployees } from "@/lib/gas-client";
+import { registerPurchase } from "@/lib/gas-client";
 import { estimateAccount } from "@/lib/account-estimator";
+import { resolveApprovalRoute } from "@/lib/approval-router";
 
 // Vercel Serverless の最大実行時間
 export const maxDuration = 10;
@@ -164,30 +165,10 @@ async function handlePurchaseSubmission(
 
     const amount = `¥${formData.amount.toLocaleString()}`;
 
-    const approverSlackId = DEFAULT_APPROVER;
-
-    // 従業員マスタから部門名を取得
-    let department = "";
-    try {
-      const empResult = await getEmployees();
-      if (empResult.success && empResult.data?.employees) {
-        const match = empResult.data.employees.find((emp) => {
-          const aliases = emp.slackAliases
-            .split(/[,、]/)
-            .map((a) => a.trim().toLowerCase());
-          const uname = userName.toLowerCase();
-          return (
-            emp.name === userName ||
-            emp.name.includes(userName) ||
-            userName.includes(emp.name) ||
-            aliases.some((a) => a && (a === uname || uname.includes(a)))
-          );
-        });
-        if (match) department = match.departmentName;
-      }
-    } catch {
-      console.warn("[purchase] Could not fetch employee master");
-    }
+    // 承認ルート解決（従業員マスタから部門長を取得）
+    const approvalRoute = await resolveApprovalRoute(userName, userId, formData.amount);
+    const department = approvalRoute.employee?.departmentName || "";
+    const approverSlackId = DEFAULT_APPROVER || approvalRoute.primaryApprover;
 
     // #purchase-request にメッセージ投稿
     const channelId = targetChannelId || PURCHASE_CHANNEL;
@@ -221,11 +202,27 @@ async function handlePurchaseSubmission(
       ? buildPurchasedRequestBlocks(requestInfo)
       : buildNewRequestBlocks(requestInfo);
 
+    const mentionText = !isPurchased && approverSlackId
+      ? ` — 承認者: <@${approverSlackId}>`
+      : "";
     const result = await client.chat.postMessage({
       channel: channelId,
       blocks,
-      text: `購買申請: ${poNumber} ${formData.itemName} ${amount}`,
+      text: `購買申請: ${poNumber} ${formData.itemName} ${amount}${mentionText}`,
     });
+
+    // 承認者メンションをスレッドに投稿
+    if (!isPurchased && approverSlackId && result.ts) {
+      const approverMention = `<@${approverSlackId}>`;
+      const secondMention = approvalRoute.requiresSecondApproval && approvalRoute.secondaryApprover
+        ? ` → <@${approvalRoute.secondaryApprover}>`
+        : "";
+      await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: result.ts,
+        text: `📋 承認依頼: ${approverMention}${secondMention}\n${approvalRoute.requiresSecondApproval ? "（10万円以上: 二段階承認）" : ""}`,
+      });
+    }
 
     console.log("[purchase] Posted to channel:", {
       poNumber,
@@ -233,6 +230,7 @@ async function handlePurchaseSubmission(
       messageTs: result.ts,
       userId,
       isPurchased,
+      approver: approverSlackId,
     });
 
     if (isPurchased) {
