@@ -219,6 +219,35 @@ export async function POST(request: NextRequest) {
       console.error("[web-purchase] GAS registration error:", gasError);
     }
 
+    // 追加品目の登録（一括申請）
+    const extraItemsRaw = (formData.get("extra_items") as string)?.trim() || "[]";
+    try {
+      const extraItems = JSON.parse(extraItemsRaw) as { itemName: string; amount: number; quantity: number; url: string }[];
+      for (const extra of extraItems) {
+        if (!extra.itemName || !extra.amount) continue;
+        const extraTotal = extra.amount * extra.quantity;
+        const extraEstimation = estimateAccount(extra.itemName, supplierName, extraTotal);
+        await registerPurchase({
+          applicant: userName,
+          itemName: extra.itemName,
+          totalAmount: extraTotal,
+          unitPrice: extra.amount,
+          quantity: extra.quantity,
+          purchaseSource: supplierName,
+          purchaseSourceUrl: extra.url || "",
+          paymentMethod,
+          accountTitle: extraEstimation.account + (extraEstimation.subAccount ? `（${extraEstimation.subAccount}）` : ""),
+          poNumber: poNumber + `-${extraItems.indexOf(extra) + 2}`,
+          remarks: `[一括申請: ${poNumber}]`,
+          slackTs: result.ts || "",
+          slackLink,
+          isPurchased,
+        }).catch((e) => console.error("[web-purchase] Extra item GAS error:", e));
+      }
+    } catch {
+      // JSON parse error - ignore
+    }
+
     return NextResponse.json({ ok: true, poNumber });
   } catch (error) {
     console.error("[web-purchase] submit error:", error);

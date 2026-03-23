@@ -235,6 +235,8 @@ function FileUpload({ required }: { required: boolean }) {
 
 // --- 確認画面 ---
 
+interface ExtraItemValue { itemName: string; amount: number; quantity: number; url: string }
+
 interface FormValues {
   requestType: string;
   itemName: string;
@@ -249,6 +251,8 @@ interface FormValues {
   hubspotDealId: string;
   budgetNumber: string;
   notes: string;
+  extraItems?: ExtraItemValue[];
+  allItemsTotal?: number;
 }
 
 function ConfirmationView({
@@ -293,7 +297,26 @@ function ConfirmationView({
         ))}
       </div>
 
-      {values.totalAmount >= 100000 && (
+      {/* 追加品目 */}
+      {values.extraItems && values.extraItems.length > 0 && (
+        <div className="bg-blue-50 rounded-lg p-3">
+          <p className="text-sm font-medium text-blue-800 mb-2">追加品目（{values.extraItems.length}件）</p>
+          {values.extraItems.map((item, i) => (
+            <div key={i} className="flex justify-between text-sm py-1 border-b border-blue-100 last:border-0">
+              <span>{item.itemName}</span>
+              <span className="text-gray-600">
+                {formatCurrency(item.amount)} × {item.quantity} = {formatCurrency(item.amount * item.quantity)}
+              </span>
+            </div>
+          ))}
+          <div className="flex justify-between text-sm font-bold mt-2 pt-2 border-t border-blue-200">
+            <span>全品目合計</span>
+            <span>{formatCurrency(values.allItemsTotal || values.totalAmount)}</span>
+          </div>
+        </div>
+      )}
+
+      {(values.allItemsTotal || values.totalAmount) >= 100000 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
           この申請は10万円以上のため、部門長承認が必要です。
         </div>
@@ -352,6 +375,23 @@ function PurchaseFormInner() {
   const [hubspotDealId, setHubspotDealId] = useState("");
   const [budgetNumber, setBudgetNumber] = useState("");
   const [notes, setNotes] = useState("");
+
+  // 追加品目（一括申請用）
+  type ExtraItem = { itemName: string; amount: number; amountDisplay: string; quantity: number; url: string };
+  const [extraItems, setExtraItems] = useState<ExtraItem[]>([]);
+
+  const addExtraItem = () => {
+    setExtraItems([...extraItems, { itemName: "", amount: 0, amountDisplay: "", quantity: 1, url: "" }]);
+  };
+  const removeExtraItem = (idx: number) => {
+    setExtraItems(extraItems.filter((_, i) => i !== idx));
+  };
+  const updateExtraItem = (idx: number, field: keyof ExtraItem, value: string | number) => {
+    setExtraItems(extraItems.map((item, i) => i === idx ? { ...item, [field]: value } : item));
+  };
+
+  // 全品目の合計
+  const allItemsTotal = (amount * quantity) + extraItems.reduce((s, e) => s + (e.amount * e.quantity), 0);
 
   // URL解析
   const [urlLoading, setUrlLoading] = useState(false);
@@ -561,7 +601,8 @@ function PurchaseFormInner() {
 
   // ステップ進行バリデーション
   const canProceedStep1 = requestType !== "" && (userId || selectedEmployee);
-  const canProceedStep2 = itemName && amount > 0 && supplierName;
+  const extraItemsValid = extraItems.every((e) => e.itemName && e.amount > 0);
+  const canProceedStep2 = itemName && amount > 0 && supplierName && extraItemsValid;
   const canProceedStep3 = paymentMethod !== "" && (!isHighValue || (assetUsage && notes));
 
   const goNextStep = () => {
@@ -710,6 +751,7 @@ function PurchaseFormInner() {
         <input type="hidden" name="hubspot_deal_id" value={hubspotDealId} />
         <input type="hidden" name="budget_number" value={budgetNumber} />
         <input type="hidden" name="notes" value={notes} />
+        <input type="hidden" name="extra_items" value={JSON.stringify(extraItems.filter((e) => e.itemName && e.amount > 0).map((e) => ({ itemName: e.itemName, amount: e.amount, quantity: e.quantity, url: e.url })))} />
 
         {/* ステップインジケーター */}
         {!state?.ok && (
@@ -796,6 +838,10 @@ function PurchaseFormInner() {
               hubspotDealId,
               budgetNumber,
               notes,
+              extraItems: extraItems.filter((e) => e.itemName && e.amount > 0).map((e) => ({
+                itemName: e.itemName, amount: e.amount, quantity: e.quantity, url: e.url
+              })),
+              allItemsTotal,
             }}
             onBack={() => { setShowConfirm(false); setDupChecked(false); setStep(3); }}
             onSubmit={handleConfirmSubmit}
@@ -1184,6 +1230,81 @@ function PurchaseFormInner() {
                 </div>
               )}
             </fieldset>
+
+                {/* 追加品目（一括申請） */}
+                {extraItems.map((extra, idx) => (
+                  <div key={idx} className="border border-dashed border-gray-300 rounded-lg p-3 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium text-gray-600">追加品目 {idx + 1}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeExtraItem(idx)}
+                        className="text-red-400 hover:text-red-600 text-sm"
+                      >
+                        削除
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="品目名"
+                      value={extra.itemName}
+                      onChange={(e) => updateExtraItem(idx, "itemName", e.target.value)}
+                      className="w-full border rounded-lg px-3 py-2 text-sm"
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="単価（税込）"
+                        value={extra.amountDisplay}
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/[,，\s¥]/g, "");
+                          const num = parseInt(raw) || 0;
+                          updateExtraItem(idx, "amount", num);
+                          updateExtraItem(idx, "amountDisplay", raw);
+                        }}
+                        onBlur={() => {
+                          if (extra.amount > 0) updateExtraItem(idx, "amountDisplay", extra.amount.toLocaleString());
+                        }}
+                        className="border rounded-lg px-3 py-2 text-sm"
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="数量"
+                        value={extra.quantity}
+                        onChange={(e) => updateExtraItem(idx, "quantity", parseInt(e.target.value) || 1)}
+                        className="border rounded-lg px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <input
+                      type="url"
+                      placeholder="購入先URL（任意）"
+                      value={extra.url}
+                      onChange={(e) => updateExtraItem(idx, "url", e.target.value)}
+                      className="w-full border rounded-lg px-3 py-2 text-sm"
+                    />
+                    {extra.amount > 0 && (
+                      <div className="text-right text-sm text-gray-500">
+                        小計: ¥{(extra.amount * extra.quantity).toLocaleString()}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={addExtraItem}
+                  className="w-full py-2 border-2 border-dashed border-gray-300 text-gray-500 rounded-lg hover:border-blue-400 hover:text-blue-600 transition-colors text-sm"
+                >
+                  + 品目を追加（一括申請）
+                </button>
+
+                {extraItems.length > 0 && (
+                  <div className="text-right font-bold text-lg">
+                    全品目合計: ¥{allItemsTotal.toLocaleString()}
+                  </div>
+                )}
 
                 {/* Step 2 ナビゲーション */}
                 <div className="flex gap-3">
