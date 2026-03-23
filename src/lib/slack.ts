@@ -1,4 +1,5 @@
 import { WebClient } from "@slack/web-api";
+import { updateStatus } from "./gas-client";
 
 /**
  * Slack Web API クライアント
@@ -100,6 +101,46 @@ export const handleApprove: SlackActionHandler = async ({
   });
 
   await notifyOps(client, `✅ *承認完了* ${poNumber}（${userName} が承認）— ${info?.itemName || ""} ${info?.amount || ""}`);
+
+  // GASステータス更新
+  updateStatus(poNumber, { "発注承認ステータス": "承認済" }).catch((e) =>
+    console.error("[approve] GAS update error:", e)
+  );
+
+  // 承認後の通知分岐
+  const { applicantSlackId } = parseActionValue(actionValue);
+  const amountNum = parseInt((info?.amount || "0").replace(/[^\d]/g, "")) || 0;
+  const payMethod = info?.paymentMethod || "";
+  const isHighValue = amountNum >= 100000;
+  const isAdminOrder = isHighValue || payMethod === "請求書払い";
+
+  if (isAdminOrder) {
+    // 管理本部発注: 申請者に「管理本部が発注します」DM
+    if (applicantSlackId) {
+      await client.chat.postMessage({
+        channel: applicantSlackId,
+        text: `✅ 購買申請 ${poNumber} が承認されました。管理本部が発注手続きを行います。`,
+      });
+    }
+    // 二段階承認（10万以上）: 管理本部に承認依頼
+    if (isHighValue) {
+      const adminApprover = process.env.SLACK_ADMIN_APPROVER || "";
+      if (adminApprover) {
+        await client.chat.postMessage({
+          channel: adminApprover,
+          text: `📋 *管理本部承認依頼*（10万円以上）\n${poNumber} — ${info?.itemName || ""} ${info?.amount || ""}\n部門長承認済: ${userName}\n<https://slack.com/archives/${channelId}/p${messageTs.replace(".", "")}|チャンネルで確認>`,
+        });
+      }
+    }
+  } else {
+    // 申請者委任: 申請者に「発注してください」DM
+    if (applicantSlackId) {
+      await client.chat.postMessage({
+        channel: applicantSlackId,
+        text: `✅ 購買申請 ${poNumber} が承認されました。カードで発注してください。\n発注後、チャンネルの [発注完了] ボタンを押してください。`,
+      });
+    }
+  }
 };
 
 /**
@@ -184,6 +225,19 @@ export const handleOrderComplete: SlackActionHandler = async ({
   });
 
   await notifyOps(client, `🛒 *発注完了* ${poNumber}（${userName} が発注）— ${info?.itemName || ""} ${info?.amount || ""}`);
+
+  // GASステータス更新
+  updateStatus(poNumber, { "発注ステータス": "発注済" }).catch((e) =>
+    console.error("[order] GAS update error:", e)
+  );
+
+  // 申請者に検収依頼DM
+  if (applicantSlackId && applicantSlackId !== userId) {
+    await client.chat.postMessage({
+      channel: applicantSlackId,
+      text: `🛒 ${poNumber} が発注されました（${userName}）。届いたら [検収完了] ボタンを押してください。`,
+    });
+  }
 };
 
 /**
@@ -233,6 +287,12 @@ export const handleInspectionComplete: SlackActionHandler = async ({
   });
 
   await notifyOps(client, `📦 *検収完了* ${poNumber}（${userName} が検収）— 証憑待ち`);
+
+  // GASステータス更新
+  const today = new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" });
+  updateStatus(poNumber, { "検収ステータス": "検収済", "検収日": today }).catch((e) =>
+    console.error("[inspection] GAS update error:", e)
+  );
 };
 
 /**
