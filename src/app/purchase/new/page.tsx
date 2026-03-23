@@ -361,6 +361,12 @@ function PurchaseFormInner() {
   // 購入先サジェスト
   const [supplierSuggestions, setSupplierSuggestions] = useState<string[]>([]);
 
+  // KATANA POサジェスト
+  type KatanaPO = { id: number; poNumber: string; supplierName: string; status: string; total: number };
+  const [katanaPOs, setKatanaPOs] = useState<KatanaPO[]>([]);
+  const [katanaLoading, setKatanaLoading] = useState(false);
+  const [showKatanaSuggest, setShowKatanaSuggest] = useState(false);
+
   // フォーム state
   const [requestType, setRequestType] = useState("");
   const [itemName, setItemName] = useState("");
@@ -598,6 +604,20 @@ function PurchaseFormInner() {
     setAssetUsage(req.purpose);
     setShowPastRequests(false);
   };
+
+  // KATANA PO検索
+  const searchKatanaPO = useCallback((q: string) => {
+    if (!q || q.length < 2) { setKatanaPOs([]); setShowKatanaSuggest(false); return; }
+    setKatanaLoading(true);
+    fetch(`/api/katana/purchase-orders?q=${encodeURIComponent(q)}`)
+      .then((r) => r.json())
+      .then((d: { orders?: KatanaPO[] }) => {
+        setKatanaPOs(d.orders || []);
+        setShowKatanaSuggest((d.orders || []).length > 0);
+      })
+      .catch(() => { setKatanaPOs([]); setShowKatanaSuggest(false); })
+      .finally(() => setKatanaLoading(false));
+  }, []);
 
   // ステップ進行バリデーション
   const canProceedStep1 = requestType !== "" && (userId || selectedEmployee);
@@ -1350,8 +1370,8 @@ function PurchaseFormInner() {
               </fieldset>
             )}
 
-            {/* KATANA PO番号 */}
-            <fieldset>
+            {/* KATANA PO番号（サジェスト付き） */}
+            <fieldset className="relative">
               <legend className="block text-sm font-medium mb-1">
                 KATANA PO番号
               </legend>
@@ -1359,12 +1379,46 @@ function PurchaseFormInner() {
                 type="text"
                 name="katana_po"
                 value={katanaPo}
-                onChange={(e) => setKatanaPo(e.target.value)}
-                placeholder="例: PO-12345"
+                onChange={(e) => {
+                  setKatanaPo(e.target.value);
+                  searchKatanaPO(e.target.value);
+                }}
+                onFocus={() => { if (katanaPOs.length > 0) setShowKatanaSuggest(true); }}
+                placeholder="PO番号を入力して検索..."
                 className="w-full border rounded-lg px-3 py-2"
+                autoComplete="off"
               />
+              {katanaLoading && (
+                <span className="absolute right-3 top-9 text-xs text-blue-500 animate-pulse">検索中...</span>
+              )}
+              {showKatanaSuggest && katanaPOs.length > 0 && (
+                <div className="absolute z-10 w-full bg-white border rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto">
+                  {katanaPOs.map((po) => (
+                    <button
+                      key={po.id}
+                      type="button"
+                      onClick={() => {
+                        setKatanaPo(po.poNumber);
+                        setShowKatanaSuggest(false);
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-blue-50 text-sm border-b last:border-0"
+                    >
+                      <span className="font-medium">{po.poNumber}</span>
+                      <span className="text-gray-500 ml-2">{po.supplierName}</span>
+                      {po.total > 0 && (
+                        <span className="text-gray-400 ml-2">¥{po.total.toLocaleString()}</span>
+                      )}
+                      <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${
+                        po.status === "open" ? "bg-green-100 text-green-700" :
+                        po.status === "closed" ? "bg-gray-100 text-gray-500" :
+                        "bg-blue-100 text-blue-700"
+                      }`}>{po.status}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <p className="text-xs text-gray-500 mt-1">
-                製品部品の場合に入力
+                製品部品の場合に入力（2文字以上で検索）
               </p>
             </fieldset>
 
