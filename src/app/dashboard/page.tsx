@@ -107,6 +107,21 @@ function DashboardInner() {
   const maxDeptAmount = Math.max(...sortedDepts.map(([, v]) => v.amount), 1);
   const maxSupplierAmount = Math.max(...sortedSuppliers.map(([, v]) => v.amount), 1);
 
+  // 要対応タスク（管理本部のボール）
+  const pendingOrderItems = requests.filter((r) => r.approvalStatus === "承認済" && r.orderStatus === "未発注");
+  const pendingVoucherItems = requests.filter((r) => r.inspectionStatus === "検収済" && r.voucherStatus === "要取得");
+  // フォロー要（遅延案件）
+  const overdueItems = requests.filter((r) => {
+    if (r.voucherStatus !== "要取得" || r.inspectionStatus !== "検収済") return false;
+    const d = new Date(r.applicationDate);
+    return !isNaN(d.getTime()) && (Date.now() - d.getTime()) / 86400000 >= 3;
+  });
+  const approvalOverdue = requests.filter((r) => {
+    if (r.approvalStatus !== "承認待ち") return false;
+    const d = new Date(r.applicationDate);
+    return !isNaN(d.getTime()) && (Date.now() - d.getTime()) / 86400000 >= 1;
+  });
+
   return (
     <div className="max-w-5xl mx-auto p-4 sm:p-6">
       <h1 className="text-xl font-bold mb-6">購買ダッシュボード</h1>
@@ -136,6 +151,53 @@ function DashboardInner() {
           <div className="text-sm text-gray-500">合計金額</div>
         </div>
       </div>
+
+      {/* 要対応タスク */}
+      {(pendingOrderItems.length > 0 || overdueItems.length > 0 || approvalOverdue.length > 0) && (
+        <div className="grid sm:grid-cols-2 gap-4 mb-6">
+          {/* 管理本部のボール */}
+          {pendingOrderItems.length > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+              <h2 className="text-sm font-bold text-red-700 mb-2">要対応: 発注待ち（{pendingOrderItems.length}件）</h2>
+              <ul className="space-y-1">
+                {pendingOrderItems.slice(0, 5).map((r) => (
+                  <li key={r.prNumber} className="text-sm flex justify-between">
+                    <span>{r.prNumber} — {r.itemName}</span>
+                    <span className="text-gray-500">¥{r.totalAmount.toLocaleString()}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* フォロー要 */}
+          {(overdueItems.length > 0 || approvalOverdue.length > 0) && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <h2 className="text-sm font-bold text-amber-700 mb-2">フォロー要: 遅延案件</h2>
+              {overdueItems.length > 0 && (
+                <div className="mb-2">
+                  <p className="text-xs text-amber-600 font-medium">証憑超過（3日+）: {overdueItems.length}件</p>
+                  <ul className="space-y-0.5">
+                    {overdueItems.slice(0, 3).map((r) => (
+                      <li key={r.prNumber} className="text-sm text-amber-800">{r.prNumber}: {r.itemName}（{r.applicant}）</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {approvalOverdue.length > 0 && (
+                <div>
+                  <p className="text-xs text-amber-600 font-medium">承認待ち超過（1日+）: {approvalOverdue.length}件</p>
+                  <ul className="space-y-0.5">
+                    {approvalOverdue.slice(0, 3).map((r) => (
+                      <li key={r.prNumber} className="text-sm text-amber-800">{r.prNumber}: {r.itemName}（{r.applicant}）</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ステータス分布 */}
       <div className="bg-white border rounded-xl p-4 mb-6 shadow-sm">

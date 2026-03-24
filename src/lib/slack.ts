@@ -114,7 +114,25 @@ export const handleApprove: SlackActionHandler = async ({
   const isHighValue = amountNum >= 100000;
   const isAdminOrder = isHighValue || payMethod === "請求書払い";
 
-  if (isAdminOrder) {
+  // 購入済（立替）判定: メッセージのヘッダーに「購買報告」があるか
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const headerBlock = (message?.blocks as any[])?.find((b) => b.type === "header");
+  const isPurchased = headerBlock?.text?.text?.includes("購買報告") || headerBlock?.text?.text?.includes("購入済") || false;
+
+  if (isPurchased) {
+    // 購入済（立替）: 発注・検収不要 → 即「証憑待ち」
+    if (applicantSlackId) {
+      await client.chat.postMessage({
+        channel: applicantSlackId,
+        text: `✅ 購入済申請 ${poNumber} が承認されました。証憑（納品書・領収書）がスレッドに添付されていることを確認してください。`,
+      });
+    }
+    // GASも証憑待ち状態に更新
+    updateStatus(poNumber, {
+      "発注ステータス": "発注済",
+      "検収ステータス": "検収済",
+    }).catch((e) => console.error("[approve] GAS purchased update error:", e));
+  } else if (isAdminOrder) {
     // 管理本部発注: 申請者に「管理本部が発注します」DM
     if (applicantSlackId) {
       await client.chat.postMessage({

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSlackClient } from "@/lib/slack";
 import { getRecentRequests } from "@/lib/gas-client";
+import { resolveApprovalRoute } from "@/lib/approval-router";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
@@ -49,9 +50,16 @@ export async function GET(request: NextRequest) {
       const applicantSlackId = slackIdMatch?.[1] || "";
 
       if (days >= 7) {
-        // Day7+: 部門長エスカレーション
-        // TODO: 部門長SlackIDを従業員マスタから取得
-        // ひとまずスレッドに公開投稿
+        // Day7+: 部門長にDMエスカレーション
+        const route = await resolveApprovalRoute(req.applicant, applicantSlackId, 0);
+        if (route.primaryApprover) {
+          await client.chat.postMessage({
+            channel: route.primaryApprover,
+            text: `🚨 *証憑未提出エスカレーション*\n${req.applicant} の案件が証憑待ちで *${days}日間* 停止しています。\n• ${req.prNumber}: ${req.itemName}\n経理処理・支払が進められない状態です。ご確認をお願いします。`,
+          });
+          reminded++;
+        }
+        // スレッドにも公開投稿
         if (req.slackLink) {
           const tsMatch = req.slackLink.match(/\/p(\d+)$/);
           const threadTs = tsMatch ? tsMatch[1].slice(0, 10) + "." + tsMatch[1].slice(10) : "";
@@ -63,7 +71,6 @@ export async function GET(request: NextRequest) {
               thread_ts: threadTs,
               text: `🚨 *証憑未提出: ${days}日経過* — ${req.applicant} さん、納品書・領収書をこのスレッドに添付してください。経理処理が進められません。`,
             });
-            reminded++;
           }
         }
       } else if (days >= 3) {

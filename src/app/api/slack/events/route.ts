@@ -13,7 +13,7 @@ import {
   type PurchaseFormData,
   type RequestInfo,
 } from "@/lib/slack";
-import { registerPurchase } from "@/lib/gas-client";
+import { registerPurchase, updateStatus } from "@/lib/gas-client";
 import { estimateAccount } from "@/lib/account-estimator";
 import { resolveApprovalRoute } from "@/lib/approval-router";
 
@@ -122,6 +122,21 @@ export async function POST(request: NextRequest) {
       }
 
       return NextResponse.json({ response_action: "clear" });
+    }
+
+    // Events API（file_shared等）
+    if (payload.type === "event_callback") {
+      const event = payload.event as { type: string; file_id?: string; channel_id?: string; thread_ts?: string; files?: Array<{ id: string }>; ts?: string; subtype?: string };
+      if (event.type === "message" && event.subtype === "file_share" && event.thread_ts) {
+        after(async () => {
+          try {
+            await handleFileSharedInThread(event.channel_id || "", event.thread_ts || "", event.ts || "");
+          } catch (e) {
+            console.error("[slack] file_share handler error:", e);
+          }
+        });
+      }
+      return new NextResponse("", { status: 200 });
     }
 
     // Interactive Messages（ボタン）
@@ -302,6 +317,53 @@ async function handlePurchaseSubmission(
     } catch {
       console.error("[purchase] Failed to send error DM");
     }
+  }
+}
+
+// --- 証憑添付自動検知 ---
+
+/**
+ * スレッド内のファイル添付を検知し、購買申請の証憑として処理
+ */
+async function handleFileSharedInThread(channelId: string, threadTs: string, eventTs: string) {
+  const client = getSlackClient();
+
+  // 親メッセージを取得してPO番号を抽出
+  let parentText = "";
+  try {
+    const result = await client.conversations.history({
+      channel: channelId,
+      latest: threadTs,
+      inclusive: true,
+      limit: 1,
+    });
+    parentText = (result.messages?.[0]?.text || "") + " " +
+      JSON.stringify(result.messages?.[0]?.blocks || []);
+  } catch {
+    return; // 親メッセージが取得できない場合はスキップ
+  }
+
+  // PO番号を抽出
+  const poMatch = parentText.match(/PO-\d{6}-\d{4}/);
+  if (!poMatch) return; // 購買申請スレッドでなければスキップ
+
+  const prNumber = poMatch[0];
+  console.log(`[file-share] 証憑添付検知: ${prNumber} in ${channelId}`);
+
+  // GASでステータスを「添付済」に更新
+  try {
+    const gasResult = await updateStatus(prNumber, { "証憑対応": "添付済" });
+    if (gasResult.success) {
+      await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: `📎 証憑を確認しました（${prNumber}）。仕訳計上の準備が整いました。`,
+      });
+      await notifyOps(client, `📎 *証憑添付* ${prNumber} — 仕訳待ちに移行`);
+      console.log(`[file-share] GAS updated: ${prNumber} → 添付済`);
+    }
+  } catch (e) {
+    console.error(`[file-share] GAS update error for ${prNumber}:`, e);
   }
 }
 
