@@ -17,6 +17,7 @@ import {
 import { registerPurchase, updateStatus } from "@/lib/gas-client";
 import { estimateAccount } from "@/lib/account-estimator";
 import { resolveApprovalRoute } from "@/lib/approval-router";
+import { createTripExpense } from "@/lib/mf-expense";
 
 // Vercel Serverless の最大実行時間
 export const maxDuration = 10;
@@ -127,6 +128,30 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      if (command === "/trip") {
+        const triggerId = payload.trigger_id as string;
+        if (!triggerId) {
+          return NextResponse.json({
+            response_type: "ephemeral",
+            text: "Error: trigger_id が取得できませんでした",
+          });
+        }
+        try {
+          const client = getSlackClient();
+          await client.views.open({
+            trigger_id: triggerId,
+            view: buildTripModal(channelId),
+          });
+          return new NextResponse("", { status: 200 });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return NextResponse.json({
+            response_type: "ephemeral",
+            text: `Error: ${msg}`,
+          });
+        }
+      }
+
       return NextResponse.json({
         response_type: "ephemeral",
         text: `Unknown command: ${command}`,
@@ -153,6 +178,18 @@ export async function POST(request: NextRequest) {
         // バックグラウンドで後続処理
         after(async () => {
           await handlePurchaseSubmission(userId, userName, formData, targetChannelId);
+        });
+
+        return NextResponse.json({ response_action: "clear" });
+      }
+
+      if (view.callback_id === "trip_submit") {
+        const userId = (payload.user as { id: string }).id;
+        const targetChannelId = view.private_metadata || TRIP_CHANNEL;
+        const vals = view.state.values;
+
+        after(async () => {
+          await handleTripSubmission(userId, vals, targetChannelId);
         });
 
         return NextResponse.json({ response_action: "clear" });
@@ -192,6 +229,199 @@ export async function POST(request: NextRequest) {
     console.error("[slack] fatal error:", msg);
     return NextResponse.json({ error: msg }, { status: 200 });
   }
+}
+
+// --- 出張申請 ---
+
+const TRIP_CHANNEL = process.env.SLACK_TRIP_CHANNEL || "";
+
+/** /trip コマンド用モーダル定義 */
+function buildTripModal(channelId: string) {
+  return {
+    type: "modal" as const,
+    callback_id: "trip_submit",
+    private_metadata: channelId,
+    title: { type: "plain_text" as const, text: "出張申請" },
+    submit: { type: "plain_text" as const, text: "申請する" },
+    close: { type: "plain_text" as const, text: "キャンセル" },
+    blocks: [
+      {
+        type: "input",
+        block_id: "destination_block",
+        label: { type: "plain_text", text: "行き先" },
+        element: {
+          type: "plain_text_input",
+          action_id: "destination",
+          placeholder: { type: "plain_text", text: "例: 大阪本社" },
+        },
+      },
+      {
+        type: "input",
+        block_id: "start_date_block",
+        label: { type: "plain_text", text: "出張開始日" },
+        element: { type: "datepicker", action_id: "start_date" },
+      },
+      {
+        type: "input",
+        block_id: "end_date_block",
+        label: { type: "plain_text", text: "出張終了日" },
+        element: { type: "datepicker", action_id: "end_date" },
+      },
+      {
+        type: "input",
+        block_id: "purpose_block",
+        label: { type: "plain_text", text: "出張目的" },
+        element: {
+          type: "plain_text_input",
+          action_id: "purpose",
+          multiline: true,
+          placeholder: { type: "plain_text", text: "例: クライアントとの打合せ" },
+        },
+      },
+      {
+        type: "input",
+        block_id: "transport_block",
+        label: { type: "plain_text", text: "利用交通手段・便名" },
+        element: {
+          type: "plain_text_input",
+          action_id: "transport",
+          placeholder: { type: "plain_text", text: "例: 新幹線のぞみ 東京→新大阪" },
+        },
+      },
+      {
+        type: "input",
+        block_id: "amount_block",
+        label: { type: "plain_text", text: "概算額（円）" },
+        element: {
+          type: "number_input",
+          action_id: "amount",
+          is_decimal_allowed: false,
+          min_value: "1",
+          placeholder: { type: "plain_text", text: "例: 45000" },
+        },
+      },
+      {
+        type: "input",
+        block_id: "accommodation_block",
+        label: { type: "plain_text", text: "宿泊先（該当する場合）" },
+        optional: true,
+        element: {
+          type: "plain_text_input",
+          action_id: "accommodation",
+          placeholder: { type: "plain_text", text: "例: じゃらんで予約済み / ホテル名" },
+        },
+      },
+    ],
+  };
+}
+
+/** 出張申請の送信処理 */
+async function handleTripSubmission(
+  userId: string,
+  vals: Record<string, Record<string, { value?: string; selected_date?: string }>>,
+  targetChannelId: string,
+): Promise<void> {
+  const client = getSlackClient();
+
+  const destination = vals.destination_block?.destination?.value || "";
+  const startDate = vals.start_date_block?.start_date?.selected_date || "";
+  const endDate = vals.end_date_block?.end_date?.selected_date || "";
+  const purpose = vals.purpose_block?.purpose?.value || "";
+  const transport = vals.transport_block?.transport?.value || "";
+  const amount = parseInt(vals.amount_block?.amount?.value || "0", 10);
+  const accommodation = vals.accommodation_block?.accommodation?.value || "";
+
+  // ユーザー名取得
+  let userName = userId;
+  try {
+    const info = await client.users.info({ user: userId });
+    userName = info.user?.real_name || info.user?.name || userId;
+  } catch {
+    // ignore
+  }
+
+  // 泊数計算
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const nights = Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000));
+  const tripType = nights > 0 ? `${nights}泊${nights + 1}日` : "日帰り";
+
+  // #出張チャンネルに投稿
+  const channelId = targetChannelId || TRIP_CHANNEL;
+  if (!channelId) {
+    await client.chat.postMessage({
+      channel: userId,
+      text: "⚠️ 出張チャンネルが設定されていません。管理者に連絡してください。",
+    });
+    return;
+  }
+
+  const blocks = [
+    {
+      type: "header",
+      text: { type: "plain_text", text: `✈️ 出張申請 — ${userName}` },
+    },
+    {
+      type: "section",
+      fields: [
+        { type: "mrkdwn", text: `*行き先:* ${destination}` },
+        { type: "mrkdwn", text: `*日程:* ${startDate} 〜 ${endDate}（${tripType}）` },
+        { type: "mrkdwn", text: `*目的:* ${purpose}` },
+        { type: "mrkdwn", text: `*交通:* ${transport}` },
+        { type: "mrkdwn", text: `*概算額:* ¥${amount.toLocaleString()}` },
+        { type: "mrkdwn", text: `*申請者:* <@${userId}>` },
+      ],
+    },
+    ...(accommodation
+      ? [{ type: "section", text: { type: "mrkdwn", text: `*宿泊:* ${accommodation}` } }]
+      : []),
+    {
+      type: "context",
+      elements: [
+        { type: "mrkdwn", text: `申請日: ${new Date().toLocaleDateString("ja-JP")}` },
+      ],
+    },
+  ];
+
+  await client.chat.postMessage({
+    channel: channelId,
+    blocks,
+    text: `出張申請: ${destination} ${startDate}〜${endDate} ¥${amount.toLocaleString()} (${userName})`,
+  });
+
+  // MF経費に経費明細作成（トークンが設定されている場合のみ）
+  let mfExpenseId = "";
+  if (process.env.MF_EXPENSE_ACCESS_TOKEN) {
+    try {
+      const result = await createTripExpense({
+        amount,
+        date: startDate,
+        destination,
+        purpose,
+        transport,
+      });
+      mfExpenseId = result.id;
+      console.log("[trip] MF Expense created:", result.id);
+    } catch (e) {
+      console.error("[trip] MF Expense error:", e);
+    }
+  }
+
+  // 申請者にDM
+  await client.chat.postMessage({
+    channel: userId,
+    text: [
+      `✈️ 出張申請を受け付けました`,
+      `行き先: ${destination}（${startDate} 〜 ${endDate}）`,
+      `概算額: ¥${amount.toLocaleString()}`,
+      ...(mfExpenseId ? [`MF経費ID: ${mfExpenseId}`] : []),
+      "",
+      `交通費の精算は、出張後にMFビジネスカードの明細が反映されたら自動処理されます。`,
+      `宿泊費はじゃらんCSV取込で処理されます。`,
+    ].join("\n"),
+  });
+
+  console.log("[trip] Submission complete:", { userId, destination, startDate, endDate, amount });
 }
 
 // --- 購買申請 submit ハンドラー ---
