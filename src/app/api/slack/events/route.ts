@@ -816,7 +816,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
           if (fileRes.ok) {
             const buf = Buffer.from(await fileRes.arrayBuffer());
             const mfResult = await uploadReceiptToMfExpense(buf, fileNames[0] || "receipt.pdf", fileMimeTypes[0] || "application/pdf");
-            confirmLines.push(`MF経費に自動転送しました（MF経費での証憑添付は不要です）`);
+            confirmLines.push(`MF経費に証憑を転送しました。MF経費で経費申請の提出をお願いします。`);
             console.log(`[file-share] MF Expense uploaded: ${prNumber}`, mfResult);
           }
         } catch (mfErr) {
@@ -825,7 +825,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
         }
       }
 
-      confirmLines.push(`✅ あなたの作業は完了です。経理処理は管理本部が行います。`);
+      confirmLines.push(`📋 MF経費で経費申請の提出をお忘れなく。それ以外の作業は完了です。`);
       await client.chat.postMessage({
         channel: channelId,
         thread_ts: threadTs,
