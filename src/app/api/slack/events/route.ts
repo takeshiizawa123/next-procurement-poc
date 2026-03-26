@@ -14,7 +14,7 @@ import {
   type PurchaseFormData,
   type RequestInfo,
 } from "@/lib/slack";
-import { registerPurchase, updateStatus } from "@/lib/gas-client";
+import { registerPurchase, updateStatus, getRecentRequests } from "@/lib/gas-client";
 import { estimateAccount } from "@/lib/account-estimator";
 import { resolveApprovalRoute } from "@/lib/approval-router";
 import { createTripExpense } from "@/lib/mf-expense";
@@ -151,6 +151,61 @@ export async function POST(request: NextRequest) {
             response_type: "ephemeral",
             text: `Error: ${msg}`,
           });
+        }
+      }
+
+      if (command === "/mystatus") {
+        try {
+          const client = getSlackClient();
+          const reqResult = await getRecentRequests(undefined, 50);
+          const all = reqResult.success ? (reqResult.data?.requests || []) : [];
+          // ユーザーの申請のみ抽出
+          const mine = all.filter((r) => r.applicant.includes(userId));
+          const active = mine.filter((r) =>
+            r.approvalStatus === "承認待ち" ||
+            (r.approvalStatus === "承認済" && r.orderStatus === "未発注") ||
+            (r.orderStatus === "発注済" && r.inspectionStatus === "未検収") ||
+            (r.inspectionStatus === "検収済" && r.voucherStatus === "要取得")
+          );
+
+          const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || "";
+          const baseUrl = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
+          const myPageUrl = `${baseUrl}/purchase/my?user_id=${userId}`;
+
+          if (active.length === 0) {
+            return NextResponse.json({
+              response_type: "ephemeral",
+              text: `✅ 未対応の申請はありません。\n<${myPageUrl}|マイページを開く>`,
+            });
+          }
+
+          const lines = [`📋 *あなたの未対応案件（${active.length}件）*\n`];
+          for (const r of active.slice(0, 10)) {
+            let status = "";
+            let action = "";
+            if (r.approvalStatus === "承認待ち") {
+              status = "⏳承認待ち"; action = "部門長の承認を待っています";
+            } else if (r.orderStatus === "未発注") {
+              status = "🛒発注未完了"; action = "[発注完了] ボタンを押してください";
+            } else if (r.inspectionStatus === "未検収") {
+              status = "📦検収待ち"; action = "届いたら [検収完了] を押してください";
+            } else if (r.voucherStatus === "要取得") {
+              status = "📎証憑待ち"; action = "スレッドに証憑を添付してください";
+            }
+            const link = r.slackLink ? ` <${r.slackLink}|開く>` : "";
+            lines.push(`• ${r.prNumber}: ${r.itemName} — ${status}${link}`);
+            if (action) lines.push(`  → ${action}`);
+          }
+          if (active.length > 10) lines.push(`…他 ${active.length - 10}件`);
+          lines.push(`\n<${myPageUrl}|マイページで全件確認>`);
+
+          return NextResponse.json({
+            response_type: "ephemeral",
+            text: lines.join("\n"),
+          });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          return NextResponse.json({ response_type: "ephemeral", text: `Error: ${msg}` });
         }
       }
 
@@ -750,7 +805,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
         }
       }
 
-      confirmLines.push(`仕訳計上の準備が整いました。`);
+      confirmLines.push(`✅ あなたの作業は完了です。経理処理は管理本部が行います。`);
       await client.chat.postMessage({
         channel: channelId,
         thread_ts: threadTs,

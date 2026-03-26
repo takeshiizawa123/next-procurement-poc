@@ -99,7 +99,52 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, pending: pending.length, reminded });
+    // --- UX-1: 承認リマインダー（24時間超） ---
+    let approvalReminded = 0;
+    const pendingApproval = result.data.requests.filter(
+      (r) => r.approvalStatus === "承認待ち"
+    );
+    for (const req of pendingApproval) {
+      const appDate = new Date(req.applicationDate);
+      if (isNaN(appDate.getTime())) continue;
+      const days = Math.floor((Date.now() - appDate.getTime()) / 86400000);
+      if (days >= 1) {
+        const slackIdMatch = (req.applicant || "").match(/<@(U[A-Z0-9]+)>/);
+        const applicantSlackId = slackIdMatch?.[1] || "";
+        const route = await resolveApprovalRoute(req.applicant, applicantSlackId, 0);
+        if (route.primaryApprover) {
+          await client.chat.postMessage({
+            channel: route.primaryApprover,
+            text: `⏳ *承認待ちリマインド*（${days}日経過）\n• ${req.prNumber}: ${req.itemName}（${req.applicant}）\n#purchase-request で承認をお願いします。`,
+          });
+          approvalReminded++;
+        }
+      }
+    }
+
+    // --- UX-2: 発注完了リマインダー（承認済・未発注 3日超） ---
+    let orderReminded = 0;
+    const pendingOrder = result.data.requests.filter(
+      (r) => r.approvalStatus === "承認済" && r.orderStatus === "未発注"
+    );
+    for (const req of pendingOrder) {
+      const appDate = new Date(req.applicationDate);
+      if (isNaN(appDate.getTime())) continue;
+      const days = Math.floor((Date.now() - appDate.getTime()) / 86400000);
+      if (days >= 3) {
+        const slackIdMatch = (req.applicant || "").match(/<@(U[A-Z0-9]+)>/);
+        const applicantSlackId = slackIdMatch?.[1] || "";
+        if (applicantSlackId) {
+          await client.chat.postMessage({
+            channel: applicantSlackId,
+            text: `🛒 *発注完了の確認*（${days}日経過）\n• ${req.prNumber}: ${req.itemName}\n購入済みであれば #purchase-request で [発注完了] ボタンを押してください。`,
+          });
+          orderReminded++;
+        }
+      }
+    }
+
+    return NextResponse.json({ ok: true, pending: pending.length, reminded, approvalReminded, orderReminded });
   } catch (error) {
     console.error("[voucher-reminder] Error:", error);
     return NextResponse.json({ ok: false, error: String(error) }, { status: 500 });

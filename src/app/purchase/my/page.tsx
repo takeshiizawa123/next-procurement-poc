@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useState, useEffect } from "react";
+import { Suspense, useState, useEffect, useRef, useCallback } from "react";
 
 interface PurchaseRequest {
   prNumber: string;
@@ -53,6 +53,55 @@ function StatusBadge({ label, className }: { label: string; className: string })
     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${className}`}>
       {label}
     </span>
+  );
+}
+
+/** 証憑アップロードボタン（マイページ用） */
+function VoucherUploadButton({ prNumber, slackLink }: { prNumber: string; slackLink: string }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploaded, setUploaded] = useState(false);
+
+  const handleUpload = useCallback(async (file: File) => {
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("prNumber", prNumber);
+      formData.append("slackLink", slackLink);
+      const res = await fetch("/api/purchase/upload-voucher", {
+        method: "POST",
+        body: formData,
+      });
+      if (res.ok) {
+        setUploaded(true);
+      } else {
+        const err = await res.json();
+        alert(`アップロード失敗: ${err.error || "不明なエラー"}`);
+      }
+    } catch {
+      alert("アップロードに失敗しました。Slackスレッドから添付してください。");
+    } finally {
+      setUploading(false);
+    }
+  }, [prNumber, slackLink]);
+
+  if (uploaded) {
+    return <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded">提出済</span>;
+  }
+
+  return (
+    <>
+      <input ref={inputRef} type="file" accept=".pdf,image/*" className="hidden"
+        onChange={(e) => { if (e.target.files?.[0]) handleUpload(e.target.files[0]); }} />
+      <button
+        onClick={() => inputRef.current?.click()}
+        disabled={uploading}
+        className="text-xs px-2 py-1 bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50"
+      >
+        {uploading ? "..." : "証憑UP"}
+      </button>
+    </>
   );
 }
 
@@ -122,6 +171,71 @@ function MyPageInner() {
           <div className="text-xs text-gray-500">合計金額</div>
         </div>
       </div>
+
+      {/* 未対応事項ダッシュボード */}
+      {(() => {
+        const actions = requests.map((r) => {
+          const s = overallStatus(r);
+          if (s.label === "完了" || s.label === "差戻し") return null;
+          let icon = ""; let action = ""; let urgency: "high" | "medium" | "low" = "low";
+          if (r.approvalStatus === "承認待ち") {
+            icon = "⏳"; action = "部門長の承認を待っています"; urgency = "low";
+          } else if (r.orderStatus === "未発注") {
+            icon = "🛒"; action = "購入後に [発注完了] を押してください"; urgency = "high";
+          } else if (r.inspectionStatus === "未検収") {
+            icon = "📦"; action = "届いたら [検収完了] を押してください"; urgency = "medium";
+          } else if (r.voucherStatus === "要取得") {
+            icon = "📎"; action = "証憑（納品書・領収書）を提出してください"; urgency = "high";
+          }
+          if (!action) return null;
+          return { ...r, icon, action, urgency, statusLabel: s.label };
+        }).filter(Boolean) as Array<PurchaseRequest & { icon: string; action: string; urgency: string; statusLabel: string }>;
+
+        if (actions.length === 0) return null;
+        // urgency high first
+        actions.sort((a, b) => {
+          const order = { high: 0, medium: 1, low: 2 };
+          return (order[a.urgency as keyof typeof order] || 2) - (order[b.urgency as keyof typeof order] || 2);
+        });
+
+        return (
+          <div className="mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4">
+            <h2 className="font-bold text-amber-800 mb-3 flex items-center gap-2">
+              <span className="text-lg">!</span> あなたの未対応事項（{actions.length}件）
+            </h2>
+            <div className="space-y-2">
+              {actions.map((a) => (
+                <div key={a.prNumber} className={`flex items-start gap-3 p-3 rounded-lg ${
+                  a.urgency === "high" ? "bg-red-50 border border-red-200" :
+                  a.urgency === "medium" ? "bg-amber-50 border border-amber-100" :
+                  "bg-white border border-gray-100"
+                }`}>
+                  <span className="text-xl flex-shrink-0">{a.icon}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs text-gray-500">{a.prNumber}</span>
+                      <span className="font-medium text-sm truncate">{a.itemName}</span>
+                      <span className="text-xs text-gray-400">¥{a.totalAmount.toLocaleString()}</span>
+                    </div>
+                    <div className="text-sm text-gray-700 mt-0.5">{a.action}</div>
+                  </div>
+                  <div className="flex-shrink-0 flex gap-1">
+                    {a.voucherStatus === "要取得" && (
+                      <VoucherUploadButton prNumber={a.prNumber} slackLink={a.slackLink} />
+                    )}
+                    {a.slackLink && (
+                      <a href={a.slackLink} target="_blank" rel="noopener noreferrer"
+                        className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">
+                        Slack
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* フィルター */}
       <div className="flex gap-2 mb-4">
