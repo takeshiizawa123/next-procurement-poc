@@ -1,5 +1,50 @@
 # CURRENT_WORK
 
+## [Handoff] "MF連携調査・会計照合設計" — 2026-03-26 23:04 (branch: master)
+
+### Goal / Scope
+- Sprint 0-5全機能実装 + 品質修正7件 + UX改善5件を完了
+- MF会計Plus/MF経費/MFビジネスカードの連携モデル設計を調査中
+- やらないこと: MFビジネスカードAPI（非公開のため不可）
+
+### Key decisions
+- Sprint 0-5: 全完了（17コミット）
+- 品質修正7件 + UX改善5件: 全完了
+- MF連携: 案B（購買はMF経費バイパス→MF会計Plus直接）を検討中だが確定前
+- 会計照合: 3ステージ未払金管理モデル（未請求債務/請求債務）を検討中だが確定前
+- MF経費API: 申請作成不可、証憑アップロード可
+- MFビジネスカードAPI: 非公開
+- クラウドBox: 証憑→AI-OCR→仕訳候補の自動生成機能あり（新発見・要検討）
+
+### Done
+- [x] Sprint 0-5全機能、品質修正7件、UX改善5件
+- [x] 運用ガイド + 利用者マニュアル（MD + PPT）
+- [x] MF経費API/MF会計Plus連携/クラウドBox調査
+- [x] 会計照合設計書v2、MF連携4案比較書
+
+### Pending
+- [ ] MF連携最終方針の決定（クラウドBox活用含む）
+- [ ] 会計照合モデルの確定
+- [ ] 環境変数設定 + デプロイ + 内部テスト
+
+### Next actions
+1. クラウドBox活用案の分析（案Bの代替/補完）
+2. MF会計Plus API仕訳添付エンドポイント確認
+3. 4つの金額照合フロー確定（会計担当と確認）
+4. MF連携最終方針決定 → 環境変数設定 → デプロイ → テスト
+
+### Affected files
+- `docs/design-mf-integration-options.md` — MF連携4案比較
+- `docs/design-accounting-reconciliation.md` — 会計照合3ステージモデル
+- `docs/design-plan-b-mf-direct.md` — 案B詳細設計
+- 全src/lib/*.ts, src/app/api/**/*.ts — 実装済み
+
+### Links
+- MF経費API: https://expense.moneyforward.com/api/index.html
+- クラウドBox仕訳候補: https://biz.moneyforward.com/support/account/news/new-feature/20241008.html
+
+---
+
 ## [Handoff] "購買管理Phase1 - Wave2完了・GAS連携調査前" — 2026-03-22 02:20 (branch: master)
 
 ### Goal / Scope
