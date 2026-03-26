@@ -69,6 +69,50 @@ async function expenseRequest<T>(
   return res.json() as Promise<T>;
 }
 
+// --- 証憑アップロード（MF経費に自動転送） ---
+
+export interface UploadReceiptResult {
+  mf_files: Array<{ id: string; name: string }>;
+  ex_transactions: Array<{ id: string; value: number; recognized_at: string }>;
+}
+
+/**
+ * 証憑画像をMF経費にアップロード（OCR読取 + 経費明細自動作成）
+ *
+ * POST /offices/{oid}/me/upload_receipt
+ * Content-Type: multipart/form-data
+ */
+export async function uploadReceiptToMfExpense(
+  fileBuffer: Buffer,
+  fileName: string,
+  mimeType: string,
+): Promise<UploadReceiptResult> {
+  if (!MF_EXPENSE_TOKEN || !MF_EXPENSE_OFFICE_ID) {
+    throw new Error("MF経費APIの環境変数が未設定です");
+  }
+
+  const url = `${MF_EXPENSE_BASE}/offices/${MF_EXPENSE_OFFICE_ID}/me/upload_receipt`;
+
+  const formData = new FormData();
+  const blob = new Blob([new Uint8Array(fileBuffer)], { type: mimeType });
+  formData.append("receipt_input", blob, fileName);
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${MF_EXPENSE_TOKEN}`,
+    },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`MF Expense upload_receipt error (${res.status}): ${text}`);
+  }
+
+  return res.json() as Promise<UploadReceiptResult>;
+}
+
 // --- マスタAPI ---
 
 async function fetchMaster(path: string): Promise<MasterItem[]> {

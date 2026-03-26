@@ -805,6 +805,26 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
         }
       }
 
+      // MF経費に証憑を自動転送（MF_EXPENSE_ACCESS_TOKEN設定時のみ）
+      if (process.env.MF_EXPENSE_ACCESS_TOKEN && fileUrls.length > 0) {
+        try {
+          const botToken = process.env.SLACK_BOT_TOKEN || "";
+          const { uploadReceiptToMfExpense } = await import("@/lib/mf-expense");
+          const fileRes = await fetch(fileUrls[0], {
+            headers: { Authorization: `Bearer ${botToken}` },
+          });
+          if (fileRes.ok) {
+            const buf = Buffer.from(await fileRes.arrayBuffer());
+            const mfResult = await uploadReceiptToMfExpense(buf, fileNames[0] || "receipt.pdf", fileMimeTypes[0] || "application/pdf");
+            confirmLines.push(`MF経費に自動転送しました（MF経費での証憑添付は不要です）`);
+            console.log(`[file-share] MF Expense uploaded: ${prNumber}`, mfResult);
+          }
+        } catch (mfErr) {
+          console.error(`[file-share] MF Expense upload error for ${prNumber}:`, mfErr);
+          // MF転送失敗は購買システムの証憑処理には影響しない
+        }
+      }
+
       confirmLines.push(`✅ あなたの作業は完了です。経理処理は管理本部が行います。`);
       await client.chat.postMessage({
         channel: channelId,
