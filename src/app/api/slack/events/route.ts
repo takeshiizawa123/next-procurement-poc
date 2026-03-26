@@ -367,11 +367,64 @@ async function handlePurchaseSubmission(
 
 // --- 証憑添付自動検知 ---
 
+/** 証憑として受け付けるMIMEタイプ */
+const VOUCHER_MIME_TYPES: Record<string, string> = {
+  "application/pdf": "PDF",
+  "image/jpeg": "画像(JPEG)",
+  "image/png": "画像(PNG)",
+  "image/heic": "画像(HEIC)",
+  "image/webp": "画像(WebP)",
+  "image/tiff": "画像(TIFF)",
+};
+
+/** ファイル名から証憑種別を推定 */
+function classifyVoucher(fileName: string): string {
+  const n = fileName.toLowerCase();
+  if (/receipt|領収/.test(n)) return "領収書";
+  if (/invoice|請求/.test(n)) return "請求書";
+  if (/delivery|納品/.test(n)) return "納品書";
+  if (/quotation|見積/.test(n)) return "見積書";
+  return "その他証憑";
+}
+
 /**
  * スレッド内のファイル添付を検知し、購買申請の証憑として処理
  */
 async function handleFileSharedInThread(channelId: string, threadTs: string, eventTs: string) {
   const client = getSlackClient();
+
+  // 添付されたメッセージを取得（ファイル情報含む）
+  let fileNames: string[] = [];
+  let fileMimeTypes: string[] = [];
+  try {
+    const replies = await client.conversations.replies({
+      channel: channelId,
+      ts: threadTs,
+      latest: eventTs,
+      inclusive: true,
+      limit: 1,
+    });
+    const msg = replies.messages?.find((m) => m.ts === eventTs);
+    const files = (msg?.files || []) as Array<{ name?: string; mimetype?: string }>;
+    fileNames = files.map((f) => f.name || "");
+    fileMimeTypes = files.map((f) => f.mimetype || "");
+  } catch {
+    // ファイル情報取得失敗でもPO番号検知は続行
+  }
+
+  // 証憑として有効なファイルがあるか検証
+  const validFiles = fileMimeTypes.filter((m) => m in VOUCHER_MIME_TYPES);
+  if (fileMimeTypes.length > 0 && validFiles.length === 0) {
+    // 添付ファイルはあるが証憑として無効
+    const accepted = Object.values(VOUCHER_MIME_TYPES).join("、");
+    await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: `⚠️ 添付ファイルは証憑として認識できませんでした。対応形式: ${accepted}`,
+    });
+    console.log(`[file-share] Invalid file types: ${fileMimeTypes.join(", ")}`);
+    return;
+  }
 
   // 親メッセージを取得してPO番号を抽出
   let parentText = "";
@@ -385,27 +438,39 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
     parentText = (result.messages?.[0]?.text || "") + " " +
       JSON.stringify(result.messages?.[0]?.blocks || []);
   } catch {
-    return; // 親メッセージが取得できない場合はスキップ
+    return;
   }
 
-  // PO番号を抽出
-  const poMatch = parentText.match(/PO-\d{6}-\d{4}/);
-  if (!poMatch) return; // 購買申請スレッドでなければスキップ
+  // PO番号を抽出（GAS発番形式 PR-XXXX にも対応）
+  const poMatch = parentText.match(/(?:PO-\d{6}-\d{4}|PR-\d{4,})/);
+  if (!poMatch) return;
 
   const prNumber = poMatch[0];
-  console.log(`[file-share] 証憑添付検知: ${prNumber} in ${channelId}`);
 
-  // GASでステータスを「添付済」に更新
+  // 証憑種別の推定
+  const voucherType = fileNames.length > 0 ? classifyVoucher(fileNames[0]) : "その他証憑";
+  const fileFormat = fileMimeTypes.length > 0 ? (VOUCHER_MIME_TYPES[fileMimeTypes[0]] || "不明") : "";
+
+  console.log(`[file-share] 証憑添付検知: ${prNumber} / ${voucherType} (${fileFormat}) in ${channelId}`);
+
+  // GASでステータスを「添付済」に更新 + 証憑種別を記録
   try {
-    const gasResult = await updateStatus(prNumber, { "証憑対応": "添付済" });
+    const gasResult = await updateStatus(prNumber, {
+      "証憑対応": "添付済",
+      "証憑種別": voucherType,
+    });
     if (gasResult.success) {
       await client.chat.postMessage({
         channel: channelId,
         thread_ts: threadTs,
-        text: `📎 証憑を確認しました（${prNumber}）。仕訳計上の準備が整いました。`,
+        text: [
+          `📎 証憑を確認しました（${prNumber}）`,
+          `種別: ${voucherType} / 形式: ${fileFormat}`,
+          `仕訳計上の準備が整いました。`,
+        ].join("\n"),
       });
-      await notifyOps(client, `📎 *証憑添付* ${prNumber} — 仕訳待ちに移行`);
-      console.log(`[file-share] GAS updated: ${prNumber} → 添付済`);
+      await notifyOps(client, `📎 *証憑添付* ${prNumber} — ${voucherType} — 仕訳待ちに移行`);
+      console.log(`[file-share] GAS updated: ${prNumber} → 添付済 (${voucherType})`);
     }
   } catch (e) {
     console.error(`[file-share] GAS update error for ${prNumber}:`, e);
