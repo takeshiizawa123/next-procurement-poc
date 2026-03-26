@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
+import { createHmac, timingSafeEqual } from "crypto";
 import {
   getSlackClient,
   actionHandlers,
@@ -20,12 +21,48 @@ import { resolveApprovalRoute } from "@/lib/approval-router";
 // Vercel Serverless の最大実行時間
 export const maxDuration = 10;
 
+const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || "";
+
+/** Slack リクエスト署名を検証（HMAC-SHA256） */
+function verifySlackSignature(
+  body: string,
+  timestamp: string,
+  signature: string,
+): boolean {
+  if (!SIGNING_SECRET) return false;
+  // リプレイ攻撃防止: 5分以上古いリクエストを拒否
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - Number(timestamp)) > 300) return false;
+
+  const sigBasestring = `v0:${timestamp}:${body}`;
+  const mySignature = "v0=" + createHmac("sha256", SIGNING_SECRET).update(sigBasestring).digest("hex");
+
+  try {
+    return timingSafeEqual(Buffer.from(mySignature), Buffer.from(signature));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Slack Events / Interactive Messages / Slash Commands の統一エンドポイント
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.text();
+
+    // Slack署名検証（url_verification 以外）
+    const slackTimestamp = request.headers.get("x-slack-request-timestamp") || "";
+    const slackSignature = request.headers.get("x-slack-signature") || "";
+
+    // url_verification はパース後に判定するため、署名検証を先にペイロード確認
+    // ただし署名が存在する場合は必ず検証する
+    if (SIGNING_SECRET && slackSignature) {
+      if (!verifySlackSignature(body, slackTimestamp, slackSignature)) {
+        console.warn("[slack] signature verification failed");
+        return NextResponse.json({ error: "invalid signature" }, { status: 401 });
+      }
+    }
 
     // Content-Type に応じてペイロードをパース
     const contentType = request.headers.get("content-type") || "";
@@ -173,17 +210,12 @@ async function handlePurchaseSubmission(
   try {
     const client = getSlackClient();
 
-    const now = new Date();
-    const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const seq = String(Math.floor(Math.random() * 9999) + 1).padStart(4, "0");
-    const poNumber = `PO-${yyyymm}-${seq}`;
-
     const amount = `¥${formData.amount.toLocaleString()}`;
 
     // 承認ルート解決（従業員マスタから部門長を取得）
     const approvalRoute = await resolveApprovalRoute(userName, userId, formData.amount);
     const department = approvalRoute.employee?.departmentName || "";
-    const approverSlackId = DEFAULT_APPROVER || approvalRoute.primaryApprover;
+    const approverSlackId = approvalRoute.primaryApprover || DEFAULT_APPROVER;
 
     // #purchase-request にメッセージ投稿
     const channelId = targetChannelId || PURCHASE_CHANNEL;
@@ -197,6 +229,38 @@ async function handlePurchaseSubmission(
     }
 
     const isPurchased = formData.requestType === "購入済";
+
+    // GAS登録を先に行い、GAS発番のPO番号を取得
+    const estimation = estimateAccount(formData.itemName, formData.supplierName, formData.amount);
+    let poNumber = "";
+    try {
+      const gasResult = await registerPurchase({
+        applicant: userName,
+        itemName: formData.itemName,
+        totalAmount: formData.amount,
+        purchaseSource: formData.supplierName,
+        paymentMethod: formData.paymentMethod,
+        accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
+        isPurchased,
+      });
+      if (gasResult.success && gasResult.data?.prNumber) {
+        poNumber = gasResult.data.prNumber;
+        console.log("[purchase] GAS registered:", gasResult.data);
+      } else {
+        console.error("[purchase] GAS register failed:", gasResult.error);
+      }
+    } catch (gasError) {
+      console.error("[purchase] GAS register error:", gasError);
+    }
+
+    // GAS発番失敗時のフォールバック（ローカル発番）
+    if (!poNumber) {
+      const now = new Date();
+      const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const seq = String(Math.floor(Math.random() * 9999) + 1).padStart(4, "0");
+      poNumber = `PO-${yyyymm}-${seq}`;
+      console.warn("[purchase] Falling back to local PO number:", poNumber);
+    }
 
     const requestInfo: RequestInfo = {
       poNumber,
@@ -225,6 +289,16 @@ async function handlePurchaseSubmission(
       blocks,
       text: `購買申請: ${poNumber} ${formData.itemName} ${amount}${mentionText}`,
     });
+
+    // Slack投稿後にGASのSlackリンク情報を更新
+    if (result.ts) {
+      const slackLink = `https://slack.com/archives/${channelId}/p${result.ts.replace(".", "")}`;
+      try {
+        await updateStatus(poNumber, { slackTs: result.ts, slackLink });
+      } catch (e) {
+        console.error("[purchase] Failed to update GAS with Slack link:", e);
+      }
+    }
 
     // 承認者メンションをスレッドに投稿
     if (!isPurchased && approverSlackId && result.ts) {
@@ -275,35 +349,6 @@ async function handlePurchaseSubmission(
       }
       // ops通知
       await notifyOps(client, `🔵 *新規申請* ${poNumber} — ${formData.itemName} ${amount}（<@${userId}>）— 承認待ち`);
-    }
-
-    // GAS（スプレッドシート）に購買申請を登録
-    const slackLink = result.ts
-      ? `https://slack.com/archives/${channelId}/p${result.ts.replace(".", "")}`
-      : "";
-
-    try {
-      const estimation = estimateAccount(formData.itemName, formData.supplierName, formData.amount);
-
-      const gasResult = await registerPurchase({
-        applicant: userName,
-        itemName: formData.itemName,
-        totalAmount: formData.amount,
-        purchaseSource: formData.supplierName,
-        paymentMethod: formData.paymentMethod,
-        accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
-        poNumber,
-        slackTs: result.ts || "",
-        slackLink,
-        isPurchased,
-      });
-      if (gasResult.success) {
-        console.log("[purchase] GAS registered:", gasResult.data);
-      } else {
-        console.error("[purchase] GAS register failed:", gasResult.error);
-      }
-    } catch (gasError) {
-      console.error("[purchase] GAS register error:", gasError);
     }
 
   } catch (error) {

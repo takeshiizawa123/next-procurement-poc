@@ -7,7 +7,7 @@ import {
   notifyOps,
   type RequestInfo,
 } from "@/lib/slack";
-import { registerPurchase } from "@/lib/gas-client";
+import { registerPurchase, updateStatus } from "@/lib/gas-client";
 import { estimateAccount } from "@/lib/account-estimator";
 import { resolveApprovalRoute } from "@/lib/approval-router";
 
@@ -65,12 +65,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "金額を正しく入力してください" }, { status: 400 });
     }
 
-    // PO番号発番（暫定: ランダム。Sprint 1-3でGAS連携に移行）
-    const now = new Date();
-    const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const seq = String(Math.floor(Math.random() * 9999) + 1).padStart(4, "0");
-    const poNumber = `PO-${yyyymm}-${seq}`;
-
     const totalAmount = amount * quantity;
     const amountStr = `¥${totalAmount.toLocaleString()}`;
 
@@ -98,6 +92,45 @@ export async function POST(request: NextRequest) {
     const department = formDepartment || approvalRoute.employee?.departmentName || "";
     const approverSlackId = isPurchased ? "" : approvalRoute.primaryApprover;
 
+    // GAS登録を先に行い、GAS発番のPO番号を取得
+    const estimation = estimateAccount(itemName, supplierName, totalAmount);
+    let poNumber = "";
+    try {
+      const gasResult = await registerPurchase({
+        applicant: userName,
+        itemName,
+        totalAmount,
+        unitPrice: amount,
+        quantity,
+        purchaseSource: supplierName,
+        purchaseSourceUrl: (formData.get("url") as string)?.trim() || "",
+        hubspotInfo: (formData.get("hubspot_deal_id") as string)?.trim() || "",
+        budgetNumber: (formData.get("budget_number") as string)?.trim() || "",
+        paymentMethod,
+        purpose: (formData.get("asset_usage") as string)?.trim() || "",
+        accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
+        remarks: (formData.get("notes") as string)?.trim() || "",
+        isPurchased,
+      });
+      if (gasResult.success && gasResult.data?.prNumber) {
+        poNumber = gasResult.data.prNumber;
+        console.log("[web-purchase] GAS registered:", gasResult.data);
+      } else {
+        console.error("[web-purchase] GAS registration failed:", gasResult.error);
+      }
+    } catch (gasError) {
+      console.error("[web-purchase] GAS registration error:", gasError);
+    }
+
+    // GAS発番失敗時のフォールバック（ローカル発番）
+    if (!poNumber) {
+      const now = new Date();
+      const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const seq = String(Math.floor(Math.random() * 9999) + 1).padStart(4, "0");
+      poNumber = `PO-${yyyymm}-${seq}`;
+      console.warn("[web-purchase] Falling back to local PO number:", poNumber);
+    }
+
     const requestInfo: RequestInfo = {
       poNumber,
       itemName,
@@ -124,6 +157,16 @@ export async function POST(request: NextRequest) {
       blocks,
       text: `購買申請: ${poNumber} ${itemName} ${amountStr}${mentionText}`,
     });
+
+    // Slack投稿後にGASのSlackリンク情報を更新
+    if (result.ts) {
+      const slackLink = `https://slack.com/archives/${channelId}/p${result.ts.replace(".", "")}`;
+      try {
+        await updateStatus(poNumber, { slackTs: result.ts, slackLink });
+      } catch (e) {
+        console.error("[web-purchase] Failed to update GAS with Slack link:", e);
+      }
+    }
 
     // 承認者メンションをスレッドに投稿（チャンネル投稿のテキストはブロック表示時に見えないため）
     if (!isPurchased && approverSlackId && result.ts) {
@@ -172,53 +215,13 @@ export async function POST(request: NextRequest) {
       await notifyOps(client, `🔵 *新規申請* ${poNumber} — ${itemName} ${amountStr}（<@${userId}>）— 承認待ち`);
     }
 
-    // GAS（スプレッドシート）に購買申請を登録
-    const slackLink = result.ts
-      ? `https://slack.com/archives/${channelId}/p${result.ts.replace(".", "")}`
-      : "";
-
-    try {
-      // 勘定科目を推定
-      const estimation = estimateAccount(itemName, supplierName, totalAmount);
-
-      const gasResult = await registerPurchase({
-        applicant: userName,
-        itemName,
-        totalAmount,
-        unitPrice: amount,
-        quantity,
-        purchaseSource: supplierName,
-        purchaseSourceUrl: (formData.get("url") as string)?.trim() || "",
-        hubspotInfo: (formData.get("hubspot_deal_id") as string)?.trim() || "",
-        budgetNumber: (formData.get("budget_number") as string)?.trim() || "",
-        paymentMethod,
-        purpose: (formData.get("asset_usage") as string)?.trim() || "",
-        accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
-        poNumber,
-        remarks: (formData.get("notes") as string)?.trim() || "",
-        slackTs: result.ts || "",
-        slackLink,
-        isPurchased,
-      });
-
-      if (gasResult.success && gasResult.data) {
-        console.log("[web-purchase] GAS registered:", {
-          prNumber: gasResult.data.prNumber,
-          rowNumber: gasResult.data.rowNumber,
-          poNumber,
-        });
-      } else {
-        console.error("[web-purchase] GAS registration failed:", gasResult.error);
-      }
-    } catch (gasError) {
-      // GAS登録失敗はSlack投稿には影響させない（ログのみ）
-      console.error("[web-purchase] GAS registration error:", gasError);
-    }
-
     // 追加品目の登録（一括申請）
     const extraItemsRaw = (formData.get("extra_items") as string)?.trim() || "[]";
     try {
       const extraItems = JSON.parse(extraItemsRaw) as { itemName: string; amount: number; quantity: number; url: string }[];
+      const extraSlackLink = result.ts
+        ? `https://slack.com/archives/${channelId}/p${result.ts.replace(".", "")}`
+        : "";
       for (const extra of extraItems) {
         if (!extra.itemName || !extra.amount) continue;
         const extraTotal = extra.amount * extra.quantity;
@@ -233,10 +236,9 @@ export async function POST(request: NextRequest) {
           purchaseSourceUrl: extra.url || "",
           paymentMethod,
           accountTitle: extraEstimation.account + (extraEstimation.subAccount ? `（${extraEstimation.subAccount}）` : ""),
-          poNumber: poNumber + `-${extraItems.indexOf(extra) + 2}`,
           remarks: `[一括申請: ${poNumber}]`,
           slackTs: result.ts || "",
-          slackLink,
+          slackLink: extraSlackLink,
           isPurchased,
         }).catch((e) => console.error("[web-purchase] Extra item GAS error:", e));
       }
