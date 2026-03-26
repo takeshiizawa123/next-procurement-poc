@@ -158,6 +158,16 @@ def tbl(title, headers, rows, accent=CYAN):
 hero("購買申請システム\n利用者マニュアル", "Slack Bot + Webフォーム で購買申請から仕訳まで\nv0.2 — 2026-03-26")
 
 # --- 01: 申請の出し方 ---
+tbl("このマニュアルで使う用語", ["用語", "意味"],
+    [
+        ["証憑（しょうひょう）", "購入を証明する書類。納品書・領収書・請求書など、いわゆる「レシート」"],
+        ["検収（けんしゅう）", "届いた物品が注文通りか確認すること。「届きました」の報告"],
+        ["仕訳（しわけ）", "会計処理のこと。管理本部が行うので申請者は意識不要"],
+        ["PO番号 / PR番号", "申請ごとに自動発行される管理番号（例: PR-0050）"],
+        ["MFバーチャルカード", "MFビジネスカードのオンライン決済用カード番号"],
+    ], accent=MUTED)
+
+# --- 01: 申請の出し方 ---
 sec(1, "購買申請の出し方")
 
 steps("Slackモーダルで申請", [
@@ -405,6 +415,6 @@ tbl("操作早見表", ["やりたいこと", "操作"],
 # --- End ---
 hero("ご不明点は\n管理本部まで", "#purchase-ops チャンネル または DM", PURPLE)
 
-out = "C:/Users/takeshi.izawa/.claude/projects/next-procurement-poc/docs/user-manual-final.pptx"
+out = "C:/Users/takeshi.izawa/.claude/projects/next-procurement-poc/docs/user-manual.pptx"
 prs.save(out)
 print(f"Saved: {out}")

@@ -310,6 +310,6 @@ flow("購入済フロー（立替）", [
 # End
 hero("Ready to Launch.", "全機能完成 → 内部テスト → 旧WFから一括移行", PURPLE)
 
-out = "C:/Users/takeshi.izawa/.claude/projects/next-procurement-poc/docs/operational-guide-final.pptx"
+out = "C:/Users/takeshi.izawa/.claude/projects/next-procurement-poc/docs/operational-guide.pptx"
 prs.save(out)
 print(f"Saved: {out}")
