@@ -538,6 +538,65 @@ export const handleOpenModal: SlackActionHandler = async ({
   });
 };
 
+/**
+ * 仕訳登録ボタンハンドラー
+ * actionValue: "prNumber" (PO番号)
+ */
+export const handleJournalRegister: SlackActionHandler = async ({
+  client,
+  userId,
+  channelId,
+  messageTs,
+  actionValue,
+}) => {
+  const prNumber = actionValue;
+  if (!prNumber) return;
+
+  // 管理本部メンバーのみ実行可能
+  const adminMembers = (process.env.SLACK_ADMIN_MEMBERS || "").split(",").filter(Boolean);
+  if (adminMembers.length > 0 && !adminMembers.includes(userId)) {
+    await client.chat.postEphemeral({
+      channel: channelId,
+      user: userId,
+      text: "⚠️ 仕訳登録は管理本部メンバーのみ実行できます。",
+    });
+    return;
+  }
+
+  // 仕訳登録APIを呼び出し
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || "";
+  const baseUrl = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
+
+  try {
+    const res = await fetch(`${baseUrl}/api/mf/journal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prNumber }),
+    });
+
+    const data = await res.json() as { ok?: boolean; journalId?: number; error?: string };
+    if (data.ok) {
+      await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: messageTs,
+        text: `✅ 仕訳登録完了: ${prNumber} → MF仕訳ID: ${data.journalId}`,
+      });
+    } else {
+      await client.chat.postEphemeral({
+        channel: channelId,
+        user: userId,
+        text: `❌ 仕訳登録失敗: ${data.error}`,
+      });
+    }
+  } catch (err) {
+    await client.chat.postEphemeral({
+      channel: channelId,
+      user: userId,
+      text: `❌ 仕訳登録エラー: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+};
+
 // アクションIDとハンドラーのマッピング
 export const actionHandlers: Record<string, SlackActionHandler> = {
   approve_button: handleApprove,
@@ -548,6 +607,7 @@ export const actionHandlers: Record<string, SlackActionHandler> = {
   dm_approve_button: handleDmApprove,
   dm_reject_button: handleDmReject,
   purchase_open_modal: handleOpenModal,
+  journal_register_button: handleJournalRegister,
 };
 
 // --- /purchase モーダル ---
