@@ -18,6 +18,7 @@ import { registerPurchase, updateStatus } from "@/lib/gas-client";
 import { estimateAccount } from "@/lib/account-estimator";
 import { resolveApprovalRoute } from "@/lib/approval-router";
 import { createTripExpense } from "@/lib/mf-expense";
+import { extractFromImage, matchAmount, downloadSlackFile } from "@/lib/ocr";
 
 // Vercel Serverless の最大実行時間
 export const maxDuration = 10;
@@ -626,6 +627,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
   // 添付されたメッセージを取得（ファイル情報含む）
   let fileNames: string[] = [];
   let fileMimeTypes: string[] = [];
+  let fileUrls: string[] = [];
   try {
     const replies = await client.conversations.replies({
       channel: channelId,
@@ -635,9 +637,10 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
       limit: 1,
     });
     const msg = replies.messages?.find((m) => m.ts === eventTs);
-    const files = (msg?.files || []) as Array<{ name?: string; mimetype?: string }>;
+    const files = (msg?.files || []) as Array<{ name?: string; mimetype?: string; url_private?: string }>;
     fileNames = files.map((f) => f.name || "");
     fileMimeTypes = files.map((f) => f.mimetype || "");
+    fileUrls = files.map((f) => f.url_private || "");
   } catch {
     // ファイル情報取得失敗でもPO番号検知は続行
   }
@@ -690,14 +693,47 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
       "証憑種別": voucherType,
     });
     if (gasResult.success) {
+      const confirmLines = [
+        `📎 証憑を確認しました（${prNumber}）`,
+        `種別: ${voucherType} / 形式: ${fileFormat}`,
+      ];
+
+      // OCR金額照合（Gemini APIキーがあり、画像/PDFの場合）
+      if (process.env.GEMINI_API_KEY && fileUrls.length > 0 && fileMimeTypes[0]?.startsWith("image/")) {
+        try {
+          const botToken = process.env.SLACK_BOT_TOKEN || "";
+          const { base64, mimeType } = await downloadSlackFile(fileUrls[0], botToken);
+          const ocrResult = await extractFromImage(base64, mimeType);
+
+          // 購買申請の金額を取得して照合
+          const { getStatus } = await import("@/lib/gas-client");
+          const statusResult = await getStatus(prNumber);
+          if (statusResult.success && statusResult.data) {
+            const requestedAmount = Number((statusResult.data as Record<string, unknown>)["金額"] || 0);
+            if (requestedAmount > 0 && ocrResult.amount > 0) {
+              const match = matchAmount(ocrResult, requestedAmount);
+              confirmLines.push(`金額照合: ${match.message}`);
+              if (!match.isMatched) {
+                confirmLines.push(`⚠️ 管理本部に確認を依頼しました`);
+                await notifyOps(client, `⚠️ *金額不一致* ${prNumber} — ${match.message}`);
+              }
+            }
+          }
+
+          if (ocrResult.is_qualified_invoice && ocrResult.registration_number) {
+            confirmLines.push(`適格請求書: ${ocrResult.registration_number}`);
+          }
+        } catch (ocrErr) {
+          console.error(`[file-share] OCR error for ${prNumber}:`, ocrErr);
+          // OCR失敗は証憑検知自体には影響しない
+        }
+      }
+
+      confirmLines.push(`仕訳計上の準備が整いました。`);
       await client.chat.postMessage({
         channel: channelId,
         thread_ts: threadTs,
-        text: [
-          `📎 証憑を確認しました（${prNumber}）`,
-          `種別: ${voucherType} / 形式: ${fileFormat}`,
-          `仕訳計上の準備が整いました。`,
-        ].join("\n"),
+        text: confirmLines.join("\n"),
       });
       await notifyOps(client, `📎 *証憑添付* ${prNumber} — ${voucherType} — 仕訳待ちに移行`);
       console.log(`[file-share] GAS updated: ${prNumber} → 添付済 (${voucherType})`);

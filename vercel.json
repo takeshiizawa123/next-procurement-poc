@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/weekly-reminder",
       "schedule": "0 0 * * 1"
+    },
+    {
+      "path": "/api/cron/card-reconciliation",
+      "schedule": "0 2 * * 1"
     }
   ]
 }
