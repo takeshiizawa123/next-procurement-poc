@@ -103,7 +103,21 @@ export async function extractFromImage(imageBase64: string, mimeType: string): P
     throw new Error("Gemini APIから結果が返されませんでした");
   }
 
-  const parsed = JSON.parse(content) as OcrResult;
+  let parsed: Partial<OcrResult>;
+  try {
+    parsed = JSON.parse(content) as Partial<OcrResult>;
+  } catch (e) {
+    console.error("[ocr] Failed to parse Gemini response:", e, "Raw:", content.substring(0, 500));
+    return {
+      document_type: "unknown" as const,
+      date: "",
+      amount: 0,
+      vendor_name: "",
+      items: [],
+      confidence: 0,
+    };
+  }
+
   return {
     document_type: parsed.document_type || "unknown",
     date: parsed.date || "",

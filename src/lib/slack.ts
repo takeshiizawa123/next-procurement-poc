@@ -47,11 +47,12 @@ function extractRequestInfoFromBlocks(
 
 /**
  * actionValue からパイプ区切りの値を分解
- * 形式: "poNumber|applicantSlackId|approverSlackId|inspectorSlackId"
+ * 形式: "poNumber|applicantSlackId|approverSlackId|inspectorSlackId|rawAmount|paymentMethod"
+ * 後方互換: 旧4フィールド形式もサポート（rawAmount="0", paymentMethod=""にフォールバック）
  */
 function parseActionValue(value: string) {
-  const [poNumber = "", applicantSlackId = "", approverSlackId = "", inspectorSlackId = ""] = value.split("|");
-  return { poNumber, applicantSlackId, approverSlackId, inspectorSlackId };
+  const [poNumber = "", applicantSlackId = "", approverSlackId = "", inspectorSlackId = "", rawAmount = "0", paymentMethod = ""] = value.split("|");
+  return { poNumber, applicantSlackId, approverSlackId, inspectorSlackId, rawAmount, paymentMethod };
 }
 
 // --- アクションハンドラー ---
@@ -218,20 +219,20 @@ export const handleOrderComplete: SlackActionHandler = async ({
   messageTs,
   actionValue,
 }) => {
-  const { poNumber, applicantSlackId, approverSlackId } = parseActionValue(actionValue);
+  const { poNumber, applicantSlackId, approverSlackId, rawAmount, paymentMethod: encodedPayMethod } = parseActionValue(actionValue);
   const adminMembers = (process.env.SLACK_ADMIN_MEMBERS || "").split(",").filter(Boolean);
 
   const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
   const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
 
-  // 発注権限分岐: 支払方法×金額で委任先を判定
-  const amountNum = parseInt((info?.amount || "0").replace(/[^\d]/g, "")) || 0;
-  const payMethod = info?.paymentMethod || "";
+  // 発注権限分岐: エンコード値を優先、フォールバックでブロックテキストから取得
+  const amountNum = parseInt(rawAmount, 10) || parseInt((info?.amount || "0").replace(/[^\d]/g, ""), 10) || 0;
+  const payMethod = encodedPayMethod || info?.paymentMethod || "";
   const isAdminOrder = amountNum >= 100000 || payMethod === "請求書払い";
 
   if (isAdminOrder) {
-    // 管理本部発注: 管理本部メンバーのみ
-    if (adminMembers.length > 0 && !adminMembers.includes(userId)) {
+    // 管理本部発注: 管理本部メンバーのみ（fail-closed: 未設定時もブロック）
+    if (!adminMembers.includes(userId)) {
       await client.chat.postEphemeral({
         channel: channelId,
         user: userId,
@@ -972,10 +973,11 @@ export interface RequestInfo {
 }
 
 /**
- * actionValue 共通形式: "poNumber|applicantSlackId|approverSlackId|inspectorSlackId"
+ * actionValue 共通形式: "poNumber|applicantSlackId|approverSlackId|inspectorSlackId|rawAmount|paymentMethod"
  */
 function buildActionValue(info: RequestInfo): string {
-  return `${info.poNumber}|${info.applicantSlackId}|${info.approverSlackId}|${info.inspectorSlackId}`;
+  const rawAmount = info.amount.replace(/[^\d]/g, "") || "0";
+  return `${info.poNumber}|${info.applicantSlackId}|${info.approverSlackId}|${info.inspectorSlackId}|${rawAmount}|${info.paymentMethod}`;
 }
 
 export function buildNewRequestBlocks(info: RequestInfo) {

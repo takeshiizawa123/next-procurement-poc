@@ -63,6 +63,7 @@ export async function exchangeCodeForTokens(code: string): Promise<MfTokens> {
   const data = await res.json();
   const tokens = normalizeTokenResponse(data);
   await saveTokens(tokens);
+  console.log("[mf-oauth] Initial auth complete. Set MF_REFRESH_TOKEN env var to:", tokens.refresh_token);
   return tokens;
 }
 
@@ -139,18 +140,35 @@ function normalizeTokenResponse(data: Record<string, unknown>): MfTokens {
 
 async function saveTokens(tokens: MfTokens): Promise<void> {
   cachedTokens = tokens;
-  // TODO: Vercel KV等に永続化
-  console.log("[mf-oauth] Token saved (expires_at:", new Date(tokens.expires_at).toISOString(), ")");
+  console.log("[mf-oauth] Token cached in memory (expires_at:", new Date(tokens.expires_at).toISOString(), ")");
+  // リフレッシュトークンがローテーションされた場合に警告
+  if (process.env.MF_REFRESH_TOKEN && tokens.refresh_token !== process.env.MF_REFRESH_TOKEN) {
+    console.warn("[mf-oauth] Refresh token rotated! Update MF_REFRESH_TOKEN env var to:", tokens.refresh_token);
+  }
 }
 
 async function loadTokens(): Promise<MfTokens | null> {
-  // TODO: Vercel KV等から読み込み
-  return cachedTokens;
+  if (cachedTokens) return cachedTokens;
+
+  // コールドスタート: MF_REFRESH_TOKEN 環境変数からブートストラップ
+  const envRefreshToken = process.env.MF_REFRESH_TOKEN;
+  if (envRefreshToken) {
+    console.log("[mf-oauth] Cold start — bootstrapping from MF_REFRESH_TOKEN env var");
+    try {
+      const tokens = await refreshAccessToken(envRefreshToken);
+      return tokens;
+    } catch (e) {
+      console.error("[mf-oauth] Failed to bootstrap from MF_REFRESH_TOKEN:", e);
+      return null;
+    }
+  }
+
+  return null;
 }
 
 /**
  * 認証済みかどうかを確認
  */
 export function isAuthenticated(): boolean {
-  return cachedTokens !== null;
+  return cachedTokens !== null || !!process.env.MF_REFRESH_TOKEN;
 }

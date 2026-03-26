@@ -34,7 +34,8 @@ function verifySlackSignature(
   if (!SIGNING_SECRET) return false;
   // リプレイ攻撃防止: 5分以上古いリクエストを拒否
   const now = Math.floor(Date.now() / 1000);
-  if (Math.abs(now - Number(timestamp)) > 300) return false;
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts) || Math.abs(now - ts) > 300) return false;
 
   const sigBasestring = `v0:${timestamp}:${body}`;
   const mySignature = "v0=" + createHmac("sha256", SIGNING_SECRET).update(sigBasestring).digest("hex");
@@ -59,9 +60,9 @@ export async function POST(request: NextRequest) {
 
     // url_verification はパース後に判定するため、署名検証を先にペイロード確認
     // ただし署名が存在する場合は必ず検証する
-    if (SIGNING_SECRET && slackSignature) {
-      if (!verifySlackSignature(body, slackTimestamp, slackSignature)) {
-        console.warn("[slack] signature verification failed");
+    if (SIGNING_SECRET) {
+      if (!slackSignature || !verifySlackSignature(body, slackTimestamp, slackSignature)) {
+        console.warn("[slack] signature verification failed — missing or invalid signature");
         return NextResponse.json({ error: "invalid signature" }, { status: 401 });
       }
     }
@@ -331,6 +332,26 @@ async function handleTripSubmission(
   const transport = vals.transport_block?.transport?.value || "";
   const amount = parseInt(vals.amount_block?.amount?.value || "0", 10);
   const accommodation = vals.accommodation_block?.accommodation?.value || "";
+
+  // バリデーション
+  const tripErrors: string[] = [];
+  if (!destination) tripErrors.push("行き先が未入力です");
+  if (!startDate) tripErrors.push("出張開始日が未選択です");
+  if (!endDate) tripErrors.push("出張終了日が未選択です");
+  if (!purpose) tripErrors.push("出張目的が未入力です");
+  if (!transport) tripErrors.push("利用交通手段が未入力です");
+  if (amount <= 0 || isNaN(amount)) tripErrors.push("概算額は1円以上を入力してください");
+  if (startDate && endDate && startDate > endDate) {
+    tripErrors.push("出張開始日は終了日以前にしてください");
+  }
+
+  if (tripErrors.length > 0) {
+    await client.chat.postMessage({
+      channel: userId,
+      text: `⚠️ 出張申請にエラーがあります:\n${tripErrors.map((e) => `• ${e}`).join("\n")}`,
+    });
+    return;
+  }
 
   // ユーザー名取得
   let userName = userId;
@@ -699,7 +720,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
       ];
 
       // OCR金額照合（Gemini APIキーがあり、画像/PDFの場合）
-      if (process.env.GEMINI_API_KEY && fileUrls.length > 0 && fileMimeTypes[0]?.startsWith("image/")) {
+      if (process.env.GEMINI_API_KEY && fileUrls.length > 0 && (fileMimeTypes[0]?.startsWith("image/") || fileMimeTypes[0] === "application/pdf")) {
         try {
           const botToken = process.env.SLACK_BOT_TOKEN || "";
           const { base64, mimeType } = await downloadSlackFile(fileUrls[0], botToken);

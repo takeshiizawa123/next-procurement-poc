@@ -196,14 +196,17 @@ export async function buildJournalFromPurchase(params: {
   const creditAccountName = isCard ? "未払金" : "買掛金";
   const creditAccountCode = await resolveAccountCode(creditAccountName);
 
-  // 税区分
-  const taxCode = await resolveTaxCode("課税仕入10%");
+  // 税区分 — 科目に対応する税区分を解決
+  const expenseMapping = EXPENSE_ACCOUNT_MAP[mainAccount];
+  const taxTypeName = expenseMapping?.taxType || "課税仕入10%";
+  const taxCode = await resolveTaxCode(taxTypeName);
 
   // 部門
   const departmentCode = department ? await resolveDepartmentCode(department) : undefined;
 
-  // 税込金額から税額を計算（10%税率想定）
-  const taxValue = Math.floor(amount * 10 / 110);
+  // 税込金額から税額を計算（税区分名から税率を解決）
+  const taxRatePercent = TAX_RATE_MAP[taxTypeName] ?? 10;
+  const taxValue = taxRatePercent > 0 ? Math.floor(amount * taxRatePercent / (100 + taxRatePercent)) : 0;
 
   return {
     status: "draft",
@@ -229,6 +232,17 @@ export async function buildJournalFromPurchase(params: {
     ],
   };
 }
+
+// --- 税率マッピング ---
+
+const TAX_RATE_MAP: Record<string, number> = {
+  "課税仕入10%": 10,
+  "課税仕入8%": 8,
+  "課税仕入8%(軽)": 8,
+  "非課税": 0,
+  "不課税": 0,
+  "免税": 0,
+};
 
 // --- 勘定科目マッピング（フォールバック用） ---
 
