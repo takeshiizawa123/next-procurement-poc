@@ -321,6 +321,28 @@ export async function getPredictedTransactions(
 }
 
 /**
+ * 予測テーブルに新規レコードを追加
+ */
+export async function createPrediction(
+  prediction: Omit<PredictedTransaction, "matched_journal_id" | "matched_at" | "amount_diff">,
+): Promise<GasResponse<{ id: string }>> {
+  return callGasPost<{ id: string }>("createPrediction", prediction);
+}
+
+/**
+ * 予測テーブルのステータスを更新
+ */
+export async function updatePredictionStatus(
+  predictionId: string,
+  updates: Partial<Pick<PredictedTransaction, "status" | "matched_journal_id" | "matched_at" | "amount_diff">>,
+): Promise<GasResponse<{ id: string }>> {
+  return callGasPost<{ id: string }>("updatePrediction", {
+    id: predictionId,
+    ...updates,
+  });
+}
+
+/**
  * 従業員マスタ（カード情報付き）を取得
  */
 export async function getEmployeeCards(): Promise<

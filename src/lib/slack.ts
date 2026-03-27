@@ -1,5 +1,6 @@
 import { WebClient } from "@slack/web-api";
 import { updateStatus, getPendingVouchers } from "./gas-client";
+import { generatePrediction, isCardPayment } from "./prediction";
 
 /**
  * Slack Web API クライアント
@@ -112,6 +113,18 @@ export const handleApprove: SlackActionHandler = async ({
   const { applicantSlackId } = parseActionValue(actionValue);
   const amountNum = parseInt((info?.amount || "0").replace(/[^\d]/g, "")) || 0;
   const payMethod = info?.paymentMethod || "";
+
+  // カード払いの場合、予測テーブルに明細を生成（照合用）
+  if (isCardPayment(payMethod)) {
+    generatePrediction({
+      poNumber,
+      applicantSlackId,
+      applicantName: info?.applicant?.replace(/<@[^>]+>/g, "").trim() || "",
+      amount: amountNum,
+      supplierName: info?.supplierName || "",
+      paymentMethod: payMethod,
+    }).catch((e) => console.error("[approve] Prediction error:", e));
+  }
   const isHighValue = amountNum >= 100000;
   const isAdminOrder = isHighValue || payMethod === "請求書払い";
 
