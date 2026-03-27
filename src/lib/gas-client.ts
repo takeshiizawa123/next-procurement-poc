@@ -279,3 +279,52 @@ export async function testConnection(): Promise<
 > {
   return callGasGet<{ status: string; version: string }>({ action: "health" });
 }
+
+// ===========================================
+// 予測テーブル / 従業員カード情報
+// ===========================================
+
+export interface PredictedTransaction {
+  id: string;
+  po_number: string;
+  type: string; // "purchase" | "trip_transport" | "trip_hotel" | "trip_daily"
+  card_last4: string;
+  predicted_amount: number;
+  predicted_date: string; // YYYY-MM-DD
+  supplier: string;
+  applicant: string;
+  stage1_journal_id?: number;
+  status: string; // "pending" | "matched" | "unmatched" | "cancelled"
+  matched_journal_id?: number;
+  matched_at?: string;
+  amount_diff?: number;
+  created_at: string;
+}
+
+export interface EmployeeCard {
+  name: string;
+  slackId: string;
+  card_last4: string;
+  card_holder_name: string;
+}
+
+/**
+ * 予測テーブルを取得（月指定）
+ */
+export async function getPredictedTransactions(
+  month: string, // "2026-03"
+): Promise<GasResponse<{ predictions: PredictedTransaction[] }>> {
+  return callGasPost<{ predictions: PredictedTransaction[] }>(
+    "getPredictions",
+    { month },
+  );
+}
+
+/**
+ * 従業員マスタ（カード情報付き）を取得
+ */
+export async function getEmployeeCards(): Promise<
+  GasResponse<{ employees: EmployeeCard[] }>
+> {
+  return callGasGet<{ employees: EmployeeCard[] }>({ action: "employeeCards" });
+}

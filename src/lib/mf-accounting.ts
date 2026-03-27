@@ -118,6 +118,63 @@ export async function getDepartments(): Promise<MasterItem[]> {
   return fetchMaster("/masters/departments");
 }
 
+// --- 補助科目マスタ ---
+
+interface SubAccountItem {
+  id: number;
+  code: string | null;
+  account_id: number;
+  name: string;
+  search_key?: string | null;
+  available: boolean;
+}
+
+const subAccountCache: CacheEntry<SubAccountItem[]> | null = null;
+
+async function fetchSubAccounts(): Promise<SubAccountItem[]> {
+  if (subAccountCache && Date.now() - subAccountCache.fetchedAt < CACHE_TTL) {
+    return subAccountCache.data;
+  }
+
+  const data = await authenticatedRequest<{ sub_accounts: SubAccountItem[] }>(
+    "GET",
+    "/masters/sub_accounts",
+  );
+  const items = data.sub_accounts || [];
+  // キャッシュは masterCache と同じ仕組みで管理
+  masterCache["_sub_accounts"] = {
+    data: items as unknown as MasterItem[],
+    fetchedAt: Date.now(),
+  };
+  return items;
+}
+
+/**
+ * 補助科目コードを解決
+ * 親科目名 + 補助科目名 で検索（例: "未払金", "MFカード:未請求"）
+ */
+export async function resolveSubAccountCode(
+  parentAccountName: string,
+  subAccountName: string,
+): Promise<string | undefined> {
+  const accounts = await getAccounts();
+  const parentAccount = resolveMasterItem(accounts, parentAccountName);
+  if (!parentAccount) return undefined;
+
+  const subAccounts = await fetchSubAccounts();
+  const parentId = parentAccount.id;
+  const candidates = subAccounts.filter((sa) => sa.account_id === parentId && sa.available);
+
+  const match =
+    candidates.find((sa) => sa.code === subAccountName) ||
+    candidates.find((sa) => sa.name === subAccountName) ||
+    candidates.find((sa) => sa.name.includes(subAccountName)) ||
+    candidates.find((sa) => sa.search_key?.includes(subAccountName)) ||
+    null;
+
+  return match?.code ?? undefined;
+}
+
 /**
  * 名前 or コードからマスタIDを解決
  * 優先順位: code完全一致 → name完全一致 → name部分一致
@@ -151,6 +208,45 @@ export async function resolveDepartmentCode(nameOrCode: string): Promise<string 
 
 // --- 仕訳CRUD ---
 
+/** 仕訳一覧の1件 */
+export interface JournalListItem {
+  id: number;
+  transaction_date: string;
+  status: string;
+  entered_by: string | null;
+  memo: string | null;
+  tags: string[];
+  branches: {
+    remark: string | null;
+    debitor: BranchSide & { account_name?: string; sub_account_name?: string };
+    creditor: BranchSide & { account_name?: string; sub_account_name?: string };
+  }[];
+}
+
+/**
+ * 仕訳一覧を取得
+ *
+ * @param params.from 開始日 (YYYY-MM-DD)
+ * @param params.to   終了日 (YYYY-MM-DD)
+ * @param params.enteredBy "none" で自動仕訳（カード明細由来 = Stage 2）のみ取得
+ */
+export async function getJournals(params: {
+  from: string;
+  to: string;
+  enteredBy?: string;
+}): Promise<JournalListItem[]> {
+  const query = new URLSearchParams({
+    from: params.from,
+    to: params.to,
+    ...(params.enteredBy ? { entered_by: params.enteredBy } : {}),
+  });
+  const data = await authenticatedRequest<{ journals: JournalListItem[] }>(
+    "GET",
+    `/journals?${query.toString()}`,
+  );
+  return data.journals || [];
+}
+
 /**
  * 仕訳を作成
  */
@@ -159,11 +255,40 @@ export async function createJournal(request: CreateJournalRequest): Promise<Jour
 }
 
 /**
+ * 支払方法から貸方科目・補助科目を解決
+ *
+ * 会社カード → 未払金 / MFカード:未請求（Stage 1）
+ * 請求書払い → 買掛金（補助科目なし）
+ * 従業員立替 → この関数は呼ばれない（MF経費経由）
+ */
+async function resolveCreditAccount(paymentMethod: string): Promise<{
+  accountCode: string;
+  accountName: string;
+  subAccountCode?: string;
+}> {
+  const isCard = paymentMethod.includes("カード");
+  const accountName = isCard ? "未払金" : "買掛金";
+  const accountCode = await resolveAccountCode(accountName);
+
+  let subAccountCode: string | undefined;
+  if (isCard) {
+    // カード払い: 補助科目 "MFカード:未請求" を設定（Stage 1仕訳）
+    subAccountCode = await resolveSubAccountCode("未払金", "MFカード:未請求");
+  }
+
+  return {
+    accountCode: accountCode || accountName,
+    accountName,
+    subAccountCode,
+  };
+}
+
+/**
  * 購買申請データから仕訳リクエストを構築
  *
  * 基本パターン:
  *   借方: 費用科目（消耗品費等）
- *   貸方: 未払金（カード払い）or 買掛金（請求書払い）
+ *   貸方: 未払金(MFカード:未請求)（カード払い）or 買掛金（請求書払い）
  */
 export async function buildJournalFromPurchase(params: {
   transactionDate: string;
@@ -191,10 +316,8 @@ export async function buildJournalFromPurchase(params: {
   const mainAccount = accountTitle.split("（")[0].trim();
   const debitAccountCode = await resolveAccountCode(mainAccount);
 
-  // 貸方: 支払方法に応じた科目
-  const isCard = paymentMethod.includes("カード");
-  const creditAccountName = isCard ? "未払金" : "買掛金";
-  const creditAccountCode = await resolveAccountCode(creditAccountName);
+  // 貸方: 支払方法に応じた科目 + 補助科目
+  const credit = await resolveCreditAccount(paymentMethod);
 
   // 税区分 — 科目に対応する税区分を解決
   const expenseMapping = EXPENSE_ACCOUNT_MAP[mainAccount];
@@ -225,7 +348,8 @@ export async function buildJournalFromPurchase(params: {
           tax_value: taxValue,
         },
         creditor: {
-          account_code: creditAccountCode || creditAccountName,
+          account_code: credit.accountCode,
+          sub_account_code: credit.subAccountCode,
           value: amount,
         },
       },
