@@ -67,11 +67,41 @@
 
 | # | 列名 | 型 | 備考 |
 |---|------|-----|------|
-| 1 | slack_user_id | string | Slack UID |
-| 2 | name | string | 表示名 |
-| 3 | department | string | 部門名 |
-| 4 | approver_slack_id | string | 部門長のSlack UID |
-| 5 | role | enum | 一般/部門長/管理本部 |
+| A | name | string | 表示名 |
+| B | departmentCode | string | 部門コード |
+| C | departmentName | string | 部門名 |
+| D | slackAliases | string | Slack別名（カンマ区切り） |
+| E | slackId | string | Slack UID |
+| F | deptHeadSlackId | string | 部門長のSlack UID |
+| G | card_last4 | string | MFビジネスカード下4桁（例: 3815） |
+| H | card_holder_name | string | カード券面名義（例: TARO TANAKA） |
+
+> G・H列はカード明細照合に必須。従業員にカードが発行されていない場合は空欄。
+
+---
+
+## 予測カード明細シート（predicted_card_transactions）
+
+購買承認時に自動生成される照合用予測データ。シート名: `予測カード明細`
+
+| # | 列名 | 型 | 備考 |
+|---|------|-----|------|
+| A | id | string | 予測ID（PCT-YYYYMM-NNNN） |
+| B | po_number | string | 購買番号 or 出張報告番号 |
+| C | type | string | purchase / trip_transport / trip_hotel / trip_daily |
+| D | card_last4 | string | 使用予定カード下4桁 |
+| E | predicted_amount | number | 予測金額（税込） |
+| F | predicted_date | string | 予測利用日（YYYY-MM-DD） |
+| G | supplier | string | 取引先名 |
+| H | applicant | string | 申請者名 |
+| I | stage1_journal_id | number | Stage 1仕訳ID（あれば） |
+| J | status | string | pending / matched / unmatched / cancelled |
+| K | matched_journal_id | number | マッチしたStage 2仕訳ID |
+| L | matched_at | string | マッチ日時 |
+| M | amount_diff | number | 実額との差額 |
+| N | created_at | string | 作成日時 |
+
+> シートは初回の予測生成時に自動作成される（GAS webApi.js `getPredictionSheet()`）
 
 ---
 
