@@ -273,6 +273,66 @@ export const handleOrderComplete: SlackActionHandler = async ({
 };
 
 /**
+ * 部分検収ボタン押下時の処理 → モーダル表示
+ */
+export const handlePartialInspection: SlackActionHandler = async ({
+  client,
+  body,
+  userId,
+  actionValue,
+}) => {
+  const { poNumber, applicantSlackId, inspectorSlackId } = parseActionValue(actionValue);
+
+  const allowed = [inspectorSlackId, applicantSlackId].filter(Boolean);
+  if (allowed.length > 0 && !allowed.includes(userId)) {
+    return; // 権限なし — ephemeral は後のハンドラーで処理
+  }
+
+  const triggerId = (body as { trigger_id?: string }).trigger_id;
+  if (!triggerId) return;
+
+  await client.views.open({
+    trigger_id: triggerId,
+    view: {
+      type: "modal",
+      callback_id: "partial_inspection_submit",
+      private_metadata: actionValue,
+      title: { type: "plain_text", text: "部分検収" },
+      submit: { type: "plain_text", text: "検収記録" },
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: `*${poNumber}* の部分検収を記録します。` },
+        },
+        {
+          type: "input",
+          block_id: "inspected_qty_block",
+          label: { type: "plain_text", text: "今回検収した数量" },
+          element: {
+            type: "number_input",
+            action_id: "inspected_qty",
+            is_decimal_allowed: false,
+            min_value: "1",
+            placeholder: { type: "plain_text", text: "例: 5" },
+          },
+        },
+        {
+          type: "input",
+          block_id: "inspection_note_block",
+          label: { type: "plain_text", text: "備考（任意）" },
+          optional: true,
+          element: {
+            type: "plain_text_input",
+            action_id: "inspection_note",
+            placeholder: { type: "plain_text", text: "例: 第1便分" },
+          },
+        },
+      ],
+    },
+  });
+};
+
+/**
  * 検収完了ボタン押下時の処理（検収者 or 申請者のみ）
  */
 export const handleInspectionComplete: SlackActionHandler = async ({
@@ -775,6 +835,7 @@ export const actionHandlers: Record<string, SlackActionHandler> = {
   reject_button: handleReject,
   order_complete_button: handleOrderComplete,
   inspection_complete_button: handleInspectionComplete,
+  partial_inspection_button: handlePartialInspection,
   cancel_button: handleCancel,
   return_button: handleReturn,
   dm_approve_button: handleDmApprove,
@@ -1436,10 +1497,16 @@ function buildOrderedBlocks(
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "✅ 検収完了" },
+          text: { type: "plain_text", text: "✅ 全数検収" },
           style: "primary",
           value: actionValue,
           action_id: "inspection_complete_button",
+        },
+        {
+          type: "button",
+          text: { type: "plain_text", text: "📦 部分検収" },
+          value: actionValue,
+          action_id: "partial_inspection_button",
         },
       ],
     },

@@ -15,7 +15,7 @@ import {
   type PurchaseFormData,
   type RequestInfo,
 } from "@/lib/slack";
-import { registerPurchase, updateStatus, getRecentRequests, getEmployees } from "@/lib/gas-client";
+import { registerPurchase, updateStatus, getStatus, getRecentRequests, getEmployees } from "@/lib/gas-client";
 import { estimateAccount } from "@/lib/account-estimator";
 import { resolveApprovalRoute } from "@/lib/approval-router";
 import { createTripExpense } from "@/lib/mf-expense";
@@ -242,6 +242,22 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ response_action: "clear" });
       }
 
+      if (view.callback_id === "partial_inspection_submit") {
+        const userId = (payload.user as { id: string }).id;
+        const actionValue = view.private_metadata;
+        const inspectedQty = parseInt(
+          view.state.values.inspected_qty_block?.inspected_qty?.value || "0",
+          10,
+        );
+        const note = (view.state.values.inspection_note_block?.inspection_note as { value?: string })?.value || "";
+
+        after(async () => {
+          await handlePartialInspectionSubmit(userId, actionValue, inspectedQty, note);
+        });
+
+        return NextResponse.json({ response_action: "clear" });
+      }
+
       if (view.callback_id === "trip_submit") {
         const userId = (payload.user as { id: string }).id;
         const targetChannelId = view.private_metadata || TRIP_CHANNEL;
@@ -384,6 +400,96 @@ function buildTripModal(channelId: string) {
       },
     ],
   };
+}
+
+/** 部分検収モーダル送信の処理 */
+async function handlePartialInspectionSubmit(
+  userId: string,
+  actionValue: string,
+  inspectedQty: number,
+  note: string,
+): Promise<void> {
+  const client = getSlackClient();
+  const parts = actionValue.split("|");
+  const poNumber = parts[0] || "";
+
+  // ユーザー名取得
+  let userName = userId;
+  try {
+    const info = await client.users.info({ user: userId });
+    userName = info.user?.real_name || info.user?.name || userId;
+  } catch {
+    // ignore
+  }
+
+  // GASから現在のステータスを取得して検収数量を確認
+  const statusResult = await getStatus(poNumber);
+  const statusData = statusResult.success ? statusResult.data : null;
+  const totalQty = Number(statusData?.["数量"] || statusData?.["quantity"] || 1);
+  const prevInspected = Number(statusData?.["検収済数量"] || 0);
+  const newInspected = prevInspected + inspectedQty;
+  const isComplete = newInspected >= totalQty;
+
+  // GASに検収数量を更新
+  const todayStr = new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" });
+  const updates: Record<string, string> = {
+    "検収済数量": String(newInspected),
+  };
+  if (isComplete) {
+    updates["検収ステータス"] = "検収済";
+    updates["検収日"] = todayStr;
+  } else {
+    updates["検収ステータス"] = `部分検収（${newInspected}/${totalQty}）`;
+  }
+  updateStatus(poNumber, updates).catch((e) =>
+    console.error("[partial-inspection] GAS update error:", e)
+  );
+
+  // スレッドにメッセージを確認する必要がある — チャンネルIDを探す
+  // statusDataからslackLinkを取得してチャンネルとtsを解決
+  const slackLink = String(statusData?.["slackLink"] || statusData?.["Slackリンク"] || "");
+  const slackTs = String(statusData?.["slackTs"] || "");
+  const channelMatch = slackLink.match(/archives\/([A-Z0-9]+)\/p(\d+)/);
+  const channelId = channelMatch?.[1] || process.env.SLACK_PURCHASE_CHANNEL || "";
+
+  if (channelId) {
+    const noteText = note ? `（${note}）` : "";
+    const progressBar = `${"█".repeat(Math.min(10, Math.round((newInspected / totalQty) * 10)))}${"░".repeat(Math.max(0, 10 - Math.round((newInspected / totalQty) * 10)))}`;
+
+    await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: slackTs || undefined,
+      text: [
+        `📦 *部分検収* ${poNumber}（${userName}）`,
+        `  今回: ${inspectedQty}個 → 累計: ${newInspected}/${totalQty}個 ${progressBar}${noteText}`,
+        ...(isComplete
+          ? [`  ✅ *全数検収完了* — 証憑を添付してください。`]
+          : [`  ⏳ 残り ${totalQty - newInspected}個`]),
+      ].join("\n"),
+    });
+  }
+
+  if (isComplete) {
+    // 全数に到達 → OPS通知
+    const { notifyOps: ops } = await import("@/lib/slack");
+    await ops(client, `📦 *検収完了*（部分検収→全数到達） ${poNumber}（${userName}）— 証憑待ち`);
+
+    // 固定資産通知
+    const rawAmount = parts[4] || "0";
+    const amount = parseInt(rawAmount, 10);
+    if (amount >= 100000) {
+      await ops(
+        client,
+        [
+          `🏷️ *固定資産登録が必要です*`,
+          `  申請番号: ${poNumber}`,
+          `  取得価額: ¥${amount.toLocaleString()}`,
+          `  取得日: ${todayStr}`,
+          `  → MF固定資産に登録してください`,
+        ].join("\n"),
+      );
+    }
+  }
 }
 
 /** 出張申請の送信処理 */
