@@ -98,6 +98,7 @@ export async function extractFromImage(imageBase64: string, mimeType: string): P
         responseMimeType: "application/json",
       },
     }),
+    signal: AbortSignal.timeout(30000),
   });
 
   if (!res.ok) {
@@ -210,6 +211,7 @@ export async function verifyInvoiceRegistration(
 
     const res = await fetch(url, {
       headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10000),
     });
 
     if (!res.ok) {
@@ -267,6 +269,7 @@ export async function downloadSlackFile(
 ): Promise<{ base64: string; mimeType: string }> {
   const res = await fetch(fileUrl, {
     headers: { Authorization: `Bearer ${botToken}` },
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!res.ok) {

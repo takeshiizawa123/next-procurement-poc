@@ -1,14 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRecentRequests } from "@/lib/gas-client";
 import type { PastRequest } from "@/lib/gas-client";
+import { requireBearerAuth } from "@/lib/api-auth";
 
 /**
- * 従業員別利用傾向API
+ * 従業員別利用傾向API（認証必須）
  * GET /api/admin/spending?months=3
  *
  * 購買台帳から従業員別・月別の利用金額を集計して返す。
  */
 export async function GET(request: NextRequest) {
+  const authError = requireBearerAuth(request);
+  if (authError) return authError;
   const monthsParam = request.nextUrl.searchParams.get("months");
   const monthsBack = Math.min(Math.max(parseInt(monthsParam || "3", 10), 1), 12);
 

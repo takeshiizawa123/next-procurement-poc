@@ -1,15 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseJalanCsv, importAccommodationRecords } from "@/lib/mf-expense";
 import * as iconv from "iconv-lite";
+import { requireBearerAuth } from "@/lib/api-auth";
 
 /**
- * じゃらんCSV取込API
+ * じゃらんCSV取込API（認証必須）
  * POST /api/trip/import-csv
  *
  * Content-Type: multipart/form-data
  * Body: file (CSV), dry_run ("true" | "false")
  */
 export async function POST(request: NextRequest) {
+  const authError = requireBearerAuth(request);
+  if (authError) return authError;
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;

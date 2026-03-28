@@ -105,6 +105,7 @@ async function fetchCardStatements(): Promise<CardStatement[]> {
     const url = `https://expense.moneyforward.com/api/external/v1/offices/${MF_EXPENSE_OFFICE_ID}/me/ex_transactions`;
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${MF_EXPENSE_TOKEN}` },
+      signal: AbortSignal.timeout(15000),
     });
 
     if (!res.ok) {

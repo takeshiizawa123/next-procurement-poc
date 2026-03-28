@@ -673,10 +673,15 @@ export const handleJournalRegister: SlackActionHandler = async ({
   const baseUrl = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
 
   try {
+    const cronSecret = process.env.CRON_SECRET || "";
     const res = await fetch(`${baseUrl}/api/mf/journal`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(cronSecret ? { Authorization: `Bearer ${cronSecret}` } : {}),
+      },
       body: JSON.stringify({ prNumber }),
+      signal: AbortSignal.timeout(15000),
     });
 
     const data = await res.json() as { ok?: boolean; journalId?: number; error?: string };

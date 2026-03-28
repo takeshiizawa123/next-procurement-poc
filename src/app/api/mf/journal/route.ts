@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createJournal, buildJournalFromPurchase } from "@/lib/mf-accounting";
 import { getStatus, updateStatus } from "@/lib/gas-client";
 import { getSlackClient, notifyOps } from "@/lib/slack";
+import { requireBearerAuth } from "@/lib/api-auth";
 
 /**
- * 仕訳登録API
+ * 仕訳登録API（認証必須）
  * POST /api/mf/journal
  *
  * Body: { prNumber: string }
@@ -13,6 +14,9 @@ import { getSlackClient, notifyOps } from "@/lib/slack";
  * GASステータスを「計上済」に更新、Slackに通知。
  */
 export async function POST(request: NextRequest) {
+  const authError = requireBearerAuth(request);
+  if (authError) return authError;
+
   try {
     const { prNumber } = (await request.json()) as { prNumber: string };
     if (!prNumber) {

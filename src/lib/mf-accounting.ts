@@ -76,6 +76,7 @@ async function authenticatedRequest<T>(
       "Content-Type": "application/json",
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(15000),
   });
 
   if (res.status === 401 && !isRetry) {

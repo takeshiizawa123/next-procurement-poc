@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
         Accept: "application/json",
         Authorization: `Bearer ${KATANA_API_KEY}`,
       },
+      signal: AbortSignal.timeout(10000),
     });
 
     if (!res.ok) {

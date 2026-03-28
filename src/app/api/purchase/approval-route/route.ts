@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSlackClient } from "@/lib/slack";
 import { resolveApprovalRoute } from "@/lib/approval-router";
+import { requireApiKey } from "@/lib/api-auth";
 
 interface ApprovalStep {
   role: string;
@@ -20,10 +21,12 @@ async function resolveSlackName(slackId: string): Promise<string> {
 }
 
 /**
- * 承認ルートプレビュー
+ * 承認ルートプレビュー（APIキー認証）
  * GET /api/purchase/approval-route?amount=50000&isPurchased=false&userId=xxx
  */
 export async function GET(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
   const { searchParams } = new URL(request.url);
   const amount = Number(searchParams.get("amount") || "0");
   const isPurchased = searchParams.get("isPurchased") === "true";

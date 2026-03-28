@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useState, useEffect } from "react";
+import { apiFetch } from "@/lib/api-client";
 
 interface PurchaseRequest {
   prNumber: string;
@@ -35,7 +36,7 @@ function DashboardInner() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/purchase/recent?limit=30")
+    apiFetch("/api/purchase/recent?limit=30")
       .then((r) => r.json())
       .then((d: { requests?: PurchaseRequest[] }) => setRequests(d.requests || []))
       .catch(() => setRequests([]))

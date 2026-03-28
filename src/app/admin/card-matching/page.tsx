@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
+import { apiFetch } from "@/lib/api-client";
 
 // --- 型定義 ---
 
@@ -250,7 +251,7 @@ export default function CardMatchingPage() {
           status: i.status,
         }));
 
-      const res = await fetch("/api/admin/card-matching/execute", {
+      const res = await apiFetch("/api/admin/card-matching/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ month: selectedMonth, statements }),
@@ -943,7 +944,7 @@ function WithdrawalTab({ month }: { month: string }) {
     setFetchedMonth(month);
     setIsLoadingUnpaid(true);
     setUnpaidError(null);
-    fetch("/api/admin/card-matching/withdrawal", {
+    apiFetch("/api/admin/card-matching/withdrawal", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ month }),

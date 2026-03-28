@@ -13,5 +13,13 @@ export async function GET() {
 
   const state = randomBytes(16).toString("hex");
   const authUrl = getAuthorizationUrl(state);
-  return NextResponse.redirect(authUrl);
+  const response = NextResponse.redirect(authUrl);
+  response.cookies.set("mf_oauth_state", state, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    maxAge: 600, // 10分
+    path: "/api/mf",
+  });
+  return response;
 }

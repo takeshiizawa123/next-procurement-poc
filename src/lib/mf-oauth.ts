@@ -53,6 +53,7 @@ export async function exchangeCodeForTokens(code: string): Promise<MfTokens> {
       client_secret: MF_CLIENT_SECRET,
       redirect_uri: MF_REDIRECT_URI,
     }),
+    signal: AbortSignal.timeout(10000),
   });
 
   if (!res.ok) {
@@ -63,7 +64,7 @@ export async function exchangeCodeForTokens(code: string): Promise<MfTokens> {
   const data = await res.json();
   const tokens = normalizeTokenResponse(data);
   await saveTokens(tokens);
-  console.log("[mf-oauth] Initial auth complete. Set MF_REFRESH_TOKEN env var to:", tokens.refresh_token);
+  console.log("[mf-oauth] Initial auth complete. Update MF_REFRESH_TOKEN env var.");
   return tokens;
 }
 
@@ -97,6 +98,7 @@ async function refreshAccessToken(refreshToken: string): Promise<MfTokens> {
       client_id: MF_CLIENT_ID,
       client_secret: MF_CLIENT_SECRET,
     }),
+    signal: AbortSignal.timeout(10000),
   });
 
   if (!res.ok) {
@@ -143,7 +145,7 @@ async function saveTokens(tokens: MfTokens): Promise<void> {
   console.log("[mf-oauth] Token cached in memory (expires_at:", new Date(tokens.expires_at).toISOString(), ")");
   // リフレッシュトークンがローテーションされた場合に警告
   if (process.env.MF_REFRESH_TOKEN && tokens.refresh_token !== process.env.MF_REFRESH_TOKEN) {
-    console.warn("[mf-oauth] Refresh token rotated! Update MF_REFRESH_TOKEN env var to:", tokens.refresh_token);
+    console.warn("[mf-oauth] Refresh token rotated! Update MF_REFRESH_TOKEN env var.");
   }
 }
 

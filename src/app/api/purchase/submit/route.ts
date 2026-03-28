@@ -11,6 +11,7 @@ import {
 import { registerPurchase, updateStatus, getEmployees, type Employee } from "@/lib/gas-client";
 import { estimateAccount } from "@/lib/account-estimator";
 import { resolveApprovalRoute } from "@/lib/approval-router";
+import { requireApiKey } from "@/lib/api-auth";
 
 /**
  * フォームの検収者名からSlackIDを解決する。
@@ -36,6 +37,9 @@ const PURCHASE_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
  * POST /api/purchase/submit
  */
 export async function POST(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   try {
     const formData = await request.formData();
 
@@ -171,79 +175,105 @@ export async function POST(request: NextRequest) {
       ? buildPurchasedRequestBlocks(requestInfo)
       : buildNewRequestBlocks(requestInfo);
 
-    // チャンネル投稿（承認者メンション付き）
+    // チャンネル投稿（承認者メンション付き）— Slack障害時もGAS登録済みデータを保全
     const mentionText = !isPurchased && approverSlackId
       ? ` — 承認者: <@${approverSlackId}>`
       : "";
-    const result = await client.chat.postMessage({
-      channel: channelId,
-      blocks,
-      text: `購買申請: ${poNumber} ${itemName} ${amountStr}${mentionText}`,
-    });
+
+    let slackPosted = false;
+    let resultTs: string | undefined;
+    try {
+      const result = await client.chat.postMessage({
+        channel: channelId,
+        blocks,
+        text: `購買申請: ${poNumber} ${itemName} ${amountStr}${mentionText}`,
+      });
+      resultTs = result.ts ?? undefined;
+      slackPosted = true;
+    } catch (slackError) {
+      console.error("[web-purchase] Slack postMessage failed (data saved in GAS):", slackError);
+    }
 
     // Slack投稿後にGASのSlackリンク情報を更新
-    if (result.ts) {
-      const slackLink = `https://slack.com/archives/${channelId}/p${result.ts.replace(".", "")}`;
+    if (resultTs) {
+      const slackLink = `https://slack.com/archives/${channelId}/p${resultTs.replace(".", "")}`;
       try {
-        await updateStatus(poNumber, { slackTs: result.ts, slackLink });
+        await updateStatus(poNumber, { slackTs: resultTs, slackLink });
       } catch (e) {
         console.error("[web-purchase] Failed to update GAS with Slack link:", e);
       }
     }
 
     // 承認者メンションをスレッドに投稿（チャンネル投稿のテキストはブロック表示時に見えないため）
-    if (!isPurchased && approverSlackId && result.ts) {
+    if (!isPurchased && approverSlackId && resultTs) {
       const approverMention = `<@${approverSlackId}>`;
       const secondMention = approvalRoute.requiresSecondApproval && approvalRoute.secondaryApprover
         ? ` → <@${approvalRoute.secondaryApprover}>`
         : "";
-      await client.chat.postMessage({
-        channel: channelId,
-        thread_ts: result.ts,
-        text: `📋 承認依頼: ${approverMention}${secondMention}\n${approvalRoute.requiresSecondApproval ? "（10万円以上: 二段階承認）" : ""}`,
-      });
+      try {
+        await client.chat.postMessage({
+          channel: channelId,
+          thread_ts: resultTs,
+          text: `📋 承認依頼: ${approverMention}${secondMention}\n${approvalRoute.requiresSecondApproval ? "（10万円以上: 二段階承認）" : ""}`,
+        });
+      } catch (e) {
+        console.error("[web-purchase] Failed to post approval mention:", e);
+      }
     }
 
     console.log("[web-purchase] Posted:", {
       poNumber,
       channelId,
-      messageTs: result.ts,
+      messageTs: resultTs,
       userId,
       isPurchased,
       approver: approverSlackId,
       source: "web",
+      slackPosted,
     });
 
     if (isPurchased) {
-      if (result.ts) {
-        await client.chat.postMessage({
-          channel: channelId,
-          thread_ts: result.ts,
-          text: [
-            `📦 購入済申請を受け付けました（${userName}）`,
-            `📎 納品書・領収書をこのスレッドに添付してください。`,
-            `⏸️ 証憑が添付されるまで、経理処理は保留されます。`,
-          ].join("\n"),
-        });
-      }
-      await notifyOps(client, `📦 *購入済申請* ${poNumber} — ${itemName} ${amountStr}（<@${userId}>）— 証憑待ち`);
-    } else {
-      if (approverSlackId && result.ts) {
+      if (resultTs) {
         try {
-          await sendApprovalDM(client, requestInfo, channelId, result.ts);
+          await client.chat.postMessage({
+            channel: channelId,
+            thread_ts: resultTs,
+            text: [
+              `📦 購入済申請を受け付けました（${userName}）`,
+              `📎 納品書・領収書をこのスレッドに添付してください。`,
+              `⏸️ 証憑が添付されるまで、経理処理は保留されます。`,
+            ].join("\n"),
+          });
+        } catch (e) {
+          console.error("[web-purchase] Failed to post purchased guide:", e);
+        }
+      }
+      try {
+        await notifyOps(client, `📦 *購入済申請* ${poNumber} — ${itemName} ${amountStr}（<@${userId}>）— 証憑待ち`);
+      } catch (e) {
+        console.error("[web-purchase] Failed to notify OPS:", e);
+      }
+    } else {
+      if (approverSlackId && resultTs) {
+        try {
+          await sendApprovalDM(client, requestInfo, channelId, resultTs);
         } catch (dmError) {
           console.error("[web-purchase] Failed to send approval DM:", dmError);
         }
       }
-      await notifyOps(client, `🔵 *新規申請* ${poNumber} — ${itemName} ${amountStr}（<@${userId}>）— 承認待ち`);
+      try {
+        await notifyOps(client, `🔵 *新規申請* ${poNumber} — ${itemName} ${amountStr}（<@${userId}>）— 承認待ち`);
+      } catch (e) {
+        console.error("[web-purchase] Failed to notify OPS:", e);
+      }
     }
 
     // 追加品目の登録（一括申請）
     const extraItemsRaw = (formData.get("extra_items") as string)?.trim() || "[]";
     try {
       const extraItems = JSON.parse(extraItemsRaw) as { itemName: string; amount: number; quantity: number; url: string }[];
-      const extraSlackLink = result.ts
-        ? `https://slack.com/archives/${channelId}/p${result.ts.replace(".", "")}`
+      const extraSlackLink = resultTs
+        ? `https://slack.com/archives/${channelId}/p${resultTs.replace(".", "")}`
         : "";
       for (const extra of extraItems) {
         if (!extra.itemName || !extra.amount) continue;
@@ -260,7 +290,7 @@ export async function POST(request: NextRequest) {
           paymentMethod,
           accountTitle: extraEstimation.account + (extraEstimation.subAccount ? `（${extraEstimation.subAccount}）` : ""),
           remarks: `[一括申請: ${poNumber}]`,
-          slackTs: result.ts || "",
+          slackTs: resultTs || "",
           slackLink: extraSlackLink,
           isPurchased,
         }).catch((e) => console.error("[web-purchase] Extra item GAS error:", e));
@@ -269,7 +299,11 @@ export async function POST(request: NextRequest) {
       // JSON parse error - ignore
     }
 
-    return NextResponse.json({ ok: true, poNumber });
+    return NextResponse.json({
+      ok: true,
+      poNumber,
+      ...(slackPosted ? {} : { warning: "申請データは保存されましたが、Slack通知に失敗しました。管理者に連絡してください。" }),
+    });
   } catch (error) {
     console.error("[web-purchase] submit error:", error);
     return NextResponse.json(

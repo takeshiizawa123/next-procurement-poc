@@ -884,6 +884,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
             const { uploadReceiptToMfExpense } = await import("@/lib/mf-expense");
             const fileRes = await fetch(fileUrls[0], {
               headers: { Authorization: `Bearer ${botToken}` },
+              signal: AbortSignal.timeout(15000),
             });
             if (fileRes.ok) {
               const buf = Buffer.from(await fileRes.arrayBuffer());
@@ -903,6 +904,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
             const botToken = process.env.SLACK_BOT_TOKEN || "";
             const fileRes = await fetch(fileUrls[0], {
               headers: { Authorization: `Bearer ${botToken}` },
+              signal: AbortSignal.timeout(15000),
             });
             if (fileRes.ok) {
               const buf = Buffer.from(await fileRes.arrayBuffer());

@@ -9,6 +9,7 @@ import {
   useRef,
   useEffect,
 } from "react";
+import { apiFetch } from "@/lib/api-client";
 
 type FormState = {
   ok: boolean;
@@ -78,7 +79,7 @@ async function submitPurchase(
   formData: FormData,
 ): Promise<FormState> {
   try {
-    const res = await fetch("/api/purchase/submit", {
+    const res = await apiFetch("/api/purchase/submit", {
       method: "POST",
       body: formData,
     });
@@ -446,13 +447,13 @@ function PurchaseFormInner() {
 
   // 従業員マスタ・購入先一覧を取得
   useEffect(() => {
-    fetch("/api/employees")
+    apiFetch("/api/employees")
       .then((r) => r.json())
       .then((d: { employees?: Employee[] }) => {
         if (d.employees) setEmployees(d.employees);
       })
       .catch(() => {});
-    fetch("/api/suppliers")
+    apiFetch("/api/suppliers")
       .then((r) => r.json())
       .then((d: { suppliers?: string[] }) => {
         if (d.suppliers) setSupplierSuggestions(d.suppliers);
@@ -467,7 +468,7 @@ function PurchaseFormInner() {
       amount: String(totalAmount),
       isPurchased: String(isPurchased),
     });
-    fetch(`/api/purchase/approval-route?${params}`)
+    apiFetch(`/api/purchase/approval-route?${params}`)
       .then((r) => r.json())
       .then((d: { steps?: ApprovalStep[]; summary?: string; requiresDeptHead?: boolean }) => {
         setApprovalSteps(d.steps || []);
@@ -579,7 +580,7 @@ function PurchaseFormInner() {
   const loadPastRequests = async () => {
     setPastLoading(true);
     try {
-      const res = await fetch("/api/purchase/recent?limit=20");
+      const res = await apiFetch("/api/purchase/recent?limit=20");
       const data = await res.json();
       setPastRequests(data.requests || []);
       setShowPastRequests(true);
@@ -653,8 +654,8 @@ function PurchaseFormInner() {
     });
 
     const [dupRes, acctRes] = await Promise.allSettled([
-      fetch(`/api/purchase/check-duplicate?${dupParams}`).then((r) => r.json()),
-      fetch(`/api/purchase/estimate-account?${acctParams}`).then((r) => r.json()),
+      apiFetch(`/api/purchase/check-duplicate?${dupParams}`).then((r) => r.json()),
+      apiFetch(`/api/purchase/estimate-account?${acctParams}`).then((r) => r.json()),
     ]);
 
     if (dupRes.status === "fulfilled") {

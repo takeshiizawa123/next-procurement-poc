@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getJournals } from "@/lib/mf-accounting";
 import { getEmployeeCards } from "@/lib/gas-client";
+import { requireBearerAuth } from "@/lib/api-auth";
 
 /**
- * 引落照合API — 未払金(請求)集計
+ * 引落照合API — 未払金(請求)集計（認証必須）
  * POST /api/admin/card-matching/withdrawal
  *
  * Body: { month: string }  // "2026-03" = 利用月（引落は翌月）
@@ -12,6 +13,9 @@ import { getEmployeeCards } from "@/lib/gas-client";
  * カード別の内訳を返す。フロントはCSVの引落額と突合する。
  */
 export async function POST(request: NextRequest) {
+  const authError = requireBearerAuth(request);
+  if (authError) return authError;
+
   try {
     const { month } = (await request.json()) as { month: string };
 

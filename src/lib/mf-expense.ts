@@ -59,6 +59,7 @@ async function expenseRequest<T>(
       "Content-Type": "application/json",
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(15000),
   });
 
   if (!res.ok) {
@@ -103,6 +104,7 @@ export async function uploadReceiptToMfExpense(
       Authorization: `Bearer ${MF_EXPENSE_TOKEN}`,
     },
     body: formData,
+    signal: AbortSignal.timeout(30000),
   });
 
   if (!res.ok) {

@@ -6,9 +6,10 @@ import {
 } from "@/lib/gas-client";
 import { getJournals } from "@/lib/mf-accounting";
 import { executeMatching, type CardStatementInput } from "@/lib/card-matcher";
+import { requireBearerAuth } from "@/lib/api-auth";
 
 /**
- * カード明細照合API
+ * カード明細照合API（認証必須）
  * POST /api/admin/card-matching/execute
  *
  * Body: {
@@ -21,6 +22,9 @@ import { executeMatching, type CardStatementInput } from "@/lib/card-matcher";
  * 2フェーズ照合を実行、4区分の結果を返す。
  */
 export async function POST(request: NextRequest) {
+  const authError = requireBearerAuth(request);
+  if (authError) return authError;
+
   try {
     const body = (await request.json()) as {
       month: string;

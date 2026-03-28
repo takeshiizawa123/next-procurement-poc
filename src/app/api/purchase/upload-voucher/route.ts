@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSlackClient } from "@/lib/slack";
 import { updateStatus } from "@/lib/gas-client";
+import { requireApiKey } from "@/lib/api-auth";
 
 /**
- * 証憑アップロードAPI（Webマイページ用）
+ * 証憑アップロードAPI（Webマイページ用・APIキー認証）
  * POST /api/purchase/upload-voucher
  *
  * multipart/form-data:
@@ -14,6 +15,8 @@ import { updateStatus } from "@/lib/gas-client";
  * Slackスレッドにファイルを投稿し、GASステータスを更新する。
  */
 export async function POST(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;

@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { apiFetch } from "@/lib/api-client";
 
 interface PurchaseRequest {
   prNumber: string;
@@ -69,7 +70,7 @@ function VoucherUploadButton({ prNumber, slackLink }: { prNumber: string; slackL
       formData.append("file", file);
       formData.append("prNumber", prNumber);
       formData.append("slackLink", slackLink);
-      const res = await fetch("/api/purchase/upload-voucher", {
+      const res = await apiFetch("/api/purchase/upload-voucher", {
         method: "POST",
         body: formData,
       });
@@ -115,7 +116,7 @@ function MyPageInner() {
 
   useEffect(() => {
     setLoading(true);
-    fetch("/api/purchase/recent?limit=30")
+    apiFetch("/api/purchase/recent?limit=30")
       .then((r) => r.json())
       .then((d: { requests?: PurchaseRequest[] }) => {
         setRequests(d.requests || []);

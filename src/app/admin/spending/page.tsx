@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "@/lib/api-client";
 
 // --- 型定義 ---
 
@@ -62,7 +63,7 @@ export default function SpendingDashboard() {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/admin/spending?months=${months}`);
+      const res = await apiFetch(`/api/admin/spending?months=${months}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "取得に失敗しました");
       setData(json);

@@ -13,6 +13,13 @@
 const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL || "";
 const GAS_API_KEY = process.env.GAS_API_KEY || "";
 
+const GAS_MAX_RETRIES = 2;
+const GAS_RETRY_BASE_MS = 1000;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface GasResponse<T = Record<string, unknown>> {
   success: boolean;
   data: T | null;
@@ -61,23 +68,42 @@ async function callGasPost<T = Record<string, unknown>>(
   // APIキーはクエリパラメータ + bodyの両方に含める（リダイレクト対策）
   const url = `${GAS_WEB_APP_URL}?key=${encodeURIComponent(GAS_API_KEY)}`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-    },
-    body: JSON.stringify({ apiKey: GAS_API_KEY, action, ...payload }),
-    redirect: "follow",
-  });
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= GAS_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = GAS_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+      console.warn(`[gas-client] POST retry ${attempt}/${GAS_MAX_RETRIES} after ${delay}ms`);
+      await sleep(delay);
+    }
 
-  const text = await response.text();
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+        },
+        body: JSON.stringify({ apiKey: GAS_API_KEY, action, ...payload }),
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+      });
 
-  try {
-    return JSON.parse(text) as GasResponse<T>;
-  } catch {
-    console.error("[gas-client] Failed to parse GAS response:", text.substring(0, 200));
-    throw new Error(`GAS response is not valid JSON (status: ${response.status})`);
+      const text = await response.text();
+
+      try {
+        return JSON.parse(text) as GasResponse<T>;
+      } catch {
+        console.error("[gas-client] Failed to parse GAS response:", text.substring(0, 200));
+        throw new Error(`GAS response is not valid JSON (status: ${response.status})`);
+      }
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      if (lastError.name === "AbortError" || lastError.name === "TimeoutError") {
+        continue; // timeout → retry
+      }
+      throw lastError; // non-retryable error
+    }
   }
+  throw lastError!;
 }
 
 /**
@@ -103,15 +129,33 @@ async function callGasGet<T = Record<string, unknown>>(
   });
   const url = `${GAS_WEB_APP_URL}?${searchParams.toString()}`;
 
-  const response = await fetch(url, { redirect: "follow" });
-  const text = await response.text();
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= GAS_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = GAS_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+      console.warn(`[gas-client] GET retry ${attempt}/${GAS_MAX_RETRIES} after ${delay}ms`);
+      await sleep(delay);
+    }
 
-  try {
-    return JSON.parse(text) as GasResponse<T>;
-  } catch {
-    console.error("[gas-client] Failed to parse GAS response:", text.substring(0, 200));
-    throw new Error(`GAS response is not valid JSON (status: ${response.status})`);
+    try {
+      const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15000) });
+      const text = await response.text();
+
+      try {
+        return JSON.parse(text) as GasResponse<T>;
+      } catch {
+        console.error("[gas-client] Failed to parse GAS response:", text.substring(0, 200));
+        throw new Error(`GAS response is not valid JSON (status: ${response.status})`);
+      }
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      if (lastError.name === "AbortError" || lastError.name === "TimeoutError") {
+        continue;
+      }
+      throw lastError;
+    }
   }
+  throw lastError!;
 }
 
 // ===========================================
