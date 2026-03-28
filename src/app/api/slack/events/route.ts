@@ -342,7 +342,7 @@ function buildTripModal(channelId: string) {
         element: {
           type: "plain_text_input",
           action_id: "transport",
-          placeholder: { type: "plain_text", text: "例: 新幹線のぞみ 東京→新大阪" },
+          placeholder: { type: "plain_text", text: "例: 新幹線のぞみ 東京→新大阪 / レンタカー / タイムズカー" },
         },
       },
       {
@@ -774,6 +774,10 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
         `種別: ${voucherType} / 形式: ${fileFormat}`,
       ];
 
+      // 購買申請データを取得（OCR照合 + 証憑分岐で使用）
+      const { getStatus } = await import("@/lib/gas-client");
+      const statusResult = await getStatus(prNumber);
+
       // OCR金額照合（Gemini APIキーがあり、画像/PDFの場合）
       if (process.env.GEMINI_API_KEY && fileUrls.length > 0 && (fileMimeTypes[0]?.startsWith("image/") || fileMimeTypes[0] === "application/pdf")) {
         try {
@@ -781,9 +785,6 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
           const { base64, mimeType } = await downloadSlackFile(fileUrls[0], botToken);
           const ocrResult = await extractFromImage(base64, mimeType);
 
-          // 購買申請の金額を取得して照合
-          const { getStatus } = await import("@/lib/gas-client");
-          const statusResult = await getStatus(prNumber);
           if (statusResult.success && statusResult.data) {
             const requestedAmount = Number((statusResult.data as Record<string, unknown>)["金額"] || 0);
             if (requestedAmount > 0 && ocrResult.amount > 0) {
@@ -805,27 +806,98 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
         }
       }
 
-      // MF経費に証憑を自動転送（MF_EXPENSE_ACCESS_TOKEN設定時のみ）
-      if (process.env.MF_EXPENSE_ACCESS_TOKEN && fileUrls.length > 0) {
-        try {
-          const botToken = process.env.SLACK_BOT_TOKEN || "";
-          const { uploadReceiptToMfExpense } = await import("@/lib/mf-expense");
-          const fileRes = await fetch(fileUrls[0], {
-            headers: { Authorization: `Bearer ${botToken}` },
-          });
-          if (fileRes.ok) {
-            const buf = Buffer.from(await fileRes.arrayBuffer());
-            const mfResult = await uploadReceiptToMfExpense(buf, fileNames[0] || "receipt.pdf", fileMimeTypes[0] || "application/pdf");
-            confirmLines.push(`MF経費に証憑を転送しました。MF経費で経費申請の提出をお願いします。`);
-            console.log(`[file-share] MF Expense uploaded: ${prNumber}`, mfResult);
-          }
-        } catch (mfErr) {
-          console.error(`[file-share] MF Expense upload error for ${prNumber}:`, mfErr);
-          // MF転送失敗は購買システムの証憑処理には影響しない
-        }
-      }
+      // 支払方法で証憑転送先を分岐
+      const paymentMethod = String((statusResult?.data as Record<string, unknown>)?.["支払方法"] || "");
+      const isEmployeeExpense = paymentMethod.includes("立替");
 
-      confirmLines.push(`📋 MF経費で経費申請の提出をお忘れなく。それ以外の作業は完了です。`);
+      if (isEmployeeExpense) {
+        // 従業員立替 → MF経費に証憑転送
+        if (process.env.MF_EXPENSE_ACCESS_TOKEN && fileUrls.length > 0) {
+          try {
+            const botToken = process.env.SLACK_BOT_TOKEN || "";
+            const { uploadReceiptToMfExpense } = await import("@/lib/mf-expense");
+            const fileRes = await fetch(fileUrls[0], {
+              headers: { Authorization: `Bearer ${botToken}` },
+            });
+            if (fileRes.ok) {
+              const buf = Buffer.from(await fileRes.arrayBuffer());
+              const mfResult = await uploadReceiptToMfExpense(buf, fileNames[0] || "receipt.pdf", fileMimeTypes[0] || "application/pdf");
+              confirmLines.push(`MF経費に証憑を転送しました。MF経費で経費申請の提出をお願いします。`);
+              console.log(`[file-share] MF Expense uploaded: ${prNumber}`, mfResult);
+            }
+          } catch (mfErr) {
+            console.error(`[file-share] MF Expense upload error for ${prNumber}:`, mfErr);
+          }
+        }
+        confirmLines.push(`📋 MF経費で経費申請の提出をお忘れなく。それ以外の作業は完了です。`);
+      } else {
+        // 会社カード・請求書払い → Google Drive + MF会計Plus API仕訳
+        if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY && fileUrls.length > 0) {
+          try {
+            const botToken = process.env.SLACK_BOT_TOKEN || "";
+            const fileRes = await fetch(fileUrls[0], {
+              headers: { Authorization: `Bearer ${botToken}` },
+            });
+            if (fileRes.ok) {
+              const buf = Buffer.from(await fileRes.arrayBuffer());
+              const statusData = statusResult?.data as Record<string, unknown> | undefined;
+              const txDate = String(statusData?.["取引日"] || new Date().toISOString().slice(0, 10));
+              const txAmount = Number(statusData?.["金額"] || 0);
+              const supplier = String(statusData?.["購入先"] || "不明");
+
+              // Google Driveにアップロード
+              const { uploadVoucherToDrive } = await import("@/lib/google-drive");
+              const driveResult = await uploadVoucherToDrive({
+                fileBuffer: buf,
+                mimeType: fileMimeTypes[0] || "application/pdf",
+                transactionDate: txDate,
+                amount: txAmount,
+                supplierName: supplier,
+                poNumber: prNumber,
+                docType: voucherType,
+                originalFileName: fileNames[0] || "receipt.pdf",
+              });
+              confirmLines.push(`Google Driveに証憑を保存しました: ${driveResult.fileName}`);
+              console.log(`[file-share] Drive uploaded: ${prNumber}`, driveResult);
+
+              // MF会計Plus仕訳を作成（Driveリンクをメモに含める）
+              if (process.env.MF_OAUTH_CLIENT_ID && txAmount > 0) {
+                try {
+                  const { buildJournalFromPurchase, createJournal } = await import("@/lib/mf-accounting");
+                  const accountTitle = String(statusData?.["勘定科目"] || "消耗品費");
+                  const department = String(statusData?.["部門"] || "");
+                  const journalReq = await buildJournalFromPurchase({
+                    transactionDate: txDate,
+                    accountTitle,
+                    amount: txAmount,
+                    paymentMethod,
+                    supplierName: supplier,
+                    department: department || undefined,
+                    poNumber: prNumber,
+                    memo: `${prNumber} ${supplier} 証憑: ${driveResult.webViewLink}`,
+                  });
+                  const journalRes = await createJournal(journalReq);
+                  confirmLines.push(`MF会計Plusに仕訳を登録しました（ID: ${journalRes.id}）`);
+                  console.log(`[file-share] Journal created: ${prNumber}`, journalRes);
+
+                  // GASにStage 1仕訳IDを記録
+                  await updateStatus(prNumber, {
+                    "仕訳ID": String(journalRes.id),
+                    "Stage": "1",
+                  });
+                } catch (journalErr) {
+                  console.error(`[file-share] Journal create error for ${prNumber}:`, journalErr);
+                  confirmLines.push(`⚠️ 仕訳登録に失敗しました。経理に手動登録を依頼してください。`);
+                }
+              }
+            }
+          } catch (driveErr) {
+            console.error(`[file-share] Drive upload error for ${prNumber}:`, driveErr);
+            confirmLines.push(`⚠️ Drive保存に失敗しました。手動でアップロードしてください。`);
+          }
+        }
+        confirmLines.push(`📋 証憑処理が完了しました。経理の仕訳承認をお待ちください。`);
+      }
       await client.chat.postMessage({
         channel: channelId,
         thread_ts: threadTs,
