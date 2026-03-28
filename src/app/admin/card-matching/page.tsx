@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 
 // --- 型定義 ---
 
@@ -200,6 +201,38 @@ export default function CardMatchingPage() {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   });
+
+  // デモモード（?demo=1 でモックデータ表示 — マニュアルスクリーンショット用）
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get("demo") !== "1") return;
+    setConfidentMatches([
+      { poNumber: "PO-202603-0042", applicant: "田中太郎", supplier: "Amazon", predictedAmount: 52800, actualAmount: 52800, diff: 0, cardLast4: "3815", date: "2026-03-15", matchMethod: "prediction", score: 100 },
+      { poNumber: "PO-202603-0043", applicant: "田中太郎", supplier: "モノタロウ", predictedAmount: 33000, actualAmount: 33550, diff: 550, cardLast4: "3815", date: "2026-03-18", matchMethod: "prediction", score: 90 },
+      { poNumber: "TR-202604-0015", applicant: "田中太郎", supplier: "JR東海", predictedAmount: 27500, actualAmount: 27500, diff: 0, cardLast4: "3815", date: "2026-03-20", matchMethod: "prediction", score: 100 },
+      { poNumber: "PO-202603-0044", applicant: "管理本部", supplier: "Askul", predictedAmount: 8800, actualAmount: 8800, diff: 0, cardLast4: "7201", date: "2026-03-22", matchMethod: "score", score: 85 },
+      { poNumber: "PO-202603-0045", applicant: "鈴木花子", supplier: "ヨドバシカメラ", predictedAmount: 15800, actualAmount: 15800, diff: 0, cardLast4: "4922", date: "2026-03-14", matchMethod: "prediction", score: 100 },
+      { poNumber: "PO-202603-0046", applicant: "佐藤次郎", supplier: "ミスミ", predictedAmount: 42000, actualAmount: 42350, diff: 350, cardLast4: "5533", date: "2026-03-16", matchMethod: "prediction", score: 90 },
+      { poNumber: "PO-202603-0047", applicant: "管理本部", supplier: "コクヨ", predictedAmount: 6200, actualAmount: 6200, diff: 0, cardLast4: "7201", date: "2026-03-19", matchMethod: "score", score: 82 },
+    ]);
+    setCandidates([
+      { poNumber: "PO-202603-0048", applicant: "鈴木花子", supplier: "楽天市場", amount: 15400, date: "2026-03-20", cardLast4: "4922", candidates: [{ date: "2026-03-20", amount: 15400, merchant: "RAKUTEN ICHIBA", cardLast4: "4922", method: "予測マッチ", score: 100 }, { date: "2026-03-21", amount: 15400, merchant: "RAKUTEN PAY", cardLast4: "4922", method: "スコアリング", score: 65 }] },
+      { poNumber: "PO-202603-0051", applicant: "管理本部", supplier: "ビックカメラ", amount: 89000, date: "2026-03-25", cardLast4: "7201", candidates: [{ date: "2026-03-25", amount: 89100, merchant: "BICCAMERA", cardLast4: "7201", method: "予測マッチ", score: 70 }] },
+    ]);
+    setUnmatched([
+      { poNumber: "PO-202603-0052", applicant: "田中太郎", supplier: "海外EC", amount: 24500, cardLast4: "3815", applicationDate: "2026-03-28" },
+    ]);
+    setUnreported([
+      { date: "2026-03-18", amount: 1200, merchant: "TAXI JAPAN", cardLast4: "3815", employee: "田中太郎" },
+      { date: "2026-03-22", amount: 3500, merchant: "レストランABC", cardLast4: "4922", employee: "鈴木花子" },
+      { date: "2026-03-25", amount: 980, merchant: "LAWSON", cardLast4: "3815", employee: "田中太郎" },
+      { date: "2026-03-26", amount: 5200, merchant: "東急ハンズ", cardLast4: "5533", employee: "佐藤次郎" },
+      { date: "2026-03-27", amount: 1800, merchant: "STARBUCKS", cardLast4: "4922", employee: "鈴木花子" },
+    ]);
+    setUsageCsvLoaded(true);
+    setUsageItems([{ id: "demo", date: "03/15", merchant: "Demo", amount: 0, cardHolder: "", cardLast4: "", status: "確定", currency: "JPY" }]);
+    setActiveTab("confirmed");
+  }, [searchParams]);
 
   const executeMatching = useCallback(async (items: CardUsageItem[]) => {
     setIsExecuting(true);
