@@ -11,14 +11,15 @@ import {
   buildPurchasedRequestBlocks,
   sendApprovalDM,
   notifyOps,
+  calcPaymentDueDate,
   type PurchaseFormData,
   type RequestInfo,
 } from "@/lib/slack";
-import { registerPurchase, updateStatus, getRecentRequests } from "@/lib/gas-client";
+import { registerPurchase, updateStatus, getRecentRequests, getEmployees } from "@/lib/gas-client";
 import { estimateAccount } from "@/lib/account-estimator";
 import { resolveApprovalRoute } from "@/lib/approval-router";
 import { createTripExpense } from "@/lib/mf-expense";
-import { extractFromImage, matchAmount, downloadSlackFile } from "@/lib/ocr";
+import { extractFromImage, matchAmount, downloadSlackFile, verifyInvoiceRegistration } from "@/lib/ocr";
 
 // Vercel Serverless の最大実行時間
 export const maxDuration = 10;
@@ -368,6 +369,18 @@ function buildTripModal(channelId: string) {
           placeholder: { type: "plain_text", text: "例: じゃらんで予約済み / ホテル名" },
         },
       },
+      {
+        type: "input",
+        block_id: "hubspot_block",
+        label: { type: "plain_text", text: "HubSpot案件番号" },
+        hint: { type: "plain_text", text: "案件に紐づく出張の場合に入力" },
+        optional: true,
+        element: {
+          type: "plain_text_input",
+          action_id: "hubspot_deal_id",
+          placeholder: { type: "plain_text", text: "例: 12345678" },
+        },
+      },
     ],
   };
 }
@@ -387,6 +400,7 @@ async function handleTripSubmission(
   const transport = vals.transport_block?.transport?.value || "";
   const amount = parseInt(vals.amount_block?.amount?.value || "0", 10);
   const accommodation = vals.accommodation_block?.accommodation?.value || "";
+  const hubspotDealId = vals.hubspot_block?.hubspot_deal_id?.value || "";
 
   // バリデーション
   const tripErrors: string[] = [];
@@ -417,11 +431,36 @@ async function handleTripSubmission(
     // ignore
   }
 
+  // 部門取得（従業員マスタから）
+  let department = "";
+  try {
+    const empResult = await getEmployees();
+    if (empResult.success && empResult.data?.employees) {
+      const emp = empResult.data.employees.find(
+        (e) => e.slackId === userId || e.name === userName,
+      );
+      if (emp) {
+        department = emp.departmentName;
+        if (!userName || userName === userId) userName = emp.name;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
   // 泊数計算
   const start = new Date(startDate);
   const end = new Date(endDate);
   const nights = Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000));
   const tripType = nights > 0 ? `${nights}泊${nights + 1}日` : "日帰り";
+
+  // 日当計算（宿泊3,000円/日、日帰り1,000円）
+  const DAILY_ALLOWANCE_OVERNIGHT = 3000;
+  const DAILY_ALLOWANCE_DAY_TRIP = 1000;
+  const dailyAllowance = nights > 0
+    ? DAILY_ALLOWANCE_OVERNIGHT * (nights + 1)
+    : DAILY_ALLOWANCE_DAY_TRIP;
+  const totalEstimate = amount + dailyAllowance;
 
   // #出張チャンネルに投稿
   const channelId = targetChannelId || TRIP_CHANNEL;
@@ -446,11 +485,16 @@ async function handleTripSubmission(
         { type: "mrkdwn", text: `*目的:* ${purpose}` },
         { type: "mrkdwn", text: `*交通:* ${transport}` },
         { type: "mrkdwn", text: `*概算額:* ¥${amount.toLocaleString()}` },
-        { type: "mrkdwn", text: `*申請者:* <@${userId}>` },
+        { type: "mrkdwn", text: `*日当:* ¥${dailyAllowance.toLocaleString()}（${nights > 0 ? `¥${DAILY_ALLOWANCE_OVERNIGHT.toLocaleString()}×${nights + 1}日` : "日帰り"}）` },
+        { type: "mrkdwn", text: `*合計見込:* ¥${totalEstimate.toLocaleString()}` },
+        { type: "mrkdwn", text: `*申請者:* <@${userId}>${department ? `（${department}）` : ""}` },
       ],
     },
     ...(accommodation
       ? [{ type: "section", text: { type: "mrkdwn", text: `*宿泊:* ${accommodation}` } }]
+      : []),
+    ...(hubspotDealId
+      ? [{ type: "section", text: { type: "mrkdwn", text: `*HubSpot案件:* ${hubspotDealId}` } }]
       : []),
     {
       type: "context",
@@ -490,11 +534,12 @@ async function handleTripSubmission(
     text: [
       `✈️ 出張申請を受け付けました`,
       `行き先: ${destination}（${startDate} 〜 ${endDate}）`,
-      `概算額: ¥${amount.toLocaleString()}`,
+      `概算額: ¥${amount.toLocaleString()} + 日当 ¥${dailyAllowance.toLocaleString()} = 合計見込 ¥${totalEstimate.toLocaleString()}`,
       ...(mfExpenseId ? [`MF経費ID: ${mfExpenseId}`] : []),
       "",
       `交通費の精算は、出張後にMFビジネスカードの明細が反映されたら自動処理されます。`,
       `宿泊費はじゃらんCSV取込で処理されます。`,
+      `日当は給与と合わせて支給されます。`,
     ].join("\n"),
   });
 
@@ -580,6 +625,7 @@ async function handlePurchaseSubmission(
       applicantSlackId: userId,
       approverSlackId: isPurchased ? "" : approverSlackId,
       inspectorSlackId: formData.inspectorSlackId || userId,
+      paymentDueDate: formData.paymentMethod.includes("請求書") ? calcPaymentDueDate() : undefined,
     };
 
     // 購入済 → 承認・発注スキップ、即「検収済・証憑待ち」
@@ -797,8 +843,26 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
             }
           }
 
-          if (ocrResult.is_qualified_invoice && ocrResult.registration_number) {
-            confirmLines.push(`適格請求書: ${ocrResult.registration_number}`);
+          // 税率情報の表示
+          if (ocrResult.tax_rate != null) {
+            const taxInfo = ocrResult.tax_amount
+              ? `税率${ocrResult.tax_rate}%（税額 ¥${ocrResult.tax_amount.toLocaleString()}）`
+              : `税率${ocrResult.tax_rate}%`;
+            confirmLines.push(`消費税: ${taxInfo}`);
+          }
+
+          // 適格請求書の検証
+          if (ocrResult.registration_number) {
+            const verification = await verifyInvoiceRegistration(ocrResult.registration_number);
+            if (verification.valid) {
+              confirmLines.push(`適格請求書: ${verification.registrationNumber}（${verification.name}）`);
+            } else {
+              confirmLines.push(`⚠️ 適格請求書: ${verification.registrationNumber} — ${verification.error}`);
+              await notifyOps(client, `⚠️ *適格請求書検証失敗* ${prNumber} — ${verification.registrationNumber}: ${verification.error}`);
+            }
+          } else if (ocrResult.document_type === "invoice") {
+            confirmLines.push(`⚠️ 登録番号なし（適格請求書でない可能性）`);
+            await notifyOps(client, `⚠️ *登録番号なし* ${prNumber} — 請求書に適格請求書の登録番号が見当たりません`);
           }
         } catch (ocrErr) {
           console.error(`[file-share] OCR error for ${prNumber}:`, ocrErr);

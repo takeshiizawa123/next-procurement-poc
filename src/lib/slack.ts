@@ -951,6 +951,17 @@ export interface RequestInfo {
   applicantSlackId: string;
   approverSlackId: string;
   inspectorSlackId: string;
+  paymentDueDate?: string; // 支払期日 YYYY-MM-DD（請求書払い用）
+}
+
+/**
+ * 請求書払いの支払期日を計算（月末締め翌月末払い）
+ */
+export function calcPaymentDueDate(baseDate?: Date): string {
+  const d = baseDate || new Date();
+  // 当月末締め → 翌月末
+  const nextMonth = new Date(d.getFullYear(), d.getMonth() + 2, 0);
+  return nextMonth.toISOString().slice(0, 10);
 }
 
 /**
@@ -976,7 +987,7 @@ export function buildNewRequestBlocks(info: RequestInfo) {
         { type: "mrkdwn", text: `*申請者:* ${info.applicant}` },
         { type: "mrkdwn", text: `*部門:* ${info.department}` },
         { type: "mrkdwn", text: `*購入先:* ${info.supplierName}` },
-        { type: "mrkdwn", text: `*支払:* ${info.paymentMethod}` },
+        { type: "mrkdwn", text: `*支払:* ${info.paymentMethod}${info.paymentDueDate ? `（期日: ${info.paymentDueDate}）` : ""}` },
       ],
     },
     {

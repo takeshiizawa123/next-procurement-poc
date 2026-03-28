@@ -5,6 +5,7 @@ import {
   buildPurchasedRequestBlocks,
   sendApprovalDM,
   notifyOps,
+  calcPaymentDueDate,
   type RequestInfo,
 } from "@/lib/slack";
 import { registerPurchase, updateStatus, getEmployees, type Employee } from "@/lib/gas-client";
@@ -163,6 +164,7 @@ export async function POST(request: NextRequest) {
       applicantSlackId: userId.startsWith("U") ? userId : "",
       approverSlackId,
       inspectorSlackId: resolveInspector(formData, userId, employees),
+      paymentDueDate: paymentMethod.includes("請求書") ? calcPaymentDueDate() : undefined,
     };
 
     const blocks = isPurchased
