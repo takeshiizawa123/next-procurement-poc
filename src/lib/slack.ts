@@ -427,12 +427,60 @@ export const handleReturn: SlackActionHandler = async ({
     text: `返品処理（${userName}）`,
   });
 
+  // 取消仕訳の自動作成を試みる
+  let reversalNote = "仕訳が計上済みの場合、管理本部が取消仕訳を作成してください。";
+  const amountNum = parseInt((info?.amount || "0").replace(/[^\d]/g, ""), 10);
+  if (amountNum > 0) {
+    try {
+      const { createJournal, resolveAccountCode, resolveTaxCode } = await import("@/lib/mf-accounting");
+      const { estimateAccount } = await import("@/lib/account-estimator");
+
+      const estimation = estimateAccount(info?.itemName || "", info?.supplierName || "", amountNum);
+      const mainAccount = estimation.account.split("（")[0].trim();
+      const debitCode = await resolveAccountCode(mainAccount) || mainAccount;
+      const payMethod = info?.paymentMethod || "";
+      const isCard = payMethod.includes("カード");
+      const creditAccountName = isCard ? "未払金" : "買掛金";
+      const creditCode = await resolveAccountCode(creditAccountName) || creditAccountName;
+      const taxCode = await resolveTaxCode("課税仕入10%");
+      const taxValue = Math.floor(amountNum * 10 / 110);
+
+      const journal = await createJournal({
+        status: "draft",
+        transaction_date: new Date().toISOString().slice(0, 10),
+        journal_type: "journal_entry",
+        tags: [poNumber, "reversal"],
+        memo: `${poNumber} 返品取消仕訳 ${info?.supplierName || ""}`,
+        branches: [
+          {
+            remark: `${poNumber} ${info?.supplierName || ""} 返品取消`,
+            debitor: {
+              account_code: creditCode,
+              value: amountNum,
+            },
+            creditor: {
+              account_code: debitCode,
+              ...(taxCode ? { tax_code: taxCode } : {}),
+              value: amountNum,
+              tax_value: taxValue,
+            },
+          },
+        ],
+      });
+      reversalNote = `取消仕訳をドラフト作成しました（MF仕訳ID: ${journal.id}）。MF会計Plusで確認・承認してください。`;
+      console.log(`[return] Reversal journal created: ${journal.id} for ${poNumber}`);
+    } catch (e) {
+      console.error("[return] Reversal journal error:", e);
+      reversalNote = "取消仕訳の自動作成に失敗しました。管理本部が手動で作成してください。";
+    }
+  }
+
   await client.chat.postMessage({
     channel: channelId,
     thread_ts: messageTs,
     text: [
       `↩️ 返品処理を開始しました（${userName}）`,
-      `仕訳が計上済みの場合、管理本部が取消仕訳を作成してください。`,
+      reversalNote,
     ].join("\n"),
   });
 
@@ -443,7 +491,7 @@ export const handleReturn: SlackActionHandler = async ({
       `  品目: ${info?.itemName || ""}`,
       `  金額: ${info?.amount || ""}`,
       `  処理者: ${userName}`,
-      `  → 仕訳が計上済みの場合は取消仕訳を作成してください`,
+      `  → ${reversalNote}`,
     ].join("\n"),
   );
 

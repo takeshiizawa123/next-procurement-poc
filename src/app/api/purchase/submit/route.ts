@@ -209,14 +209,11 @@ export async function POST(request: NextRequest) {
     // 承認者メンションをスレッドに投稿（チャンネル投稿のテキストはブロック表示時に見えないため）
     if (!isPurchased && approverSlackId && resultTs) {
       const approverMention = `<@${approverSlackId}>`;
-      const secondMention = approvalRoute.requiresSecondApproval && approvalRoute.secondaryApprover
-        ? ` → <@${approvalRoute.secondaryApprover}>`
-        : "";
       try {
         await client.chat.postMessage({
           channel: channelId,
           thread_ts: resultTs,
-          text: `📋 承認依頼: ${approverMention}${secondMention}\n${approvalRoute.requiresSecondApproval ? "（10万円以上: 二段階承認）" : ""}`,
+          text: `📋 承認依頼: ${approverMention}`,
         });
       } catch (e) {
         console.error("[web-purchase] Failed to post approval mention:", e);

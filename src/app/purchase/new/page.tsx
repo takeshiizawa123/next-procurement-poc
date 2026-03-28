@@ -432,7 +432,6 @@ function PurchaseFormInner() {
   type ApprovalStep = { role: string; name: string; slackId: string };
   const [approvalSteps, setApprovalSteps] = useState<ApprovalStep[]>([]);
   const [approvalSummary, setApprovalSummary] = useState("");
-  const [requiresDeptHead, setRequiresDeptHead] = useState(false);
 
   // 勘定科目推定
   type AccountEstimation = { account: string; subAccount: string; confidence: "high" | "medium" | "low"; reason: string };
@@ -470,10 +469,9 @@ function PurchaseFormInner() {
     });
     apiFetch(`/api/purchase/approval-route?${params}`)
       .then((r) => r.json())
-      .then((d: { steps?: ApprovalStep[]; summary?: string; requiresDeptHead?: boolean }) => {
+      .then((d: { steps?: ApprovalStep[]; summary?: string }) => {
         setApprovalSteps(d.steps || []);
         setApprovalSummary(d.summary || "");
-        setRequiresDeptHead(d.requiresDeptHead || false);
       })
       .catch(() => {});
   }, [totalAmount, isPurchased, requestType]);
@@ -1068,9 +1066,9 @@ function PurchaseFormInner() {
 
               {/* 承認ルートプレビュー */}
               {requestType && approvalSummary && (
-                <div className={`mt-3 rounded-lg px-3 py-2 text-sm ${requiresDeptHead ? "bg-red-50 border border-red-200" : "bg-blue-50 border border-blue-200"}`}>
+                <div className="mt-3 rounded-lg px-3 py-2 text-sm bg-blue-50 border border-blue-200">
                   <div className="flex items-center gap-2">
-                    <span className={`font-medium ${requiresDeptHead ? "text-red-700" : "text-blue-700"}`}>
+                    <span className="font-medium text-blue-700">
                       承認ルート:
                     </span>
                     {isPurchased ? (

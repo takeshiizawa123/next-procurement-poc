@@ -37,7 +37,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       steps: [],
       summary: "購入済のため承認ステップはスキップされます",
-      requiresDeptHead: false,
     });
   }
 
@@ -53,15 +52,6 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  if (route.requiresSecondApproval && route.secondaryApprover) {
-    const name = await resolveSlackName(route.secondaryApprover);
-    steps.push({
-      role: "管理本部",
-      name,
-      slackId: route.secondaryApprover,
-    });
-  }
-
   const summary = steps.length === 0
     ? "承認者が設定されていません（従業員マスタに部門長SlackIDを設定してください）"
     : steps.map((s) => s.name).join(" → ");
@@ -69,6 +59,5 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     steps,
     summary,
-    requiresDeptHead: route.requiresSecondApproval,
   });
 }

@@ -6,10 +6,6 @@ const ADMIN_APPROVER = process.env.SLACK_ADMIN_APPROVER || "";
 export interface ApprovalRoute {
   /** 承認者（部門長）の SlackID */
   primaryApprover: string;
-  /** @deprecated 二段階承認は廃止。常に空文字 */
-  secondaryApprover: string;
-  /** @deprecated 常にfalse */
-  requiresSecondApproval: boolean;
   /** マッチした従業員情報 */
   employee: Employee | null;
 }
@@ -63,14 +59,8 @@ export async function resolveApprovalRoute(
     // 従業員マスタ取得失敗時はデフォルト承認者を使用
   }
 
-  // 二段階承認は廃止 — 部門長承認のみ
-  const requiresSecondApproval = false;
-  const secondaryApprover = "";
-
   return {
     primaryApprover,
-    secondaryApprover,
-    requiresSecondApproval,
     employee,
   };
 }

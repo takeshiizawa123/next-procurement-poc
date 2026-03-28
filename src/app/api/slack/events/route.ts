@@ -676,13 +676,10 @@ async function handlePurchaseSubmission(
     // 承認者メンションをスレッドに投稿
     if (!isPurchased && approverSlackId && result.ts) {
       const approverMention = `<@${approverSlackId}>`;
-      const secondMention = approvalRoute.requiresSecondApproval && approvalRoute.secondaryApprover
-        ? ` → <@${approvalRoute.secondaryApprover}>`
-        : "";
       await client.chat.postMessage({
         channel: channelId,
         thread_ts: result.ts,
-        text: `📋 承認依頼: ${approverMention}${secondMention}\n${approvalRoute.requiresSecondApproval ? "（10万円以上: 二段階承認）" : ""}`,
+        text: `📋 承認依頼: ${approverMention}`,
       });
     }
 
