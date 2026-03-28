@@ -1106,6 +1106,7 @@ function PurchaseFormInner() {
                 <option value="">選択してください</option>
                 <option value="会社カード">会社カード</option>
                 <option value="請求書払い">請求書払い</option>
+                <option value="請求書払い（前払い）">請求書払い（前払い）</option>
                 <option value="立替">立替</option>
               </select>
             </fieldset>

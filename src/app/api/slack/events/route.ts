@@ -625,7 +625,9 @@ async function handlePurchaseSubmission(
       applicantSlackId: userId,
       approverSlackId: isPurchased ? "" : approverSlackId,
       inspectorSlackId: formData.inspectorSlackId || userId,
-      paymentDueDate: formData.paymentMethod.includes("請求書") ? calcPaymentDueDate() : undefined,
+      paymentDueDate: formData.paymentMethod.includes("前払い")
+        ? new Date().toISOString().slice(0, 10)
+        : formData.paymentMethod.includes("請求書") ? calcPaymentDueDate() : undefined,
     };
 
     // 購入済 → 承認・発注スキップ、即「検収済・証憑待ち」

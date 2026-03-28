@@ -144,8 +144,16 @@ export const handleApprove: SlackActionHandler = async ({
       "検収ステータス": "検収済",
     }).catch((e) => console.error("[approve] GAS purchased update error:", e));
   } else {
+    // 前払い請求書の場合、OPSに先払い依頼を通知
+    if (payMethod.includes("前払い")) {
+      await notifyOps(
+        client,
+        `💰 *前払い依頼* ${poNumber} — ${info?.itemName || ""} ${info?.amount || ""}（${info?.supplierName || ""}）\n  → 承認済みです。先払い処理をお願いします。`,
+      );
+    }
+
     // 全件: 申請者が発注（カード/請求書問わず）
-    const isInvoice = payMethod === "請求書払い";
+    const isInvoice = payMethod.includes("請求書");
     if (applicantSlackId) {
       const orderMsg = isInvoice
         ? `✅ 購買申請 ${poNumber} が承認されました。発注してください。\n届いた請求書は管理本部に提出してください。\n発注後、チャンネルの [発注完了] ボタンを押してください。`
@@ -288,7 +296,7 @@ export const handleInspectionComplete: SlackActionHandler = async ({
   await client.chat.update({
     channel: channelId,
     ts: messageTs,
-    blocks: buildInspectedBlocks(poNumber, userName, info),
+    blocks: buildInspectedBlocks(poNumber, userName, info, actionValue),
     text: `検収済（${userName}）`,
   });
 
@@ -377,6 +385,99 @@ function buildCancelledBlocks(poNumber: string, canceller: string) {
         {
           type: "mrkdwn",
           text: `🚫 ステータス: *取消済* （${canceller} が取消）`,
+        },
+      ],
+    },
+  ];
+}
+
+/**
+ * 返品ボタン押下時の処理（検収済みの申請に対して）
+ * 権限: 申請者・検収者・管理本部メンバー
+ */
+export const handleReturn: SlackActionHandler = async ({
+  client,
+  body,
+  userId,
+  userName,
+  channelId,
+  messageTs,
+  actionValue,
+}) => {
+  const { poNumber, applicantSlackId, inspectorSlackId } = parseActionValue(actionValue);
+  const adminMembers = (process.env.SLACK_ADMIN_MEMBERS || "").split(",").filter(Boolean);
+
+  const allowed = [applicantSlackId, inspectorSlackId, ...adminMembers].filter(Boolean);
+  if (allowed.length > 0 && !allowed.includes(userId)) {
+    await client.chat.postEphemeral({
+      channel: channelId,
+      user: userId,
+      text: "⚠️ 返品処理の権限がありません。申請者・検収者・管理本部メンバーのみ操作できます。",
+    });
+    return;
+  }
+
+  const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
+  const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
+
+  await client.chat.update({
+    channel: channelId,
+    ts: messageTs,
+    blocks: buildReturnedBlocks(poNumber, userName, info),
+    text: `返品処理（${userName}）`,
+  });
+
+  await client.chat.postMessage({
+    channel: channelId,
+    thread_ts: messageTs,
+    text: [
+      `↩️ 返品処理を開始しました（${userName}）`,
+      `仕訳が計上済みの場合、管理本部が取消仕訳を作成してください。`,
+    ].join("\n"),
+  });
+
+  await notifyOps(
+    client,
+    [
+      `↩️ *返品処理* ${poNumber}`,
+      `  品目: ${info?.itemName || ""}`,
+      `  金額: ${info?.amount || ""}`,
+      `  処理者: ${userName}`,
+      `  → 仕訳が計上済みの場合は取消仕訳を作成してください`,
+    ].join("\n"),
+  );
+
+  updateStatus(poNumber, { "検収ステータス": "返品", "備考": `${userName}が返品処理` }).catch((e) =>
+    console.error("[return] GAS update error:", e)
+  );
+};
+
+function buildReturnedBlocks(
+  poNumber: string,
+  returner: string,
+  info: { itemName: string; amount: string; applicant: string; department: string; supplierName: string; paymentMethod: string } | null,
+) {
+  const fields = info
+    ? [
+        { type: "mrkdwn", text: `*品目:* ${info.itemName}` },
+        { type: "mrkdwn", text: `*金額:* ${info.amount}` },
+        { type: "mrkdwn", text: `*申請者:* ${info.applicant}` },
+        { type: "mrkdwn", text: `*購入先:* ${info.supplierName}` },
+      ]
+    : [];
+
+  return [
+    {
+      type: "header",
+      text: { type: "plain_text", text: `📋 購買申請 ${poNumber}` },
+    },
+    ...(fields.length > 0 ? [{ type: "section", fields }] : []),
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `↩️ ステータス: *返品処理中* （${returner} が返品処理）`,
         },
       ],
     },
@@ -608,6 +709,7 @@ export const actionHandlers: Record<string, SlackActionHandler> = {
   order_complete_button: handleOrderComplete,
   inspection_complete_button: handleInspectionComplete,
   cancel_button: handleCancel,
+  return_button: handleReturn,
   dm_approve_button: handleDmApprove,
   dm_reject_button: handleDmReject,
   purchase_open_modal: handleOpenModal,
@@ -757,6 +859,7 @@ function buildPurchaseModal(channelId: string) {
           options: [
             { text: { type: "plain_text", text: "会社カード" }, value: "会社カード" },
             { text: { type: "plain_text", text: "請求書払い" }, value: "請求書払い" },
+            { text: { type: "plain_text", text: "請求書払い（前払い）" }, value: "請求書払い（前払い）" },
             { text: { type: "plain_text", text: "立替" }, value: "立替" },
           ],
         },
@@ -1280,6 +1383,7 @@ function buildInspectedBlocks(
   poNumber: string,
   inspector: string,
   info: { itemName: string; amount: string; applicant: string; department: string; supplierName: string; paymentMethod: string } | null,
+  actionValue?: string,
 ) {
   const fields = info
     ? [
@@ -1317,6 +1421,30 @@ function buildInspectedBlocks(
         text: "📎 *納品書をこのスレッドに添付してください*\n⏸️ 証憑が揃うまで経理処理は保留されます",
       },
     },
+    ...(actionValue
+      ? [
+          { type: "divider" },
+          {
+            type: "actions",
+            block_id: "post_inspection_actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "↩️ 返品" },
+                style: "danger",
+                value: actionValue,
+                action_id: "return_button",
+                confirm: {
+                  title: { type: "plain_text", text: "返品処理" },
+                  text: { type: "plain_text", text: "この購買の返品処理を行いますか？仕訳が計上済みの場合、管理本部が取消仕訳を作成します。" },
+                  confirm: { type: "plain_text", text: "返品する" },
+                  deny: { type: "plain_text", text: "キャンセル" },
+                },
+              },
+            ],
+          },
+        ]
+      : []),
   ];
 }
 

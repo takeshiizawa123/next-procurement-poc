@@ -91,8 +91,10 @@ export function estimateAccount(
   // 1. 品目名キーワードマッチ（優先）
   for (const rule of ITEM_RULES) {
     if (rule.keywords.test(itemName)) {
-      // 10万円以上の工具器具備品は固定資産に格上げ
       let account = rule.account;
+      let reason = `品目名「${itemName}」から推定`;
+
+      // 10万円以上の工具器具備品は固定資産に格上げ
       if (account === "工具器具備品" && totalAmount >= 100000) {
         account = "工具器具備品（固定資産）";
       }
@@ -100,11 +102,17 @@ export function estimateAccount(
       if (account === "工具器具備品" && totalAmount > 0 && totalAmount < 100000) {
         account = "消耗品費";
       }
+      // 材料費の1万円基準: 1万円未満の材料系品目は消耗品費
+      if (account === "材料費" && totalAmount > 0 && totalAmount < 10000) {
+        account = "消耗品費";
+        reason += `（1万円未満のため消耗品費）`;
+      }
+
       return {
         account,
         subAccount: rule.subAccount || "",
         confidence: "high",
-        reason: `品目名「${itemName}」から推定`,
+        reason,
       };
     }
   }
