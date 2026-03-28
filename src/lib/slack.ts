@@ -269,7 +269,7 @@ export const handleInspectionComplete: SlackActionHandler = async ({
   messageTs,
   actionValue,
 }) => {
-  const { poNumber, applicantSlackId, inspectorSlackId } = parseActionValue(actionValue);
+  const { poNumber, applicantSlackId, inspectorSlackId, rawAmount } = parseActionValue(actionValue);
 
   // 権限チェック: 検収者 or 申請者
   const allowed = [inspectorSlackId, applicantSlackId].filter(Boolean);
@@ -305,9 +305,31 @@ export const handleInspectionComplete: SlackActionHandler = async ({
 
   await notifyOps(client, `📦 *検収完了* ${poNumber}（${userName} が検収）— 証憑待ち`);
 
+  // 固定資産通知（10万円以上の場合）
+  const amount = parseInt(rawAmount, 10);
+  if (amount >= 100000) {
+    const itemName = info?.itemName || "";
+    const supplier = info?.supplierName || "";
+    const department = info?.department || "";
+    const today = new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" });
+    await notifyOps(
+      client,
+      [
+        `🏷️ *固定資産登録が必要です*`,
+        `  申請番号: ${poNumber}`,
+        `  資産名: ${itemName}`,
+        `  取得価額: ¥${amount.toLocaleString()}`,
+        `  取得日: ${today}`,
+        `  部門: ${department}`,
+        `  購入先: ${supplier}`,
+        `  → MF固定資産に登録してください`,
+      ].join("\n"),
+    );
+  }
+
   // GASステータス更新
-  const today = new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" });
-  updateStatus(poNumber, { "検収ステータス": "検収済", "検収日": today }).catch((e) =>
+  const todayStr = new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" });
+  updateStatus(poNumber, { "検収ステータス": "検収済", "検収日": todayStr }).catch((e) =>
     console.error("[inspection] GAS update error:", e)
   );
 };
