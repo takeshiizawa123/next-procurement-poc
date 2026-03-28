@@ -552,7 +552,7 @@ function ConfirmedTab({ items }: { items: ConfidentMatch[] }) {
       <p className="text-sm text-gray-500 mb-4">
         {items.length}件が自動的に照合されました。確認の必要はありません。
         {withDiff.length > 0 && (
-          <span className="text-amber-600">（うち{withDiff.length}件は差額があり、調整仕訳を自動登録済みです）</span>
+          <span className="text-amber-600">（うち{withDiff.length}件は差額があります。MF会計Plusで調整仕訳の確認・作成をお願いします）</span>
         )}
       </p>
 

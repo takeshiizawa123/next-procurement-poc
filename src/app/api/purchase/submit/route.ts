@@ -168,7 +168,9 @@ export async function POST(request: NextRequest) {
       applicantSlackId: userId.startsWith("U") ? userId : "",
       approverSlackId,
       inspectorSlackId: resolveInspector(formData, userId, employees),
-      paymentDueDate: paymentMethod.includes("請求書") ? calcPaymentDueDate() : undefined,
+      paymentDueDate: paymentMethod.includes("前払い")
+        ? new Date().toISOString().slice(0, 10)
+        : paymentMethod.includes("請求書") ? calcPaymentDueDate() : undefined,
     };
 
     const blocks = isPurchased
