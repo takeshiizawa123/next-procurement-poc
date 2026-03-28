@@ -1,5 +1,79 @@
 # CURRENT_WORK
 
+## [Handoff] "マニュアル整備完了・統制強化実装前" — 2026-03-28 16:24 (branch: master)
+
+### Goal / Scope
+- マニュアル・PPTX全面改訂（ロール別構成、スクショ埋込、二段階承認廃止の反映）
+- 運用フロー変更: 二段階承認廃止、全件申請者発注、管理本部は経理専任
+- やらないこと: 統制強化実装（次セッション）
+
+### Key decisions
+- **二段階承認を廃止**: 部門長承認のみに統一。管理本部の承認ステップを削除
+- **全件申請者発注**: カード・請求書問わず申請者が発注。請求書は証憑として提出
+- **管理本部は経理専任**: 仕訳・照合・支払処理に特化。発注代行を廃止
+- **証憑提出は2経路**: Slackスレッド + マイページ（/purchase/my）を全パターンで明記
+- **購買パターンを3つに整理**: A:カード、B:請求書、C:立替（旧4パターンから統合）
+- **PPTX構成をロール別に再編**: Part A申請者 / Part B承認者 / Part C管理本部 + スクショ7枚埋込
+- **統制強化2件を承認**: ①日次金額乖離アラート ②従業員別利用傾向ダッシュボード
+
+### Done
+- [x] マニュアルPPTX: ロール別構成（49スライド）、スクショ7枚埋込、出張詳細フロー、マイページ・ブックマークレット詳細化
+- [x] user-manual.md: 全体フロー図、証憑2方法、立替+MF経費関係、承認後操作、FAQ、トラブルシューティング更新
+- [x] operational-guide.md: 購買パターン3つ、承認ルール、統制設計、MF連携マップ、定期タスク、遷移図を全面更新
+- [x] 運用ガイドPPTX: 照合セクション追加、パターン・承認・権限マトリクス・遷移図を修正
+- [x] コード変更: 二段階承認廃止（approval-router.ts, slack.ts handleApprove/handleOrderComplete）
+- [x] スクリーンショット14枚撮影、docs/images/に保存
+- [x] 照合UIにデモモード追加（?demo=1）
+- [x] /trip モーダルにレンタカー/タイムズカー追加
+- [x] 購入先を必須に（マニュアル表記修正、コードは既に必須）
+
+### Pending
+- [ ] **日次金額乖離アラート**: 予測テーブル vs MF仕訳を日次バッチで突合→乖離時にSlack即通知
+- [ ] **従業員別利用傾向ダッシュボード**: /admin/spending — 月別推移、逸脱検知、ランキング
+- [ ] 手動設定14項目（従業員マスタ列追加、clasp push、GCP認証、MF補助科目等）
+- [ ] Vercelデプロイ + E2Eテスト
+
+### Next actions
+1. **日次乖離アラートバッチ実装**: POST /api/cron/daily-variance — 予測テーブル×MF仕訳突合→差異Slack通知
+2. **従業員別利用傾向ダッシュボード**: /admin/spending — GAS購買台帳集計→月別推移チャート+逸脱アラート
+3. **統制方針をドキュメントに追記**: operational-guide.md §5統制設計に日次アラート+サンプリング監査を追加
+4. **手動設定の実施**: 従業員マスタ列追加→clasp push→環境変数→Vercelデプロイ
+5. **E2Eテスト**: test-plan.md Phase 6に沿って照合機能を検証
+
+### Affected files
+- `src/lib/slack.ts:73-140` — handleApprove: 二段階承認廃止、全件申請者DM通知
+- `src/lib/slack.ts:204-250` — handleOrderComplete: 管理本部限定チェック廃止
+- `src/lib/approval-router.ts:66-67` — requiresSecondApproval=false固定
+- `src/app/api/slack/events/route.ts:345` — /trip placeholderにレンタカー追加
+- `src/app/admin/card-matching/page.tsx` — デモモード追加
+- `docs/user-manual.md` — 全章修正
+- `docs/operational-guide.md` — §2,3,5,6,9,10修正
+- `docs/scripts/generate_manual_ppt.py` — ロール別構成+スクショ埋込
+- `docs/scripts/generate_ppt.py` — パターン・承認・遷移図修正
+- `docs/images/*.png` — 14枚
+
+### Repro / Commands
+```bash
+cd C:/Users/takeshi.izawa/.claude/projects/next-procurement-poc
+npm run dev  # localhost:3333
+# 照合UIデモ: http://localhost:3333/admin/card-matching?demo=1
+python docs/scripts/generate_manual_ppt.py  # PPTX再生成
+python docs/scripts/generate_ppt.py
+```
+
+### Risks / Unknowns
+- 日次乖離アラートはMF会計Plus APIのポーリング頻度に依存（APIレート制限未確認）
+- 従業員別ダッシュボードのデータソースはGAS購買台帳。月間データ量が増えると取得速度に影響
+- Webフォーム（/purchase/new）のスクショはGAS未接続でローディング中のため未撮影
+
+### Links
+- 統合設計書: `docs/design-mf-integration-final.md`
+- ユーザーマニュアル: `docs/user-manual.md` / `docs/user-manual.pptx`
+- 運用ガイド: `docs/operational-guide.md` / `docs/operational-guide.pptx`
+- テスト計画: `docs/test-plan.md`
+
+---
+
 ## [Handoff] "カード明細照合システム実装完了" — 2026-03-27 18:33 (branch: master)
 
 ### Goal / Scope
