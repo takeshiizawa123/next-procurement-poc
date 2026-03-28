@@ -245,6 +245,7 @@ interface FormValues {
   totalAmount: number;
   paymentMethod: string;
   supplierName: string;
+  inspectorName: string;
   url: string;
   assetUsage: string;
   katanaPo: string;
@@ -275,6 +276,7 @@ function ConfirmationView({
     ["支払方法", values.paymentMethod],
     ["購入先名", values.supplierName],
   ];
+  if (values.inspectorName) rows.push(["検収者", values.inspectorName]);
   if (values.url) rows.push(["購入先URL", values.url]);
   if (values.assetUsage) rows.push(["購入品の用途", values.assetUsage]);
   if (values.katanaPo) rows.push(["KATANA PO番号", values.katanaPo]);
@@ -381,6 +383,7 @@ function PurchaseFormInner() {
   const [hubspotDealId, setHubspotDealId] = useState("");
   const [budgetNumber, setBudgetNumber] = useState("");
   const [notes, setNotes] = useState("");
+  const [inspectorName, setInspectorName] = useState("");
 
   // 追加品目（一括申請用）
   type ExtraItem = { itemName: string; amount: number; amountDisplay: string; quantity: number; url: string };
@@ -852,6 +855,7 @@ function PurchaseFormInner() {
               totalAmount,
               paymentMethod,
               supplierName,
+              inspectorName,
               url,
               assetUsage,
               katanaPo,
@@ -1104,6 +1108,29 @@ function PurchaseFormInner() {
                 <option value="請求書払い">請求書払い</option>
                 <option value="立替">立替</option>
               </select>
+            </fieldset>
+
+            {/* 検収者 */}
+            <fieldset>
+              <legend className="block text-sm font-medium mb-1">
+                検収者
+              </legend>
+              <select
+                name="inspector_name"
+                value={inspectorName}
+                onChange={(e) => setInspectorName(e.target.value)}
+                className="w-full border rounded-lg px-3 py-2 bg-white"
+              >
+                <option value="">申請者本人（デフォルト）</option>
+                {employees.map((emp) => (
+                  <option key={emp.name} value={emp.name}>
+                    {emp.name}（{emp.departmentName}）
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                届いた物品を確認する人。別の人が検収する場合に選択してください
+              </p>
             </fieldset>
 
             {/* 購入先名 */}

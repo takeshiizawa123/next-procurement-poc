@@ -7,9 +7,26 @@ import {
   notifyOps,
   type RequestInfo,
 } from "@/lib/slack";
-import { registerPurchase, updateStatus } from "@/lib/gas-client";
+import { registerPurchase, updateStatus, getEmployees, type Employee } from "@/lib/gas-client";
 import { estimateAccount } from "@/lib/account-estimator";
 import { resolveApprovalRoute } from "@/lib/approval-router";
+
+/**
+ * フォームの検収者名からSlackIDを解決する。
+ * 未指定の場合は申請者自身のSlackIDを返す。
+ */
+function resolveInspector(
+  formData: FormData,
+  applicantUserId: string,
+  employees: Employee[],
+): string {
+  const inspectorName = (formData.get("inspector_name") as string)?.trim();
+  if (!inspectorName) {
+    return applicantUserId.startsWith("U") ? applicantUserId : "";
+  }
+  const found = employees.find((e) => e.name === inspectorName);
+  return found?.slackId || (applicantUserId.startsWith("U") ? applicantUserId : "");
+}
 
 const PURCHASE_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
 
@@ -88,7 +105,11 @@ export async function POST(request: NextRequest) {
     const isPurchased = requestType === "購入済";
 
     // 承認ルート解決（従業員マスタから部門長を取得）
-    const approvalRoute = await resolveApprovalRoute(userName, userId, totalAmount);
+    const [approvalRoute, empResult] = await Promise.all([
+      resolveApprovalRoute(userName, userId, totalAmount),
+      getEmployees(),
+    ]);
+    const employees = empResult.success ? (empResult.data?.employees || []) : [];
     const department = formDepartment || approvalRoute.employee?.departmentName || "";
     const approverSlackId = isPurchased ? "" : approvalRoute.primaryApprover;
 
@@ -141,7 +162,7 @@ export async function POST(request: NextRequest) {
       paymentMethod,
       applicantSlackId: userId.startsWith("U") ? userId : "",
       approverSlackId,
-      inspectorSlackId: userId.startsWith("U") ? userId : "",
+      inspectorSlackId: resolveInspector(formData, userId, employees),
     };
 
     const blocks = isPurchased
