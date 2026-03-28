@@ -125,9 +125,6 @@ export const handleApprove: SlackActionHandler = async ({
       paymentMethod: payMethod,
     }).catch((e) => console.error("[approve] Prediction error:", e));
   }
-  const isHighValue = amountNum >= 100000;
-  const isAdminOrder = isHighValue || payMethod === "請求書払い";
-
   // 購入済（立替）判定: メッセージのヘッダーに「購買報告」があるか
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const headerBlock = (message?.blocks as any[])?.find((b) => b.type === "header");
@@ -146,30 +143,16 @@ export const handleApprove: SlackActionHandler = async ({
       "発注ステータス": "発注済",
       "検収ステータス": "検収済",
     }).catch((e) => console.error("[approve] GAS purchased update error:", e));
-  } else if (isAdminOrder) {
-    // 管理本部発注: 申請者に「管理本部が発注します」DM
-    if (applicantSlackId) {
-      await client.chat.postMessage({
-        channel: applicantSlackId,
-        text: `✅ 購買申請 ${poNumber} が承認されました。管理本部が発注手続きを行います。`,
-      });
-    }
-    // 二段階承認（10万以上）: 管理本部に承認依頼
-    if (isHighValue) {
-      const adminApprover = process.env.SLACK_ADMIN_APPROVER || "";
-      if (adminApprover) {
-        await client.chat.postMessage({
-          channel: adminApprover,
-          text: `📋 *管理本部承認依頼*（10万円以上）\n${poNumber} — ${info?.itemName || ""} ${info?.amount || ""}\n部門長承認済: ${userName}\n<https://slack.com/archives/${channelId}/p${messageTs.replace(".", "")}|チャンネルで確認>`,
-        });
-      }
-    }
   } else {
-    // 申請者委任: 申請者に「発注してください」DM
+    // 全件: 申請者が発注（カード/請求書問わず）
+    const isInvoice = payMethod === "請求書払い";
     if (applicantSlackId) {
+      const orderMsg = isInvoice
+        ? `✅ 購買申請 ${poNumber} が承認されました。発注してください。\n届いた請求書は管理本部に提出してください。\n発注後、チャンネルの [発注完了] ボタンを押してください。`
+        : `✅ 購買申請 ${poNumber} が承認されました。カードで発注してください。\n発注後、チャンネルの [発注完了] ボタンを押してください。`;
       await client.chat.postMessage({
         channel: applicantSlackId,
-        text: `✅ 購買申請 ${poNumber} が承認されました。カードで発注してください。\n発注後、チャンネルの [発注完了] ボタンを押してください。`,
+        text: orderMsg,
       });
     }
   }
@@ -219,9 +202,9 @@ export const handleReject: SlackActionHandler = async ({
 };
 
 /**
- * 発注完了ボタン押下時の処理（申請者 or 管理本部）
- * 設計: 10万未満カード決済は申請者委任、10万以上/請求書払いは管理本部
- * 暫定: 申請者 + 承認者 + 管理本部メンバーが押せる
+ * 発注完了ボタン押下時の処理
+ * 全件: 申請者が発注（金額・支払方法問わず）
+ * 権限: 申請者・承認者・管理本部メンバーが押せる
  */
 export const handleOrderComplete: SlackActionHandler = async ({
   client,
@@ -232,29 +215,14 @@ export const handleOrderComplete: SlackActionHandler = async ({
   messageTs,
   actionValue,
 }) => {
-  const { poNumber, applicantSlackId, approverSlackId, rawAmount, paymentMethod: encodedPayMethod } = parseActionValue(actionValue);
+  const { poNumber, applicantSlackId, approverSlackId } = parseActionValue(actionValue);
   const adminMembers = (process.env.SLACK_ADMIN_MEMBERS || "").split(",").filter(Boolean);
 
   const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
   const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
 
-  // 発注権限分岐: エンコード値を優先、フォールバックでブロックテキストから取得
-  const amountNum = parseInt(rawAmount, 10) || parseInt((info?.amount || "0").replace(/[^\d]/g, ""), 10) || 0;
-  const payMethod = encodedPayMethod || info?.paymentMethod || "";
-  const isAdminOrder = amountNum >= 100000 || payMethod === "請求書払い";
-
-  if (isAdminOrder) {
-    // 管理本部発注: 管理本部メンバーのみ（fail-closed: 未設定時もブロック）
-    if (!adminMembers.includes(userId)) {
-      await client.chat.postEphemeral({
-        channel: channelId,
-        user: userId,
-        text: "⚠️ この申請は管理本部が発注する案件です（10万円以上または請求書払い）。",
-      });
-      return;
-    }
-  } else {
-    // 申請者委任: 申請者・承認者・管理本部メンバー
+  // 権限チェック: 申請者・承認者・管理本部メンバー
+  {
     const allowed = [applicantSlackId, approverSlackId, ...adminMembers].filter(Boolean);
     if (allowed.length > 0 && !allowed.includes(userId)) {
       await client.chat.postEphemeral({

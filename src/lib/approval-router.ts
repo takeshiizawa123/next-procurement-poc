@@ -4,11 +4,11 @@ const DEFAULT_APPROVER = process.env.SLACK_DEFAULT_APPROVER || "";
 const ADMIN_APPROVER = process.env.SLACK_ADMIN_APPROVER || "";
 
 export interface ApprovalRoute {
-  /** 第一承認者（部門長）の SlackID */
+  /** 承認者（部門長）の SlackID */
   primaryApprover: string;
-  /** 第二承認者（管理本部）の SlackID — 10万以上のみ */
+  /** @deprecated 二段階承認は廃止。常に空文字 */
   secondaryApprover: string;
-  /** 二段階承認が必要か */
+  /** @deprecated 常にfalse */
   requiresSecondApproval: boolean;
   /** マッチした従業員情報 */
   employee: Employee | null;
@@ -19,7 +19,7 @@ export interface ApprovalRoute {
  *
  * 1. 従業員マスタから申請者を検索 → 部門長SlackIDを取得
  * 2. 見つからなければ DEFAULT_APPROVER にフォールバック
- * 3. 10万円以上は管理本部承認を追加
+ * 承認は部門長の一段階のみ（二段階承認は廃止）
  */
 export async function resolveApprovalRoute(
   applicantName: string,
@@ -63,8 +63,9 @@ export async function resolveApprovalRoute(
     // 従業員マスタ取得失敗時はデフォルト承認者を使用
   }
 
-  const requiresSecondApproval = totalAmount >= 100000;
-  const secondaryApprover = requiresSecondApproval ? (ADMIN_APPROVER || DEFAULT_APPROVER) : "";
+  // 二段階承認は廃止 — 部門長承認のみ
+  const requiresSecondApproval = false;
+  const secondaryApprover = "";
 
   return {
     primaryApprover,
