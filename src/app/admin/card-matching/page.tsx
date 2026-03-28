@@ -328,6 +328,11 @@ export default function CardMatchingPage() {
   const allDone = hasResults && totalPending === 0;
 
   function approveCandidate(poIdx: number, candIdx: number) {
+    const candidate = candidates[poIdx];
+    const selected = candidate?.candidates[candIdx];
+    if (!candidate || !selected) return;
+
+    // フロント状態を即時更新
     setCandidates((prev) =>
       prev.map((c, i) =>
         i === poIdx
@@ -335,6 +340,21 @@ export default function CardMatchingPage() {
           : c,
       ),
     );
+
+    // バックエンドで予測テーブル更新 + 差額調整仕訳作成
+    apiFetch("/api/admin/card-matching/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        predictionId: `manual-${candidate.poNumber}`,
+        poNumber: candidate.poNumber,
+        journalId: 0,
+        predictedAmount: candidate.amount,
+        actualAmount: selected.amount,
+        transactionDate: selected.date,
+        supplier: candidate.supplier,
+      }),
+    }).catch((e) => console.error("[card-matching] Confirm error:", e));
   }
   function resolveUnmatched(idx: number, resolution: string) {
     setUnmatched((prev) => prev.map((u, i) => (i === idx ? { ...u, resolved: true, resolution } : u)));

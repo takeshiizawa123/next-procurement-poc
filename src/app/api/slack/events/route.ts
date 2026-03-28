@@ -19,6 +19,7 @@ import { registerPurchase, updateStatus, getRecentRequests, getEmployees } from 
 import { estimateAccount } from "@/lib/account-estimator";
 import { resolveApprovalRoute } from "@/lib/approval-router";
 import { createTripExpense } from "@/lib/mf-expense";
+import { generateTripPredictions } from "@/lib/prediction";
 import { extractFromImage, matchAmount, downloadSlackFile, verifyInvoiceRegistration } from "@/lib/ocr";
 
 // Vercel Serverless の最大実行時間
@@ -542,6 +543,23 @@ async function handleTripSubmission(
       `日当は給与と合わせて支給されます。`,
     ].join("\n"),
   });
+
+  // カード予測レコード生成（交通費・宿泊費。日当はカード決済でないため除外）
+  // 概算額を交通費として扱い、宿泊費は accommodation テキストから金額を抽出（なければ0）
+  const accommodationAmount = accommodation
+    ? parseInt(accommodation.replace(/[^\d]/g, ""), 10) || 0
+    : 0;
+  const transportAmount = amount - accommodationAmount; // 概算額から宿泊費を差し引いた残り
+
+  generateTripPredictions({
+    applicantSlackId: userId,
+    applicantName: userName,
+    transportAmount: transportAmount > 0 ? transportAmount : amount,
+    accommodationAmount,
+    startDate,
+    checkInDate: startDate, // チェックイン日は出発日と同じとする
+    destination,
+  }).catch((e) => console.error("[trip] Prediction generation error:", e));
 
   console.log("[trip] Submission complete:", { userId, destination, startDate, endDate, amount });
 }

@@ -7,6 +7,8 @@ import {
 import { getJournals } from "@/lib/mf-accounting";
 import { executeMatching, type CardStatementInput } from "@/lib/card-matcher";
 import { requireBearerAuth } from "@/lib/api-auth";
+import { updatePredictionStatus } from "@/lib/gas-client";
+import { createJournal, resolveAccountCode, resolveTaxCode } from "@/lib/mf-accounting";
 
 /**
  * カード明細照合API（認証必須）
@@ -94,7 +96,51 @@ export async function POST(request: NextRequest) {
       `matchRate=${result.summary.matchRate}%`,
     );
 
-    return NextResponse.json({ ok: true, ...result });
+    // 自動照合済みの差額分について調整仕訳を非同期で作成
+    const adjustmentResults: Array<{ poNumber: string; diff: number; journalId?: number }> = [];
+    for (const m of result.confidentMatches) {
+      if (m.diff === 0) continue;
+
+      try {
+        const absDiff = Math.abs(m.diff);
+        const debitCode = await resolveAccountCode("消耗品費") || "消耗品費";
+        const creditCode = await resolveAccountCode("未払金") || "未払金";
+        const taxCode = await resolveTaxCode("課税仕入10%");
+        const taxValue = Math.floor(absDiff * 10 / 110);
+
+        const journal = await createJournal({
+          status: "draft",
+          transaction_date: m.date,
+          journal_type: "journal_entry",
+          tags: [m.poNumber, "Stage2-adj"],
+          memo: `${m.poNumber} 差額調整 ${m.diff > 0 ? "+" : ""}¥${m.diff.toLocaleString()} ${m.supplier}`,
+          branches: [
+            {
+              remark: `${m.poNumber} ${m.supplier} カード差額調整`,
+              debitor: {
+                account_code: m.diff > 0 ? debitCode : creditCode,
+                ...(m.diff > 0 && taxCode ? { tax_code: taxCode } : {}),
+                value: absDiff,
+                ...(m.diff > 0 ? { tax_value: taxValue } : {}),
+              },
+              creditor: {
+                account_code: m.diff > 0 ? creditCode : debitCode,
+                ...(m.diff < 0 && taxCode ? { tax_code: taxCode } : {}),
+                value: absDiff,
+                ...(m.diff < 0 ? { tax_value: taxValue } : {}),
+              },
+            },
+          ],
+        });
+        adjustmentResults.push({ poNumber: m.poNumber, diff: m.diff, journalId: journal.id });
+        console.log(`[card-matching] Adjustment: ${m.poNumber} ${m.diff > 0 ? "+" : ""}¥${m.diff} → journal ${journal.id}`);
+      } catch (e) {
+        console.error(`[card-matching] Adjustment journal error for ${m.poNumber}:`, e);
+        adjustmentResults.push({ poNumber: m.poNumber, diff: m.diff });
+      }
+    }
+
+    return NextResponse.json({ ok: true, ...result, adjustmentResults });
   } catch (error) {
     console.error("[card-matching] Error:", error);
     return NextResponse.json(

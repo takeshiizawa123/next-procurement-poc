@@ -110,3 +110,103 @@ export async function generatePrediction(
     return null;
   }
 }
+
+// --- 出張用予測レコード生成 ---
+
+export interface TripPredictionInfo {
+  applicantSlackId: string;
+  applicantName: string;
+  /** 交通費（カード決済分） */
+  transportAmount: number;
+  /** 宿泊費（カード決済分。0なら宿泊予測なし） */
+  accommodationAmount: number;
+  /** 出発日 YYYY-MM-DD */
+  startDate: string;
+  /** 宿泊チェックイン日 YYYY-MM-DD（未指定なら startDate を使用） */
+  checkInDate?: string;
+  /** 行き先（加盟店名のヒントとして使用） */
+  destination: string;
+}
+
+/**
+ * 出張承認時に交通費・宿泊費の予測レコードを別行で生成
+ *
+ * 日当はカード決済ではないため予測レコード不要。
+ *
+ * @returns 生成した予測IDの配列
+ */
+export async function generateTripPredictions(
+  info: TripPredictionInfo,
+): Promise<string[]> {
+  const employees = await getEmployeeCardsCached();
+  const emp = employees.find((e) => e.slackId === info.applicantSlackId);
+
+  if (!emp?.card_last4) {
+    console.warn(
+      `[prediction] No card info for trip ${info.applicantName} (${info.applicantSlackId}). Skipping.`,
+    );
+    return [];
+  }
+
+  const now = new Date();
+  const ids: string[] = [];
+
+  // 交通費の予測（出発日）
+  if (info.transportAmount > 0) {
+    const month = info.startDate.slice(0, 7);
+    const seq = String(now.getTime() % 10000).padStart(4, "0");
+    const predId = `PCT-${month.replace("-", "")}-${seq}`;
+
+    try {
+      const res = await createPrediction({
+        id: predId,
+        po_number: `TR-TRANSPORT`,
+        type: "trip_transport",
+        card_last4: emp.card_last4,
+        predicted_amount: info.transportAmount,
+        predicted_date: info.startDate,
+        supplier: info.destination,
+        applicant: info.applicantName,
+        status: "pending",
+        created_at: now.toISOString(),
+      });
+      if (res.success) {
+        ids.push(predId);
+        console.log(`[prediction] Trip transport: ${predId} ¥${info.transportAmount.toLocaleString()}`);
+      }
+    } catch (e) {
+      console.error("[prediction] Trip transport error:", e);
+    }
+  }
+
+  // 宿泊費の予測（チェックイン日）
+  if (info.accommodationAmount > 0) {
+    const checkIn = info.checkInDate || info.startDate;
+    const month = checkIn.slice(0, 7);
+    const seq2 = String((now.getTime() + 1) % 10000).padStart(4, "0");
+    const predId = `PCT-${month.replace("-", "")}-${seq2}`;
+
+    try {
+      const res = await createPrediction({
+        id: predId,
+        po_number: `TR-HOTEL`,
+        type: "trip_hotel",
+        card_last4: emp.card_last4,
+        predicted_amount: info.accommodationAmount,
+        predicted_date: checkIn,
+        supplier: info.destination,
+        applicant: info.applicantName,
+        status: "pending",
+        created_at: now.toISOString(),
+      });
+      if (res.success) {
+        ids.push(predId);
+        console.log(`[prediction] Trip hotel: ${predId} ¥${info.accommodationAmount.toLocaleString()}`);
+      }
+    } catch (e) {
+      console.error("[prediction] Trip hotel error:", e);
+    }
+  }
+
+  return ids;
+}
