@@ -1,10 +1,13 @@
 """利用者向け運用マニュアル — Silicon Valley Style PPT (Final)"""
 
+import os
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
+
+IMG_DIR = os.path.join(os.path.dirname(__file__), "..", "images")
 
 prs = Presentation()
 prs.slide_width = Inches(13.333)
@@ -107,6 +110,30 @@ def steps(title, data):
         dt.text_frame.paragraphs[0].font.size = Pt(12); dt.text_frame.paragraphs[0].font.color.rgb = MUTED
 
 
+def screenshot(title, img_name, caption=""):
+    """スクリーンショットを1スライドに埋め込む"""
+    s = prs.slides.add_slide(prs.slide_layouts[6]); dbg(s)
+    t = s.shapes.add_textbox(Inches(0.8), Inches(0.3), Inches(10), Inches(0.8))
+    t.text_frame.paragraphs[0].text = title
+    t.text_frame.paragraphs[0].font.size = Pt(24); t.text_frame.paragraphs[0].font.bold = True
+    t.text_frame.paragraphs[0].font.color.rgb = WHITE
+    img_path = os.path.join(IMG_DIR, img_name)
+    if os.path.exists(img_path):
+        # 画像を中央配置（最大幅11in、最大高さ5.5in）
+        from PIL import Image
+        with Image.open(img_path) as im:
+            w, h = im.size
+        max_w, max_h = Inches(11), Inches(5.5)
+        ratio = min(max_w / w, max_h / h)
+        iw, ih = int(w * ratio), int(h * ratio)
+        x = (prs.slide_width - iw) // 2
+        s.shapes.add_picture(img_path, x, Inches(1.2), iw, ih)
+    if caption:
+        ct = s.shapes.add_textbox(Inches(0.8), Inches(6.9), Inches(11), Inches(0.5))
+        ct.text_frame.paragraphs[0].text = caption
+        ct.text_frame.paragraphs[0].font.size = Pt(14); ct.text_frame.paragraphs[0].font.color.rgb = MUTED
+
+
 def stat(title, cards):
     s = prs.slides.add_slide(prs.slide_layouts[6]); dbg(s)
     t = s.shapes.add_textbox(Inches(1.5), Inches(0.8), Inches(10), Inches(1))
@@ -186,7 +213,7 @@ stat("3つの役割 — 誰が何をする？",
 # Part A: 申請者の目線
 # ─────────────────────────────────────────────
 
-hero("Part A\n申請者の目線", "①申請 → ③発注 → ④検収 → ⑤証憑", CYAN)
+hero("Part A\n申請者ガイド", "①申請 → ③発注 → ④検収 → ⑤証憑", CYAN)
 
 # A-1: 申請
 sec(1, "申請する", CYAN)
@@ -255,10 +282,10 @@ bullets("証憑を出さないとどうなる？", [
 # A-4: 購入済（立替）
 sec(4, "購入済申請（立替精算）", RED)
 
-bullets("立替精算の手順と注意", [
+bullets("立替精算の手順", [
     "/purchase → 申請区分: 「購入済」を選択",
     ("品目・金額を入力 + レシートを必ず添付", 1),
-    ("承認 → 発注・検収スキップ → 「証憑待ち」", 1),
+    ("承認 → 発注・検収スキップ → 「証憑完了」", 1),
     "",
     "注意:",
     ("購入済は緊急時の例外措置です", 1),
@@ -266,44 +293,116 @@ bullets("立替精算の手順と注意", [
     ("証憑なしの購入済申請は処理されません", 1),
 ], accent=RED)
 
+bullets("立替精算とMF経費の関係", [
+    "立替精算の経理処理はMF経費を経由します",
+    "",
+    "処理フロー:",
+    ("① 申請者が /purchase「購入済」で申請 + 証憑添付", 1),
+    ("② 部門長が承認", 1),
+    ("③ システムがMF経費に証憑をアップロード（自動）", 1),
+    ("④ 管理本部がMF経費で経費精算を確定", 1),
+    ("⑤ 給与と合算して立替分を振込", 1),
+    "",
+    "申請者がMF経費を直接操作する必要はありません",
+    ("MF経費のカード明細から経費登録しないでください（二重計上防止）", 1),
+], accent=RED)
+
 # A-5: 出張
 sec(5, "出張申請（/trip）", ORANGE)
 
 steps("出張申請フロー", [
-    (1, "/trip を入力", "Slackで\nコマンド送信"),
-    (2, "モーダルに入力", "行き先・日程・目的\n交通手段・概算額"),
-    (3, "送信", "#出張チャンネルに\n自動投稿"),
-    (4, "予約する", "じゃらん / ANA Biz\n/ JAL Online\n/ レンタカー / タイムズカー"),
-    (5, "MFカードで決済", "交通費・レンタカー・\n食事代もカードで"),
-    (6, "精算は自動", "MF経費→管理本部\nが仕訳"),
+    (1, "/trip を入力", "Slackのどのチャンネル\n・DMからでも実行可能"),
+    (2, "モーダルに入力", "行き先・日程・目的\n交通手段・概算額・宿泊先"),
+    (3, "送信", "#出張チャンネルに\n自動投稿されます"),
+    (4, "予約・手配", "各交通機関・宿泊を\n予約（次スライド参照）"),
+    (5, "MFカードで決済", "すべてMFビジネス\nカードで支払い"),
+    (6, "精算は自動", "カード明細→MF経費\n→管理本部が仕訳"),
 ])
 
-# A-6: 便利ツール
-sec(6, "便利ツール", GREEN)
+tbl("/trip 入力項目", ["項目", "必須", "入力例"],
+    [
+        ["出張先", "★", "大阪本社"],
+        ["出発日", "★", "2026-04-01"],
+        ["帰着日", "★", "2026-04-03"],
+        ["出張目的", "★", "クライアント打合せ"],
+        ["利用交通手段", "★", "新幹線のぞみ 東京→新大阪"],
+        ["概算額（円）", "★", "45000"],
+        ["宿泊先", "", "じゃらんで予約済み / ホテル名"],
+    ], accent=ORANGE)
 
-bullets("マイページ・ブックマークレット", [
-    "マイページ（/purchase/my）",
-    ("自分の申請一覧 + ステータス確認", 1),
-    ("証憑未提出の案件は黄色いアラートで表示", 1),
-    ("証憑待ち案件は [証憑UP] ボタンからWeb上で直接提出", 1),
+tbl("交通手段別の予約・決済方法", ["手段", "予約方法", "決済", "備考"],
+    [
+        ["新幹線", "スマートEX / えきねっと", "MFカード", "EX予約の場合はICカードで乗車"],
+        ["航空券（ANA）", "ANA Biz（法人サイト）", "MFカード", "法人IDでログイン"],
+        ["航空券（JAL）", "JAL Online（法人サイト）", "MFカード", "法人IDでログイン"],
+        ["レンタカー", "各社Webサイト", "MFカード", "利用交通手段欄に「レンタカー」と記入"],
+        ["タイムズカー", "タイムズカーアプリ", "MFカード", "法人カードを事前登録"],
+        ["タクシー", "現地で利用", "MFカード", "領収書不要（カード明細で確認）"],
+    ], accent=ORANGE)
+
+bullets("宿泊の手配", [
+    "じゃらんJCS（法人向けサービス）を使用",
+    ("法人専用項目1にプロジェクト番号を入力", 1),
+    ("支払は会社宛ての請求書払い（個人負担なし）", 1),
     "",
-    "ブックマークレット",
-    ("Amazon等で商品ページを開いて「購買申請」ボタン1つ", 1),
-    ("商品名・価格・URL が自動入力されたフォームが開く", 1),
-    ("初回設定: /bookmarklet ページからD&D", 1),
+    "楽天トラベルRacco も今後利用可能になります",
     "",
-    "Webフォームの入力支援",
-    ("商品URL貼付 → 自動取得（Amazon/モノタロウ/ASKUL等）", 1),
-    ("重複チェック / 勘定科目推定 / 下書き自動保存", 1),
+    "出張後の精算:",
+    ("カード決済分 → MF経費に自動連携（操作不要）", 1),
+    ("宿泊費 → じゃらんCSV一括取込（管理本部が月次処理）", 1),
+    ("立替が発生した場合 → /purchase「購入済」で申請", 1),
+], accent=ORANGE)
+
+# A-6: マイページ
+sec(6, "マイページ", GREEN)
+
+bullets("マイページでできること", [
+    "アクセス: https://{システムURL}/purchase/my",
+    "",
+    "申請一覧の確認",
+    ("自分が出した全申請のステータスを一覧表示", 1),
+    ("ステータスバッジ: 承認済 / 発注済 / 証憑待ち / 計上済 etc.", 1),
+    ("各申請からSlackスレッドへワンクリックでジャンプ", 1),
+    "",
+    "未対応アラート（黄色い帯）",
+    ("証憑未提出の案件が「○件あります」と目立つ表示", 1),
+    ("経過日数が赤字で表示される（3日経過、5日経過...）", 1),
+    "",
+    "証憑アップロード",
+    ("証憑待ち案件をクリック → 右パネルのドロップエリアにファイルを投入", 1),
+    ("Slackが使えない状況でもWebから証憑提出が可能", 1),
 ], accent=GREEN)
+
+screenshot("マイページ画面", "mypage.png", "申請一覧 + 証憑未提出アラート + 詳細パネル")
+
+# A-7: ブックマークレット
+sec(7, "ブックマークレット", GREEN)
+
+steps("ECサイトからワンクリック申請", [
+    (1, "初回設定（1回のみ）", "/bookmarklet ページを開く\n→「購買申請」ボタンを\nブックマークバーにD&D"),
+    (2, "商品ページを開く", "Amazon・モノタロウ等で\n購入したい商品の\nページを表示"),
+    (3, "ブックマークをクリック", "ブックマークバーの\n「購買申請」を押す"),
+    (4, "フォームが自動入力済み", "商品名・価格・購入先\n・URLが入力された\n状態で開きます"),
+    (5, "残りを入力して送信", "支払方法・数量・目的\nを追加入力して\n申請完了"),
+])
+
+tbl("URL自動解析 対応サイト", ["サイト", "商品名", "価格", "備考"],
+    [
+        ["Amazon.co.jp", "○", "○", "サーバーブロック時はURL文字列から商品名を推定"],
+        ["モノタロウ", "○", "○", "安定して取得可能"],
+        ["ASKUL", "○", "○", "安定して取得可能"],
+        ["ヨドバシ.com", "○", "○", ""],
+        ["ビックカメラ", "○", "○", ""],
+        ["その他サイト", "ページタイトル", "—", "ブックマークレット経由のみ"],
+    ], accent=GREEN)
 
 # ─────────────────────────────────────────────
 # Part B: 承認者（部門長）の目線
 # ─────────────────────────────────────────────
 
-hero("Part B\n承認者（部門長）の目線", "②承認 — ボタン1つで完了", PURPLE)
+hero("Part B\n承認者（部門長）ガイド", "②承認 — ボタン1つで完了", PURPLE)
 
-sec(7, "承認する", PURPLE)
+sec(8, "承認する", PURPLE)
 
 bullets("承認者の操作ガイド", [
     "承認依頼: 部下の申請時にBot DMが届く",
@@ -321,13 +420,17 @@ bullets("承認者の操作ガイド", [
     ("未提出が多い → 先に提出を促してから承認を推奨", 1),
 ], accent=PURPLE)
 
+screenshot("承認待ちメッセージ", "slack-pending.png", "#purchase-request に投稿される申請メッセージ")
+screenshot("承認後の表示", "slack-approved.png", "承認すると [発注完了] [検収完了] ボタンに切り替わる")
+screenshot("差戻し後の表示", "slack-rejected.png", "差戻し理由が表示される。申請者にDMで通知")
+
 # ─────────────────────────────────────────────
-# Part C: 管理本部の目線
+# Part C: 管理本部ガイド
 # ─────────────────────────────────────────────
 
-hero("Part C\n管理本部の目線", "⑥仕訳 → ⑦照合 → ⑧引落 + 発注代行", PINK)
+hero("Part C\n管理本部ガイド", "⑥仕訳 → ⑦照合 → ⑧引落 + 発注代行", PINK)
 
-sec(8, "日常業務", PINK)
+sec(9, "日常業務", PINK)
 
 bullets("管理本部の日常", [
     "毎朝 09:00: #purchase-ops 日次サマリ確認",
@@ -342,7 +445,9 @@ bullets("管理本部の日常", [
     ("[仕訳登録] で自動ドラフト作成 → 借方:費用科目 / 貸方:未払金 or 買掛金", 1),
 ], accent=PINK)
 
-sec(9, "カード明細照合（月次）", ORANGE)
+screenshot("管理ダッシュボード", "dashboard.png", "/dashboard — ステータス分布・部門別・購入先TOP")
+
+sec(10, "カード明細照合（月次）", ORANGE)
 
 steps("月次照合フロー", [
     (1, "CSVダウンロード", "MFビジネスカード管理画面\nから利用明細CSVを取得"),
@@ -351,6 +456,10 @@ steps("月次照合フロー", [
     (4, "引落照合", "入出金履歴CSVと\n未払金合計を突合"),
     (5, "完了通知", "全件処理後\nSlackに完了通知"),
 ])
+
+screenshot("自動照合済みタブ", "matching-confirmed.png", "差額ありは黄色で強調。差額なしは灰色で一覧表示")
+screenshot("要確認タブ", "matching-review.png", "差異タグ（日付/金額/取引先名）を見て [これに確定] で選択")
+screenshot("未申請利用タブ", "matching-unreported.png", "[本人に確認] でSlack通知 or [経費で処理]")
 
 tbl("照合結果の4タブ", ["タブ", "内容", "対応"],
     [
