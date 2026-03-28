@@ -71,7 +71,7 @@ def stat(title, cards):
         lt = s.shapes.add_textbox(x + Inches(0.3), Inches(4.3), int(cw) - Inches(0.6), Inches(1))
         lt.text_frame.word_wrap = True
         lt.text_frame.paragraphs[0].text = lbl
-        lt.text_frame.paragraphs[0].font.size = Pt(16); lt.text_frame.paragraphs[0].font.color.rgb = LIGHT
+        lt.text_frame.paragraphs[0].font.size = Pt(18); lt.text_frame.paragraphs[0].font.color.rgb = LIGHT
 
 def bullets(title, items, accent=CYAN):
     s = prs.slides.add_slide(prs.slide_layouts[6]); dbg(s)
@@ -87,12 +87,12 @@ def bullets(title, items, accent=CYAN):
         p = ct.text_frame.paragraphs[0] if i == 0 else ct.text_frame.add_paragraph()
         if isinstance(item, tuple):
             p.text = item[0]; p.level = item[1]
-            p.font.size = Pt(15 if item[1] > 0 else 20); p.font.color.rgb = MUTED if item[1] > 0 else LIGHT
+            p.font.size = Pt(18 if item[1] > 0 else 24); p.font.color.rgb = MUTED if item[1] > 0 else LIGHT
         elif item == "":
-            p.text = ""; p.font.size = Pt(8)
+            p.text = ""; p.font.size = Pt(10)
         else:
-            p.text = item; p.font.size = Pt(20); p.font.color.rgb = LIGHT
-        p.space_after = Pt(4)
+            p.text = item; p.font.size = Pt(24); p.font.color.rgb = LIGHT
+        p.space_after = Pt(6)
 
 def steps(title, data):
     s = prs.slides.add_slide(prs.slide_layouts[6]); dbg(s)
@@ -122,7 +122,7 @@ def steps(title, data):
         dt = s.shapes.add_textbox(x + int(Inches(0.15)), y + int(Inches(0.7)), int(cw - Inches(0.3)), int(ch - Inches(0.75)))
         dt.text_frame.word_wrap = True
         dt.text_frame.paragraphs[0].text = desc
-        dt.text_frame.paragraphs[0].font.size = Pt(12); dt.text_frame.paragraphs[0].font.color.rgb = MUTED
+        dt.text_frame.paragraphs[0].font.size = Pt(14); dt.text_frame.paragraphs[0].font.color.rgb = MUTED
 
 
 def flow(title, steps, colors=None):
@@ -161,13 +161,13 @@ def tbl(title, headers, rows, accent=CYAN):
         c = table.cell(0, j); c.text = h
         c.fill.solid(); c.fill.fore_color.rgb = SURFACE
         for par in c.text_frame.paragraphs:
-            par.font.size = Pt(13); par.font.bold = True; par.font.color.rgb = accent
+            par.font.size = Pt(16); par.font.bold = True; par.font.color.rgb = accent
     for i, row in enumerate(rows):
         for j, v in enumerate(row):
             c = table.cell(i + 1, j); c.text = str(v)
             c.fill.solid(); c.fill.fore_color.rgb = CARD if i % 2 == 0 else BG
             for par in c.text_frame.paragraphs:
-                par.font.size = Pt(12); par.font.color.rgb = LIGHT
+                par.font.size = Pt(15); par.font.color.rgb = LIGHT
 
 
 # ==================== SLIDES ====================

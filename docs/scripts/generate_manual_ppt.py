@@ -71,12 +71,12 @@ def bullets(title, items, accent=CYAN):
         p = ct.text_frame.paragraphs[0] if i == 0 else ct.text_frame.add_paragraph()
         if isinstance(item, tuple):
             p.text = item[0]; p.level = item[1]
-            p.font.size = Pt(15 if item[1] > 0 else 20); p.font.color.rgb = MUTED if item[1] > 0 else LIGHT
+            p.font.size = Pt(18 if item[1] > 0 else 24); p.font.color.rgb = MUTED if item[1] > 0 else LIGHT
         elif item == "":
-            p.text = ""; p.font.size = Pt(8)
+            p.text = ""; p.font.size = Pt(10)
         else:
-            p.text = item; p.font.size = Pt(20); p.font.color.rgb = LIGHT
-        p.space_after = Pt(4)
+            p.text = item; p.font.size = Pt(24); p.font.color.rgb = LIGHT
+        p.space_after = Pt(6)
 
 
 def steps(title, data):
@@ -102,12 +102,12 @@ def steps(title, data):
         ci.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
         lt = s.shapes.add_textbox(x + int(Inches(0.7)), y + int(Inches(0.15)), int(cw - Inches(0.9)), int(Inches(0.4)))
         lt.text_frame.paragraphs[0].text = label
-        lt.text_frame.paragraphs[0].font.size = Pt(16); lt.text_frame.paragraphs[0].font.bold = True
+        lt.text_frame.paragraphs[0].font.size = Pt(18); lt.text_frame.paragraphs[0].font.bold = True
         lt.text_frame.paragraphs[0].font.color.rgb = WHITE
         dt = s.shapes.add_textbox(x + int(Inches(0.15)), y + int(Inches(0.7)), int(cw - Inches(0.3)), int(ch - Inches(0.75)))
         dt.text_frame.word_wrap = True
         dt.text_frame.paragraphs[0].text = desc
-        dt.text_frame.paragraphs[0].font.size = Pt(12); dt.text_frame.paragraphs[0].font.color.rgb = MUTED
+        dt.text_frame.paragraphs[0].font.size = Pt(14); dt.text_frame.paragraphs[0].font.color.rgb = MUTED
 
 
 def screenshot(title, img_name, caption=""):
@@ -170,13 +170,13 @@ def tbl(title, headers, rows, accent=CYAN):
         c = table.cell(0, j); c.text = h
         c.fill.solid(); c.fill.fore_color.rgb = SURFACE
         for par in c.text_frame.paragraphs:
-            par.font.size = Pt(13); par.font.bold = True; par.font.color.rgb = accent
+            par.font.size = Pt(16); par.font.bold = True; par.font.color.rgb = accent
     for i, row in enumerate(rows):
         for j, v in enumerate(row):
             c = table.cell(i + 1, j); c.text = str(v)
             c.fill.solid(); c.fill.fore_color.rgb = CARD if i % 2 == 0 else BG
             for par in c.text_frame.paragraphs:
-                par.font.size = Pt(12); par.font.color.rgb = LIGHT
+                par.font.size = Pt(15); par.font.color.rgb = LIGHT
 
 
 # ==================== SLIDES ====================
@@ -187,12 +187,24 @@ def tbl(title, headers, rows, accent=CYAN):
 
 hero("購買申請システム\n利用者マニュアル", "Slack Bot + Webフォーム で購買申請から仕訳まで\nv1.0 — 2026-03-28")
 
-tbl("このマニュアルで使う用語", ["用語", "意味"],
+tbl("このマニュアルで使う用語（1/2）", ["用語", "意味"],
     [
+        ["購買申請", "物品やサービスを購入する前にシステムに登録して承認を得ること"],
         ["証憑（しょうひょう）", "購入を証明する書類。納品書・領収書・請求書など"],
         ["検収（けんしゅう）", "届いた物品が注文通りか確認すること"],
         ["仕訳（しわけ）", "会計処理。管理本部が行うので申請者は意識不要"],
-        ["PO番号", "申請ごとに自動発行される管理番号（例: PO-202603-0050）"],
+        ["PO番号 / PR番号", "申請ごとに自動発行される管理番号（例: PR-0050）"],
+        ["立替精算", "個人のお金で先に買い、後から会社に払い戻してもらうこと"],
+    ], accent=MUTED)
+
+tbl("このマニュアルで使う用語（2/2）", ["用語", "意味"],
+    [
+        ["MFバーチャルカード", "MFビジネスカードで発行されるオンライン決済専用カード"],
+        ["MFクラウド経費", "マネーフォワードの経費精算サービス。立替精算時に使用"],
+        ["MF会計Plus", "マネーフォワードのクラウド会計ソフト（管理本部が操作）"],
+        ["カード明細照合", "カード利用明細と購買申請を突き合わせるチェック（管理本部の月次作業）"],
+        ["OCR", "画像から文字を読み取る技術。証憑の金額を自動チェック"],
+        ["OPSチャネル", "管理本部向けSlackチャンネル（#purchase-ops）"],
     ], accent=MUTED)
 
 steps("全体フロー — 購買申請から経理処理まで", [
@@ -309,10 +321,11 @@ bullets("立替精算とMF経費の関係", [
     ("① 申請者が /purchase「購入済」で申請 + 証憑添付", 1),
     ("② 部門長が承認", 1),
     ("③ システムがMF経費に証憑をアップロード（自動）", 1),
-    ("④ 管理本部がMF経費で経費精算を確定", 1),
-    ("⑤ 給与と合算して立替分を振込", 1),
+    ("④ 申請者がMF経費にログインして経費申請を提出", 1),
+    ("⑤ 管理本部がMF経費で承認 → 仕訳連携（自動）", 1),
+    ("⑥ 給与と合算して立替分を振込", 1),
     "",
-    "申請者がMF経費を直接操作する必要はありません",
+    "MF経費での経費申請の提出は申請者が行う必要があります",
     ("MF経費のカード明細から経費登録しないでください（二重計上防止）", 1),
 ], accent=RED)
 
