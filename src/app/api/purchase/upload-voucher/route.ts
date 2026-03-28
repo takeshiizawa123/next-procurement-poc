@@ -27,6 +27,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "file と prNumber は必須です" }, { status: 400 });
     }
 
+    // ファイルサイズ制限（10MB）
+    const MAX_FILE_SIZE = 10 * 1024 * 1024;
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json(
+        { error: `ファイルサイズが上限（10MB）を超えています: ${(file.size / 1024 / 1024).toFixed(1)}MB` },
+        { status: 400 },
+      );
+    }
+
     // MIMEタイプチェック
     const allowed = ["application/pdf", "image/jpeg", "image/png", "image/heic", "image/webp", "image/tiff"];
     if (!allowed.includes(file.type)) {

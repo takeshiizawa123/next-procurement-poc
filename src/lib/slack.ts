@@ -199,12 +199,19 @@ export const handleReject: SlackActionHandler = async ({
     text: `差戻し（${userName}）`,
   });
 
-  // 申請者にDMで差戻し通知
+  // 申請者にDMで差戻し通知（再申請リンク付き）
   const { applicantSlackId } = parseActionValue(actionValue);
   if (applicantSlackId) {
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || "";
+    const baseUrl = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
+    const reapplyUrl = baseUrl ? `${baseUrl}/purchase/new?user_id=${applicantSlackId}` : "";
     await client.chat.postMessage({
       channel: applicantSlackId,
-      text: `↩️ 購買申請 ${poNumber} が差戻しされました（${userName}）。内容を確認のうえ、必要に応じて再申請してください。`,
+      text: [
+        `↩️ 購買申請 ${poNumber} が差戻しされました（${userName}）。`,
+        `内容を確認のうえ、必要に応じて再申請してください。`,
+        ...(reapplyUrl ? [`📝 再申請はこちら: ${reapplyUrl}`] : []),
+      ].join("\n"),
     });
   }
 };
@@ -661,11 +668,18 @@ export const handleDmReject: SlackActionHandler = async ({
     text: `差戻し ${poNumber}`,
   });
 
-  // 申請者にDMで差戻し通知
+  // 申請者にDMで差戻し通知（再申請リンク付き）
   if (applicantSlackId) {
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || "";
+    const baseUrl = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
+    const reapplyUrl = baseUrl ? `${baseUrl}/purchase/new?user_id=${applicantSlackId}` : "";
     await client.chat.postMessage({
       channel: applicantSlackId,
-      text: `↩️ 購買申請 ${poNumber} が差戻しされました（${userName}）。内容を確認のうえ、必要に応じて再申請してください。`,
+      text: [
+        `↩️ 購買申請 ${poNumber} が差戻しされました（${userName}）。`,
+        `内容を確認のうえ、必要に応じて再申請してください。`,
+        ...(reapplyUrl ? [`📝 再申請はこちら: ${reapplyUrl}`] : []),
+      ].join("\n"),
     });
   }
 };

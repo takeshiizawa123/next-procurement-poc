@@ -806,7 +806,7 @@ function PurchaseFormInner() {
             {dupChecked && duplicates.length > 0 && (
               <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 mb-4">
                 <p className="font-bold text-amber-800 mb-2">
-                  類似の申請が {duplicates.length} 件見つかりました
+                  ⚠️ 類似の申請が {duplicates.length} 件見つかりました
                 </p>
                 <ul className="text-sm text-amber-700 space-y-1">
                   {duplicates.map((d) => (
@@ -815,9 +815,15 @@ function PurchaseFormInner() {
                     </li>
                   ))}
                 </ul>
-                <p className="text-xs text-amber-600 mt-2">
-                  重複でない場合はそのまま送信してください
-                </p>
+                <label className="flex items-center gap-2 mt-3 text-sm text-amber-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    name="duplicate_confirmed"
+                    className="rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                    required
+                  />
+                  <span>重複ではないことを確認しました</span>
+                </label>
               </div>
             )}
 
