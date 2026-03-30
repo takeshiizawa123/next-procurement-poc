@@ -393,7 +393,7 @@ export const EXPENSE_ACCOUNT_MAP: Record<string, { account: string; taxType: str
   通信費: { account: "通信費", taxType: "共-課仕 10%" },
   地代家賃: { account: "地代家賃", taxType: "共-課仕 10%" },
   雑費: { account: "雑費", taxType: "共-課仕 10%" },
-  研究開発費: { account: "研究開発費", taxType: "共-課仕 10%" },
+  研究開発費: { account: "研究開発費", taxType: "課仕 10%" },
   管理諸費: { account: "管理諸費", taxType: "共-課仕 10%" },
   会議費: { account: "会議費", taxType: "共-課仕 10%" },
   接待交際費: { account: "接待交際費", taxType: "共-課仕 10%" },
