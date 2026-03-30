@@ -449,6 +449,13 @@ function PurchaseFormInner() {
   const totalAmount = amount * quantity;
   const isHighValue = totalAmount >= 100000;
 
+  // ページ読み込み直後: 未処理タスクを即取得（申請者不明なら全社分）
+  useEffect(() => {
+    const cached = localStorage.getItem("purchase_applicant_name");
+    fetchMyTasks(cached || undefined);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 従業員マスタ・購入先一覧を取得 → 申請者の自動特定・自動選択
   useEffect(() => {
     apiFetch("/api/employees")
@@ -466,7 +473,6 @@ function PurchaseFormInner() {
           if (cached) matched = d.employees.find((e) => e.name === cached);
         }
         if (matched) {
-          // Web直接アクセスの場合は従業員を自動選択
           if (!userId) setSelectedEmployee(matched);
           localStorage.setItem("purchase_applicant_name", matched.name);
           fetchMyTasks(matched.name);
@@ -482,10 +488,11 @@ function PurchaseFormInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 未処理タスクを取得する共通関数
-  const fetchMyTasks = useCallback((name: string) => {
+  // 未処理タスクを取得する共通関数（name省略時は全社）
+  const fetchMyTasks = useCallback((name?: string) => {
     setMyTasksLoading(true);
-    apiFetch(`/api/purchase/recent?applicant=${encodeURIComponent(name)}&limit=50`)
+    const q = name ? `applicant=${encodeURIComponent(name)}&limit=50` : "limit=50";
+    apiFetch(`/api/purchase/recent?${q}`)
       .then((r) => r.json())
       .then((d: { requests?: PastRequest[] }) => {
         const tasks: MyTask[] = [];
