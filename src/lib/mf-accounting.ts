@@ -398,8 +398,7 @@ export const EXPENSE_ACCOUNT_MAP: Record<string, { account: string; taxType: str
   会議費: { account: "会議費", taxType: "共-課仕 10%" },
   接待交際費: { account: "接待交際費", taxType: "共-課仕 10%" },
   修繕費: { account: "修繕費", taxType: "共-課仕 10%" },
-  // 製造原価（課税売上対応）
-  材料費: { account: "材料費", taxType: "課仕 10%" },
-  材料仕入: { account: "材料仕入", taxType: "課仕 10%" },
-  "材料仕入高(製)": { account: "材料仕入高(製)", taxType: "課仕 10%" },
+  // 研究開発費の材料費（販管費・共通対応）
+  材料費: { account: "材料費", taxType: "共-課仕 10%" },
+  材料仕入: { account: "材料仕入", taxType: "共-課仕 10%" },
 };
