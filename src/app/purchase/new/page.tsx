@@ -449,12 +449,28 @@ function PurchaseFormInner() {
   const totalAmount = amount * quantity;
   const isHighValue = totalAmount >= 100000;
 
-  // 従業員マスタ・購入先一覧を取得
+  // 従業員マスタ・購入先一覧を取得 → 申請者の自動特定・自動選択
   useEffect(() => {
     apiFetch("/api/employees")
       .then((r) => r.json())
       .then((d: { employees?: Employee[] }) => {
-        if (d.employees) setEmployees(d.employees);
+        if (!d.employees) return;
+        setEmployees(d.employees);
+        // 申請者を自動特定
+        let matched: Employee | undefined;
+        if (userId) {
+          matched = d.employees.find((e) => e.slackAliases?.includes(userId));
+        }
+        if (!matched) {
+          const cached = localStorage.getItem("purchase_applicant_name");
+          if (cached) matched = d.employees.find((e) => e.name === cached);
+        }
+        if (matched) {
+          // Web直接アクセスの場合は従業員を自動選択
+          if (!userId) setSelectedEmployee(matched);
+          localStorage.setItem("purchase_applicant_name", matched.name);
+          fetchMyTasks(matched.name);
+        }
       })
       .catch(() => {});
     apiFetch("/api/suppliers")
@@ -463,6 +479,7 @@ function PurchaseFormInner() {
         if (d.suppliers) setSupplierSuggestions(d.suppliers);
       })
       .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 未処理タスクを取得する共通関数
@@ -488,24 +505,12 @@ function PurchaseFormInner() {
       .finally(() => setMyTasksLoading(false));
   }, []);
 
-  // ページ読み込み直後: localStorageのキャッシュで即座に取得
+  // 手動で申請者を変更した場合にキャッシュ更新 & 再取得
   useEffect(() => {
-    const cached = localStorage.getItem("purchase_applicant_name");
-    if (cached) fetchMyTasks(cached);
-  }, [fetchMyTasks]);
-
-  // 申請者が特定されたらキャッシュ更新 & 再取得
-  useEffect(() => {
-    let applicantName = selectedEmployee?.name;
-    if (!applicantName && userId && employees.length > 0) {
-      const matched = employees.find((e) => e.slackAliases?.includes(userId));
-      if (matched) applicantName = matched.name;
-    }
-    if (!applicantName) return;
-    const cached = localStorage.getItem("purchase_applicant_name");
-    localStorage.setItem("purchase_applicant_name", applicantName);
-    if (applicantName !== cached) fetchMyTasks(applicantName);
-  }, [selectedEmployee, userId, employees, fetchMyTasks]);
+    if (!selectedEmployee?.name) return;
+    localStorage.setItem("purchase_applicant_name", selectedEmployee.name);
+    fetchMyTasks(selectedEmployee.name);
+  }, [selectedEmployee, fetchMyTasks]);
 
   // 承認ルート取得（金額・区分が変わるたび）
   useEffect(() => {
