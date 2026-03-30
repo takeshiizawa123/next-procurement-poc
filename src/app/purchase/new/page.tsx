@@ -423,7 +423,7 @@ function PurchaseFormInner() {
   const [dupChecked, setDupChecked] = useState(false);
 
   // 過去申請複製
-  type PastRequest = { prNumber: string; applicationDate: string; itemName: string; totalAmount: number; unitPrice: number; quantity: number; supplierName: string; supplierUrl: string; paymentMethod: string; purpose: string };
+  type PastRequest = { prNumber: string; applicationDate: string; itemName: string; totalAmount: number; unitPrice: number; quantity: number; supplierName: string; supplierUrl: string; paymentMethod: string; purpose: string; approvalStatus: string; orderStatus: string; inspectionStatus: string; voucherStatus: string; slackLink: string };
   const [pastRequests, setPastRequests] = useState<PastRequest[]>([]);
   const [showPastRequests, setShowPastRequests] = useState(false);
   const [pastLoading, setPastLoading] = useState(false);
@@ -439,6 +439,11 @@ function PurchaseFormInner() {
 
   // 下書き復元通知
   const [draftRestored, setDraftRestored] = useState(false);
+
+  // 自分の未処理タスク
+  type MyTask = { prNumber: string; itemName: string; totalAmount: number; status: string; slackLink: string };
+  const [myTasks, setMyTasks] = useState<MyTask[]>([]);
+  const [myTasksLoading, setMyTasksLoading] = useState(false);
 
   const isPurchased = requestType === "購入済";
   const totalAmount = amount * quantity;
@@ -459,6 +464,36 @@ function PurchaseFormInner() {
       })
       .catch(() => {});
   }, []);
+
+  // 申請者が特定されたら未処理タスクを取得
+  useEffect(() => {
+    // Slack経由: userId + 従業員マスタからname解決 / Web: selectedEmployee
+    let applicantName = selectedEmployee?.name;
+    if (!applicantName && userId && employees.length > 0) {
+      const matched = employees.find((e) => e.slackAliases?.includes(userId));
+      if (matched) applicantName = matched.name;
+    }
+    if (!applicantName) return;
+    setMyTasksLoading(true);
+    apiFetch(`/api/purchase/recent?applicant=${encodeURIComponent(applicantName)}&limit=50`)
+      .then((r) => r.json())
+      .then((d: { requests?: PastRequest[] }) => {
+        const tasks: MyTask[] = [];
+        for (const req of d.requests || []) {
+          let status = "";
+          if (req.approvalStatus === "差戻し") status = "差戻し";
+          else if (req.orderStatus === "未発注" && req.approvalStatus !== "承認待ち") status = "発注待ち";
+          else if (req.inspectionStatus === "未検収" && req.orderStatus !== "未発注") status = "検収待ち";
+          else if (req.voucherStatus === "要取得" && req.inspectionStatus !== "未検収") status = "証憑待ち";
+          if (status) {
+            tasks.push({ prNumber: req.prNumber, itemName: req.itemName, totalAmount: req.totalAmount, status, slackLink: req.slackLink });
+          }
+        }
+        setMyTasks(tasks);
+      })
+      .catch(() => setMyTasks([]))
+      .finally(() => setMyTasksLoading(false));
+  }, [selectedEmployee, userId, employees]);
 
   // 承認ルート取得（金額・区分が変わるたび）
   useEffect(() => {
@@ -746,6 +781,34 @@ function PurchaseFormInner() {
           >
             クリア
           </button>
+        </div>
+      )}
+
+      {/* 未処理タスクサマリ */}
+      {myTasks.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-amber-700 font-medium text-sm">未処理のタスクがあります（{myTasks.length}件）</span>
+          </div>
+          <div className="space-y-1">
+            {(() => {
+              const grouped = { "発注待ち": [] as MyTask[], "検収待ち": [] as MyTask[], "証憑待ち": [] as MyTask[], "差戻し": [] as MyTask[] };
+              for (const t of myTasks) if (t.status in grouped) (grouped as Record<string, MyTask[]>)[t.status].push(t);
+              const icons: Record<string, string> = { "発注待ち": "🛒", "検収待ち": "📦", "証憑待ち": "📎", "差戻し": "↩️" };
+              return Object.entries(grouped).filter(([, items]) => items.length > 0).map(([status, items]) => (
+                <div key={status} className="text-sm text-amber-800">
+                  <span>{icons[status]} {status}: {items.length}件</span>
+                  <span className="text-amber-600 ml-2">
+                    {items.slice(0, 3).map((t) => t.prNumber).join(", ")}
+                    {items.length > 3 && ` 他${items.length - 3}件`}
+                  </span>
+                </div>
+              ));
+            })()}
+          </div>
+          <a href="/purchase/my" className="text-xs text-amber-600 hover:text-amber-800 underline mt-1 inline-block">
+            マイページで確認
+          </a>
         </div>
       )}
 
