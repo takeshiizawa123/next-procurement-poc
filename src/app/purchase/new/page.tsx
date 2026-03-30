@@ -809,30 +809,36 @@ function PurchaseFormInner() {
       )}
 
       {/* 未処理タスクサマリ */}
-      {myTasks.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-amber-700 font-medium text-sm">未処理のタスクがあります（{myTasks.length}件）</span>
-          </div>
-          <div className="space-y-1">
-            {(() => {
-              const grouped = { "発注待ち": [] as MyTask[], "検収待ち": [] as MyTask[], "証憑待ち": [] as MyTask[], "差戻し": [] as MyTask[] };
-              for (const t of myTasks) if (t.status in grouped) (grouped as Record<string, MyTask[]>)[t.status].push(t);
-              const icons: Record<string, string> = { "発注待ち": "🛒", "検収待ち": "📦", "証憑待ち": "📎", "差戻し": "↩️" };
-              return Object.entries(grouped).filter(([, items]) => items.length > 0).map(([status, items]) => (
-                <div key={status} className="text-sm text-amber-800">
-                  <span>{icons[status]} {status}: {items.length}件</span>
-                  <span className="text-amber-600 ml-2">
-                    {items.slice(0, 3).map((t) => t.prNumber).join(", ")}
-                    {items.length > 3 && ` 他${items.length - 3}件`}
-                  </span>
-                </div>
-              ));
-            })()}
-          </div>
-          <a href="/purchase/my" className="text-xs text-amber-600 hover:text-amber-800 underline mt-1 inline-block">
-            マイページで確認
-          </a>
+      {!myTasksLoading && (
+        <div className={`${myTasks.length > 0 ? "bg-amber-50 border-amber-200" : "bg-green-50 border-green-200"} border rounded-lg p-3 mb-4`}>
+          {myTasks.length > 0 ? (
+            <>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-amber-700 font-medium text-sm">未処理のタスクがあります（{myTasks.length}件）</span>
+              </div>
+              <div className="space-y-1">
+                {(() => {
+                  const grouped = { "発注待ち": [] as MyTask[], "検収待ち": [] as MyTask[], "証憑待ち": [] as MyTask[], "差戻し": [] as MyTask[] };
+                  for (const t of myTasks) if (t.status in grouped) (grouped as Record<string, MyTask[]>)[t.status].push(t);
+                  const icons: Record<string, string> = { "発注待ち": "🛒", "検収待ち": "📦", "証憑待ち": "📎", "差戻し": "↩️" };
+                  return Object.entries(grouped).filter(([, items]) => items.length > 0).map(([status, items]) => (
+                    <div key={status} className="text-sm text-amber-800">
+                      <span>{icons[status]} {status}: {items.length}件</span>
+                      <span className="text-amber-600 ml-2">
+                        {items.slice(0, 3).map((t) => t.prNumber).join(", ")}
+                        {items.length > 3 && ` 他${items.length - 3}件`}
+                      </span>
+                    </div>
+                  ));
+                })()}
+              </div>
+              <a href="/purchase/my" className="text-xs text-amber-600 hover:text-amber-800 underline mt-1 inline-block">
+                マイページで確認
+              </a>
+            </>
+          ) : (
+            <span className="text-green-700 text-sm">未処理のタスクはありません</span>
+          )}
         </div>
       )}
 
