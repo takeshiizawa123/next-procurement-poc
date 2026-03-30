@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { Suspense, useState, useCallback, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api-client";
 
@@ -182,6 +182,14 @@ function buildDiffTags(
 type TabKey = "confirmed" | "needs_review" | "not_found" | "unreported" | "withdrawal";
 
 export default function CardMatchingPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-gray-400">読み込み中...</div>}>
+      <CardMatchingContent />
+    </Suspense>
+  );
+}
+
+function CardMatchingContent() {
   const [activeTab, setActiveTab] = useState<TabKey>("needs_review");
   const [confidentMatches, setConfidentMatches] = useState<ConfidentMatch[]>([]);
   const [candidates, setCandidates] = useState<CandidateMatch[]>([]);
