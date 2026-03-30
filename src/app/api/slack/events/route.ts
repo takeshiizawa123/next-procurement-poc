@@ -62,11 +62,13 @@ export async function POST(request: NextRequest) {
 
     // url_verification はパース後に判定するため、署名検証を先にペイロード確認
     // ただし署名が存在する場合は必ず検証する
-    if (SIGNING_SECRET) {
-      if (!slackSignature || !verifySlackSignature(body, slackTimestamp, slackSignature)) {
-        console.warn("[slack] signature verification failed — missing or invalid signature");
-        return NextResponse.json({ error: "invalid signature" }, { status: 401 });
-      }
+    if (!SIGNING_SECRET) {
+      console.error("[slack] SLACK_SIGNING_SECRET is not configured — rejecting request");
+      return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+    }
+    if (!slackSignature || !verifySlackSignature(body, slackTimestamp, slackSignature)) {
+      console.warn("[slack] signature verification failed — missing or invalid signature");
+      return NextResponse.json({ error: "invalid signature" }, { status: 401 });
     }
 
     // Content-Type に応じてペイロードをパース

@@ -15,7 +15,10 @@ const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || "";
  * cron, 内部API呼出し, 管理画面用
  */
 export function requireBearerAuth(request: NextRequest): NextResponse | null {
-  if (!CRON_SECRET) return null; // 未設定時はスキップ（開発環境）
+  if (!CRON_SECRET) {
+    console.error("[auth] CRON_SECRET is not configured — rejecting request");
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+  }
   const authHeader = request.headers.get("authorization");
   if (authHeader === `Bearer ${CRON_SECRET}`) return null;
   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -26,7 +29,13 @@ export function requireBearerAuth(request: NextRequest): NextResponse | null {
  * クエリパラメータ ?apiKey=xxx またはヘッダ x-api-key で受付
  */
 export function requireApiKey(request: NextRequest): NextResponse | null {
-  if (!INTERNAL_API_KEY) return null; // 未設定時はスキップ（開発環境）
+  if (!INTERNAL_API_KEY) {
+    // 開発環境（localhost）はスキップ、本番は拒否
+    const host = request.headers.get("host") || "";
+    if (host.startsWith("localhost") || host.startsWith("127.0.0.1")) return null;
+    console.error("[auth] INTERNAL_API_KEY is not configured — rejecting request");
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+  }
   const fromQuery = request.nextUrl.searchParams.get("apiKey");
   const fromHeader = request.headers.get("x-api-key");
   if (fromQuery === INTERNAL_API_KEY || fromHeader === INTERNAL_API_KEY) return null;

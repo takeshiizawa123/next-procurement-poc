@@ -32,6 +32,14 @@ function resolveInspector(
 
 const PURCHASE_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
 
+/** HTMLタグ・制御文字を除去してGAS数式インジェクションを防止 */
+function sanitize(input: string): string {
+  return input
+    .replace(/[<>]/g, "")           // HTMLタグ除去
+    .replace(/^[=+\-@\t\r]/g, " ") // GAS数式インジェクション防止（先頭の特殊文字）
+    .slice(0, 500);                 // 長さ制限
+}
+
 /**
  * Webフォームからの購買申請受付
  * POST /api/purchase/submit
@@ -56,13 +64,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // バリデーション
-    const itemName = (formData.get("item_name") as string)?.trim();
-    const amountRaw = formData.get("amount") as string;
-    const quantityRaw = formData.get("quantity") as string;
-    const paymentMethod = formData.get("payment_method") as string;
-    const supplierName = (formData.get("supplier_name") as string)?.trim();
-    const requestType = formData.get("request_type") as string;
+    // バリデーション（サニタイズ付き）
+    const itemName = sanitize((formData.get("item_name") as string)?.trim() || "");
+    const amountRaw = (formData.get("amount") as string) || "";
+    const quantityRaw = (formData.get("quantity") as string) || "";
+    const paymentMethod = (formData.get("payment_method") as string) || "";
+    const supplierName = sanitize((formData.get("supplier_name") as string)?.trim() || "");
+    const requestType = (formData.get("request_type") as string) || "";
 
     if (!itemName || !amountRaw || !paymentMethod || !supplierName || !requestType) {
       const missing = [];
@@ -81,10 +89,13 @@ export async function POST(request: NextRequest) {
     }
 
     const amount = parseInt(amountRaw.replace(/[,，]/g, ""), 10);
-    const quantity = parseInt(quantityRaw || "1", 10) || 1;
+    const quantity = parseInt(quantityRaw || "1", 10);
 
-    if (isNaN(amount) || amount <= 0) {
-      return NextResponse.json({ error: "金額を正しく入力してください" }, { status: 400 });
+    if (isNaN(amount) || amount <= 0 || amount > 100_000_000) {
+      return NextResponse.json({ error: "金額を正しく入力してください（1円〜1億円）" }, { status: 400 });
+    }
+    if (isNaN(quantity) || quantity <= 0 || quantity > 10_000) {
+      return NextResponse.json({ error: "数量を正しく入力してください（1〜10,000）" }, { status: 400 });
     }
 
     const totalAmount = amount * quantity;
@@ -129,13 +140,13 @@ export async function POST(request: NextRequest) {
         unitPrice: amount,
         quantity,
         purchaseSource: supplierName,
-        purchaseSourceUrl: (formData.get("url") as string)?.trim() || "",
-        hubspotInfo: (formData.get("hubspot_deal_id") as string)?.trim() || "",
-        budgetNumber: (formData.get("budget_number") as string)?.trim() || "",
+        purchaseSourceUrl: sanitize((formData.get("url") as string)?.trim() || ""),
+        hubspotInfo: sanitize((formData.get("hubspot_deal_id") as string)?.trim() || ""),
+        budgetNumber: sanitize((formData.get("budget_number") as string)?.trim() || ""),
         paymentMethod,
-        purpose: (formData.get("asset_usage") as string)?.trim() || "",
+        purpose: sanitize((formData.get("asset_usage") as string)?.trim() || ""),
         accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
-        remarks: (formData.get("notes") as string)?.trim() || "",
+        remarks: sanitize((formData.get("notes") as string)?.trim() || ""),
         isPurchased,
       });
       if (gasResult.success && gasResult.data?.prNumber) {
@@ -270,12 +281,19 @@ export async function POST(request: NextRequest) {
     // 追加品目の登録（一括申請）
     const extraItemsRaw = (formData.get("extra_items") as string)?.trim() || "[]";
     try {
-      const extraItems = JSON.parse(extraItemsRaw) as { itemName: string; amount: number; quantity: number; url: string }[];
+      let extraItems: { itemName: string; amount: number; quantity: number; url: string }[];
+      try {
+        extraItems = JSON.parse(extraItemsRaw);
+        if (!Array.isArray(extraItems)) extraItems = [];
+      } catch {
+        extraItems = [];
+      }
       const extraSlackLink = resultTs
         ? `https://slack.com/archives/${channelId}/p${resultTs.replace(".", "")}`
         : "";
       for (const extra of extraItems) {
-        if (!extra.itemName || !extra.amount) continue;
+        if (!extra.itemName || !extra.amount || extra.amount <= 0 || extra.quantity <= 0) continue;
+        extra.itemName = sanitize(extra.itemName);
         const extraTotal = extra.amount * extra.quantity;
         const extraEstimation = estimateAccount(extra.itemName, supplierName, extraTotal);
         await registerPurchase({
