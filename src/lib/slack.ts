@@ -866,30 +866,32 @@ export async function handlePurchaseCommand(
     return "modal";
   }
 
-  // 2択をエフェメラルメッセージで表示
+  // 2択をモーダルで表示（プライベートチャンネルでのephemeral失敗を回避）
   const formUrl = `${webFormUrl.startsWith("http") ? webFormUrl : `https://${webFormUrl}`}/purchase/new?user_id=${userId}&channel_id=${channelId}`;
 
-  await slackClient.chat.postEphemeral({
-    channel: channelId,
-    user: userId,
-    text: "購買申請の入力方法を選択してください",
-    blocks: [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "*購買申請* — 入力方法を選んでください",
+  await slackClient.views.open({
+    trigger_id: triggerId,
+    view: {
+      type: "modal",
+      title: { type: "plain_text", text: "購買申請" },
+      close: { type: "plain_text", text: "閉じる" },
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "*入力方法を選んでください*",
+          },
         },
-      },
-      {
-        type: "actions",
-        block_id: "purchase_chooser",
-        elements: [
-          {
-            type: "button",
-            text: { type: "plain_text", text: "📱 Slackモーダルで入力" },
-            value: channelId,
-            action_id: "purchase_open_modal",
+        {
+          type: "actions",
+          block_id: "purchase_chooser",
+          elements: [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "📱 Slackモーダルで入力" },
+              value: channelId,
+              action_id: "purchase_open_modal",
           },
           {
             type: "button",
@@ -899,16 +901,17 @@ export async function handlePurchaseCommand(
           },
         ],
       },
-      {
-        type: "context",
-        elements: [
-          {
-            type: "mrkdwn",
-            text: "💡 Webフォームではファイルアップロードや入力補助が利用できます",
-          },
-        ],
-      },
-    ],
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: "💡 Webフォームではファイルアップロードや入力補助が利用できます",
+            },
+          ],
+        },
+      ],
+    },
   });
   return "chooser";
 }
