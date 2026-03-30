@@ -1,5 +1,28 @@
 # CURRENT_WORK
 
+## [Handoff] "セキュリティ強化・整合性検証・税区分修正・Vercel法人移行・Slack動作確認" — 2026-03-30 17:04 (branch: master)
+
+### Goal / Scope
+- セキュリティ監査（OWASP Top 10）→ P0/P1/P2の全項目対応
+- 設計書・マニュアル vs 実装の整合性検証 → 抜け漏れ修正
+- 消費税区分を科目マスタCSV（FS税区分）に準拠
+- Vercel法人チーム（futurestandard）への移行・デプロイ・Slack動作確認
+
+### Done
+- [x] セキュリティ: API認証(14ルート)、タイムアウト(17箇所)、GASリトライ、OAuth CSRF防止
+- [x] カード照合差額調整仕訳、出張予測レコード、返品取消仕訳、部分検収
+- [x] 消費税区分修正（共-課仕/課仕）、OCR税率→仕訳反映、研究開発費→課仕
+- [x] Vercel futurestandard移行、環境変数17件設定、/purchase動作確認
+
+### Pending
+- [ ] 手動設定14項目（従業員マスタ、clasp push、GCP認証等）
+- [ ] SLACK_DEFAULT_APPROVER / SLACK_ADMIN_MEMBERS / Google Drive環境変数
+- [ ] Vercel GitHub連携、E2Eテスト
+
+### Next actions → docs/handoffs/handoff-20260330-1704-master.md 参照
+
+---
+
 ## [Handoff] "経理処理精査・入力項目整備完了" — 2026-03-28 23:28 (branch: master)
 
 ### Goal / Scope
