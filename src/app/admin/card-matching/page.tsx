@@ -471,7 +471,7 @@ function CardMatchingContent() {
         {isExecuting && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg px-5 py-4 text-center">
             <div className="inline-block animate-spin rounded-full h-5 w-5 border-2 border-blue-600 border-t-transparent mr-2 align-middle" />
-            <span className="text-sm text-blue-700">照合を実行中... 予測テーブル・MF仕訳を取得しています</span>
+            <span className="text-sm text-blue-700">照合を実行中... 予測テーブル・MF仕訳を取得しています（最大30秒）</span>
           </div>
         )}
 

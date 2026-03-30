@@ -62,9 +62,11 @@ function VoucherUploadButton({ prNumber, slackLink }: { prNumber: string; slackL
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [uploaded, setUploaded] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   const handleUpload = useCallback(async (file: File) => {
     setUploading(true);
+    setFailed(false);
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -77,11 +79,10 @@ function VoucherUploadButton({ prNumber, slackLink }: { prNumber: string; slackL
       if (res.ok) {
         setUploaded(true);
       } else {
-        const err = await res.json();
-        alert(`アップロード失敗: ${err.error || "不明なエラー"}`);
+        setFailed(true);
       }
     } catch {
-      alert("アップロードに失敗しました。Slackスレッドから添付してください。");
+      setFailed(true);
     } finally {
       setUploading(false);
     }
@@ -89,6 +90,16 @@ function VoucherUploadButton({ prNumber, slackLink }: { prNumber: string; slackL
 
   if (uploaded) {
     return <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded">提出済</span>;
+  }
+  if (failed) {
+    return (
+      <button onClick={() => inputRef.current?.click()}
+        className="text-xs px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200">
+        失敗 — 再試行
+        <input ref={inputRef} type="file" accept=".pdf,image/*" className="hidden"
+          onChange={(e) => { if (e.target.files?.[0]) handleUpload(e.target.files[0]); }} />
+      </button>
+    );
   }
 
   return (
@@ -112,18 +123,22 @@ function MyPageInner() {
 
   const [requests, setRequests] = useState<PurchaseRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "completed">("all");
 
-  useEffect(() => {
+  const fetchRequests = () => {
     setLoading(true);
+    setLoadError(false);
     apiFetch("/api/purchase/recent?limit=30")
       .then((r) => r.json())
       .then((d: { requests?: PurchaseRequest[] }) => {
         setRequests(d.requests || []);
       })
-      .catch(() => setRequests([]))
+      .catch(() => { setRequests([]); setLoadError(true); })
       .finally(() => setLoading(false));
-  }, []);
+  };
+
+  useEffect(() => { fetchRequests(); }, []);
 
   const filtered = requests.filter((req) => {
     if (filter === "all") return true;
@@ -150,6 +165,14 @@ function MyPageInner() {
           + 新規申請
         </a>
       </div>
+
+      {/* データ読み込みエラー */}
+      {loadError && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center justify-between">
+          <span className="text-sm text-red-800">申請一覧の読み込みに失敗しました。ネットワーク接続を確認してください。</span>
+          <button onClick={fetchRequests} className="text-sm text-red-600 hover:text-red-800 underline ml-2 shrink-0">再読み込み</button>
+        </div>
+      )}
 
       {/* サマリーカード */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">

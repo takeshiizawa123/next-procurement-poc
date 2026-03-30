@@ -51,7 +51,16 @@ function loadDraft(): DraftData | null {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const data = JSON.parse(raw) as DraftData;
+    // 7日以上前の下書きは期限切れとして破棄
+    if (data.savedAt) {
+      const age = Date.now() - new Date(data.savedAt).getTime();
+      if (age > 7 * 24 * 60 * 60 * 1000) {
+        localStorage.removeItem(DRAFT_KEY);
+        return null;
+      }
+    }
+    return data;
   } catch {
     return null;
   }
@@ -1084,6 +1093,11 @@ function PurchaseFormInner() {
             </fieldset>
 
                 {/* Step 1 ナビゲーション */}
+                {!canProceedStep1 && (
+                  <p className="text-xs text-gray-500 mb-1">
+                    {!requestType ? "※ 申請区分を選択してください" : !userId && !selectedEmployee ? "※ 申請者を選択してください" : ""}
+                  </p>
+                )}
                 <button
                   type="button"
                   disabled={!canProceedStep1}
@@ -1455,6 +1469,11 @@ function PurchaseFormInner() {
                 )}
 
                 {/* Step 2 ナビゲーション */}
+                {!canProceedStep2 && (
+                  <p className="text-xs text-gray-500 mb-1">
+                    {!itemName ? "※ 品目名を入力してください" : amount <= 0 ? "※ 単価を入力してください" : !supplierName ? "※ 購入先を入力してください" : ""}
+                  </p>
+                )}
                 <div className="flex gap-3">
                   <button type="button" onClick={goPrevStep} className="flex-1 py-3 px-4 border-2 border-gray-300 text-gray-700 font-bold rounded-lg hover:bg-gray-50">
                     戻る
