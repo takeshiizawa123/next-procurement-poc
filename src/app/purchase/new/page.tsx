@@ -465,17 +465,10 @@ function PurchaseFormInner() {
       .catch(() => {});
   }, []);
 
-  // 申請者が特定されたら未処理タスクを取得
-  useEffect(() => {
-    // Slack経由: userId + 従業員マスタからname解決 / Web: selectedEmployee
-    let applicantName = selectedEmployee?.name;
-    if (!applicantName && userId && employees.length > 0) {
-      const matched = employees.find((e) => e.slackAliases?.includes(userId));
-      if (matched) applicantName = matched.name;
-    }
-    if (!applicantName) return;
+  // 未処理タスクを取得する共通関数
+  const fetchMyTasks = useCallback((name: string) => {
     setMyTasksLoading(true);
-    apiFetch(`/api/purchase/recent?applicant=${encodeURIComponent(applicantName)}&limit=50`)
+    apiFetch(`/api/purchase/recent?applicant=${encodeURIComponent(name)}&limit=50`)
       .then((r) => r.json())
       .then((d: { requests?: PastRequest[] }) => {
         const tasks: MyTask[] = [];
@@ -493,7 +486,26 @@ function PurchaseFormInner() {
       })
       .catch(() => setMyTasks([]))
       .finally(() => setMyTasksLoading(false));
-  }, [selectedEmployee, userId, employees]);
+  }, []);
+
+  // ページ読み込み直後: localStorageのキャッシュで即座に取得
+  useEffect(() => {
+    const cached = localStorage.getItem("purchase_applicant_name");
+    if (cached) fetchMyTasks(cached);
+  }, [fetchMyTasks]);
+
+  // 申請者が特定されたらキャッシュ更新 & 再取得
+  useEffect(() => {
+    let applicantName = selectedEmployee?.name;
+    if (!applicantName && userId && employees.length > 0) {
+      const matched = employees.find((e) => e.slackAliases?.includes(userId));
+      if (matched) applicantName = matched.name;
+    }
+    if (!applicantName) return;
+    const cached = localStorage.getItem("purchase_applicant_name");
+    localStorage.setItem("purchase_applicant_name", applicantName);
+    if (applicantName !== cached) fetchMyTasks(applicantName);
+  }, [selectedEmployee, userId, employees, fetchMyTasks]);
 
   // 承認ルート取得（金額・区分が変わるたび）
   useEffect(() => {
