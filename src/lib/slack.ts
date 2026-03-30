@@ -509,7 +509,7 @@ export const handleReturn: SlackActionHandler = async ({
       const isCard = payMethod.includes("カード");
       const creditAccountName = isCard ? "未払金" : "買掛金";
       const creditCode = await resolveAccountCode(creditAccountName) || creditAccountName;
-      const taxCode = await resolveTaxCode("課税仕入10%");
+      const taxCode = await resolveTaxCode("共-課仕 10%");
       const taxValue = Math.floor(amountNum * 10 / 110);
 
       const journal = await createJournal({

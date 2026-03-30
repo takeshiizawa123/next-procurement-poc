@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
       const mainAccount = accountTitle?.split("（")[0].trim() || "消耗品費";
       const debitAccountCode = await resolveAccountCode(mainAccount) || mainAccount;
       const creditAccountCode = await resolveAccountCode("未払金") || "未払金";
-      const taxCode = await resolveTaxCode("課税仕入10%");
+      const taxCode = await resolveTaxCode("共-課仕 10%");
 
       // 税額計算（10%税込み前提）
       const taxValue = Math.floor(absDiff * 10 / 110);

@@ -105,7 +105,7 @@ export async function POST(request: NextRequest) {
         const absDiff = Math.abs(m.diff);
         const debitCode = await resolveAccountCode("消耗品費") || "消耗品費";
         const creditCode = await resolveAccountCode("未払金") || "未払金";
-        const taxCode = await resolveTaxCode("課税仕入10%");
+        const taxCode = await resolveTaxCode("共-課仕 10%");
         const taxValue = Math.floor(absDiff * 10 / 110);
 
         const journal = await createJournal({

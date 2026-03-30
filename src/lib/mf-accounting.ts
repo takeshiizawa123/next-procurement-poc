@@ -322,7 +322,7 @@ export async function buildJournalFromPurchase(params: {
 
   // 税区分 — 科目に対応する税区分を解決
   const expenseMapping = EXPENSE_ACCOUNT_MAP[mainAccount];
-  const taxTypeName = expenseMapping?.taxType || "課税仕入10%";
+  const taxTypeName = expenseMapping?.taxType || "共-課仕 10%";
   const taxCode = await resolveTaxCode(taxTypeName);
 
   // 部門
@@ -361,24 +361,45 @@ export async function buildJournalFromPurchase(params: {
 // --- 税率マッピング ---
 
 const TAX_RATE_MAP: Record<string, number> = {
+  "課仕 10%": 10,
+  "共-課仕 10%": 10,
+  "課仕 8%": 8,
+  "共-課仕 8%": 8,
   "課税仕入10%": 10,
   "課税仕入8%": 8,
   "課税仕入8%(軽)": 8,
   "非課税": 0,
   "不課税": 0,
+  "対象外": 0,
   "免税": 0,
 };
 
 // --- 勘定科目マッピング（フォールバック用） ---
+// 税区分はFS税区分（科目マスタCSV）に準拠
+// 販管費 → 共-課仕 10%（共通対応）、製造原価 → 課仕 10%（課税売上対応）
+// ※現在は売上5億未満で全額控除のため実質影響なしだが、正しい区分を維持
 
 export const EXPENSE_ACCOUNT_MAP: Record<string, { account: string; taxType: string }> = {
-  消耗品費: { account: "消耗品費", taxType: "課税仕入10%" },
-  工具器具備品: { account: "工具器具備品", taxType: "課税仕入10%" },
-  ソフトウェア: { account: "ソフトウェア", taxType: "課税仕入10%" },
-  外注費: { account: "外注費", taxType: "課税仕入10%" },
-  広告宣伝費: { account: "広告宣伝費", taxType: "課税仕入10%" },
-  旅費交通費: { account: "旅費交通費", taxType: "課税仕入10%" },
-  通信費: { account: "通信費", taxType: "課税仕入10%" },
-  地代家賃: { account: "地代家賃", taxType: "非課税" },
-  雑費: { account: "雑費", taxType: "課税仕入10%" },
+  // 販売費及び一般管理費（共通対応）
+  消耗品費: { account: "消耗品費", taxType: "共-課仕 10%" },
+  備品消耗品費: { account: "備品消耗品費", taxType: "共-課仕 10%" },
+  事務用消耗品費: { account: "事務用消耗品費", taxType: "共-課仕 10%" },
+  工具器具備品: { account: "工具器具備品", taxType: "共-課仕 10%" },
+  ソフトウェア: { account: "ソフトウェア", taxType: "共-課仕 10%" },
+  外注費: { account: "外注費", taxType: "共-課仕 10%" },
+  業務委託費: { account: "業務委託費", taxType: "共-課仕 10%" },
+  広告宣伝費: { account: "広告宣伝費", taxType: "共-課仕 10%" },
+  旅費交通費: { account: "旅費交通費", taxType: "共-課仕 10%" },
+  通信費: { account: "通信費", taxType: "共-課仕 10%" },
+  地代家賃: { account: "地代家賃", taxType: "共-課仕 10%" },
+  雑費: { account: "雑費", taxType: "共-課仕 10%" },
+  研究開発費: { account: "研究開発費", taxType: "共-課仕 10%" },
+  管理諸費: { account: "管理諸費", taxType: "共-課仕 10%" },
+  会議費: { account: "会議費", taxType: "共-課仕 10%" },
+  接待交際費: { account: "接待交際費", taxType: "共-課仕 10%" },
+  修繕費: { account: "修繕費", taxType: "共-課仕 10%" },
+  // 製造原価（課税売上対応）
+  材料費: { account: "材料費", taxType: "課仕 10%" },
+  材料仕入: { account: "材料仕入", taxType: "課仕 10%" },
+  "材料仕入高(製)": { account: "材料仕入高(製)", taxType: "課仕 10%" },
 };
