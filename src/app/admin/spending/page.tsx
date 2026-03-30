@@ -161,7 +161,8 @@ export default function SpendingDashboard() {
                   onSelect={setSelectedEmployee}
                 />
               </div>
-              <div>
+              {/* デスクトップ: サイドパネル */}
+              <div className="hidden lg:block">
                 {selected ? (
                   <EmployeeDetail
                     employee={selected}
@@ -175,6 +176,18 @@ export default function SpendingDashboard() {
                 )}
               </div>
             </div>
+            {/* モバイル: モーダル表示 */}
+            {selected && (
+              <div className="lg:hidden fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center" onClick={() => setSelectedEmployee(null)}>
+                <div className="bg-white w-full sm:max-w-md sm:rounded-xl rounded-t-xl max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+                  <EmployeeDetail
+                    employee={selected}
+                    targetMonths={targetMonths}
+                    onClose={() => setSelectedEmployee(null)}
+                  />
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>

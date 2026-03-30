@@ -17,6 +17,7 @@ interface PurchaseRequest {
   type: string;
   department: string;
   accountTitle: string;
+  slackLink: string;
 }
 
 function overallLabel(req: PurchaseRequest): string {
@@ -180,7 +181,9 @@ function DashboardInner() {
                   <p className="text-xs text-amber-600 font-medium">証憑超過（3日+）: {overdueItems.length}件</p>
                   <ul className="space-y-0.5">
                     {overdueItems.slice(0, 3).map((r) => (
-                      <li key={r.prNumber} className="text-sm text-amber-800">{r.prNumber}: {r.itemName}（{r.applicant}）</li>
+                      <li key={r.prNumber} className="text-sm text-amber-800">
+                        {r.slackLink ? <a href={r.slackLink} target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-600">{r.prNumber}</a> : r.prNumber}: {r.itemName}（{r.applicant}）
+                      </li>
                     ))}
                   </ul>
                 </div>
@@ -190,10 +193,26 @@ function DashboardInner() {
                   <p className="text-xs text-amber-600 font-medium">承認待ち超過（1日+）: {approvalOverdue.length}件</p>
                   <ul className="space-y-0.5">
                     {approvalOverdue.slice(0, 3).map((r) => (
-                      <li key={r.prNumber} className="text-sm text-amber-800">{r.prNumber}: {r.itemName}（{r.applicant}）</li>
+                      <li key={r.prNumber} className="text-sm text-amber-800">
+                        {r.slackLink ? <a href={r.slackLink} target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-600">{r.prNumber}</a> : r.prNumber}: {r.itemName}（{r.applicant}）
+                      </li>
                     ))}
                   </ul>
                 </div>
+              )}
+              {/* 一括フォロー: 遅延案件のSlackリンクをまとめて開く */}
+              {[...overdueItems, ...approvalOverdue].some((r) => r.slackLink) && (
+                <button
+                  onClick={() => {
+                    [...overdueItems, ...approvalOverdue]
+                      .filter((r) => r.slackLink)
+                      .slice(0, 5)
+                      .forEach((r) => window.open(r.slackLink, "_blank"));
+                  }}
+                  className="mt-2 text-xs px-3 py-1 bg-amber-200 text-amber-800 rounded hover:bg-amber-300"
+                >
+                  Slackで確認（最大5件を開く）
+                </button>
               )}
             </div>
           )}

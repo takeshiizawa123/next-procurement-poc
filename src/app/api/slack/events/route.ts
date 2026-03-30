@@ -208,8 +208,13 @@ export async function POST(request: NextRequest) {
             text: lines.join("\n"),
           });
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          return NextResponse.json({ response_type: "ephemeral", text: `Error: ${msg}` });
+          console.error("[mystatus] Error:", error);
+          const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || "";
+          const baseUrl = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
+          return NextResponse.json({
+            response_type: "ephemeral",
+            text: `⚠️ ステータスの取得に失敗しました。しばらくしてから再度お試しください。\n<${baseUrl}/purchase/my?user_id=${userId}|マイページで確認>`,
+          });
         }
       }
 
