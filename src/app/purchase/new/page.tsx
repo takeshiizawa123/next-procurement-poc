@@ -1128,8 +1128,10 @@ function PurchaseFormInner() {
                 className="w-full border rounded-lg px-3 py-2 bg-white"
               >
                 <option value="">申請者本人（デフォルト）</option>
-                {employees.map((emp) => (
-                  <option key={emp.name} value={emp.name}>
+                {employees
+                  .filter((emp) => emp.departmentName)
+                  .map((emp) => (
+                  <option key={`${emp.name}-${emp.departmentCode}`} value={emp.name}>
                     {emp.name}（{emp.departmentName}）
                   </option>
                 ))}
