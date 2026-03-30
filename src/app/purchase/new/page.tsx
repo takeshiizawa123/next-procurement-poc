@@ -319,9 +319,9 @@ function ConfirmationView({
         </div>
       )}
 
-      {(values.allItemsTotal || values.totalAmount) >= 100000 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
-          この申請は10万円以上のため、部門長承認が必要です。
+      {values.requestType !== "購入済" && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+          この申請は部門長の承認が必要です。{(values.allItemsTotal || values.totalAmount) >= 100000 ? "（10万円以上: 固定資産登録の確認対象）" : ""}
         </div>
       )}
 
