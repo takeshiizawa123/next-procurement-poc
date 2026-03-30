@@ -947,12 +947,16 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
       const { getStatus } = await import("@/lib/gas-client");
       const statusResult = await getStatus(prNumber);
 
+      // OCR税率（仕訳作成時に8%軽減税率の判定に使用）
+      let detectedTaxRate: number | undefined;
+
       // OCR金額照合（Gemini APIキーがあり、画像/PDFの場合）
       if (process.env.GEMINI_API_KEY && fileUrls.length > 0 && (fileMimeTypes[0]?.startsWith("image/") || fileMimeTypes[0] === "application/pdf")) {
         try {
           const botToken = process.env.SLACK_BOT_TOKEN || "";
           const { base64, mimeType } = await downloadSlackFile(fileUrls[0], botToken);
           const ocrResult = await extractFromImage(base64, mimeType);
+          detectedTaxRate = ocrResult.tax_rate ?? undefined;
 
           if (statusResult.success && statusResult.data) {
             const requestedAmount = Number((statusResult.data as Record<string, unknown>)["金額"] || 0);
@@ -1064,6 +1068,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
                     department: department || undefined,
                     poNumber: prNumber,
                     memo: `${prNumber} ${supplier} 証憑: ${driveResult.webViewLink}`,
+                    ocrTaxRate: detectedTaxRate,
                   });
                   const journalRes = await createJournal(journalReq);
                   confirmLines.push(`MF会計Plusに仕訳を登録しました（ID: ${journalRes.id}）`);

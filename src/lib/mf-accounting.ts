@@ -300,6 +300,8 @@ export async function buildJournalFromPurchase(params: {
   department?: string;
   poNumber: string;
   memo?: string;
+  /** OCR読取の税率（8 or 10）。8%の場合は軽減税率の税区分を使用 */
+  ocrTaxRate?: number;
 }): Promise<CreateJournalRequest> {
   const {
     transactionDate,
@@ -310,6 +312,7 @@ export async function buildJournalFromPurchase(params: {
     department,
     poNumber,
     memo,
+    ocrTaxRate,
   } = params;
 
   // 借方: 費用科目を解決
@@ -321,8 +324,12 @@ export async function buildJournalFromPurchase(params: {
   const credit = await resolveCreditAccount(paymentMethod);
 
   // 税区分 — 科目に対応する税区分を解決
+  // OCRで8%軽減税率を検出した場合は税区分を切り替え
   const expenseMapping = EXPENSE_ACCOUNT_MAP[mainAccount];
-  const taxTypeName = expenseMapping?.taxType || "共-課仕 10%";
+  const baseTaxType = expenseMapping?.taxType || "共-課仕 10%";
+  const taxTypeName = ocrTaxRate === 8
+    ? baseTaxType.replace("10%", "8%")  // "共-課仕 10%" → "共-課仕 8%", "課仕 10%" → "課仕 8%"
+    : baseTaxType;
   const taxCode = await resolveTaxCode(taxTypeName);
 
   // 部門
