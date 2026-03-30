@@ -2,6 +2,35 @@ import { WebClient } from "@slack/web-api";
 import { updateStatus, getPendingVouchers } from "./gas-client";
 import { generatePrediction, isCardPayment } from "./prediction";
 
+/** GAS更新を実行し、失敗時にSlackスレッドに警告を投稿する */
+async function safeUpdateStatus(
+  client: WebClient,
+  channelId: string,
+  threadTs: string,
+  poNumber: string,
+  updates: Record<string, string>,
+  context: string,
+): Promise<void> {
+  try {
+    const result = await updateStatus(poNumber, updates);
+    if (!result.success) {
+      console.error(`[${context}] GAS update returned failure for ${poNumber}:`, result);
+      await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: `⚠️ ステータス更新に失敗しました（${poNumber}）。管理本部に連絡してください。`,
+      }).catch(() => {});
+    }
+  } catch (e) {
+    console.error(`[${context}] GAS update error for ${poNumber}:`, e);
+    await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: `⚠️ ステータス更新に失敗しました（${poNumber}）。管理本部に連絡してください。`,
+    }).catch(() => {});
+  }
+}
+
 /**
  * Slack Web API クライアント
  * Vercel serverless環境ではBoltのReceiverではなく、
@@ -104,10 +133,8 @@ export const handleApprove: SlackActionHandler = async ({
 
   await notifyOps(client, `✅ *承認完了* ${poNumber}（${userName} が承認）— ${info?.itemName || ""} ${info?.amount || ""}`);
 
-  // GASステータス更新
-  updateStatus(poNumber, { "発注承認ステータス": "承認済" }).catch((e) =>
-    console.error("[approve] GAS update error:", e)
-  );
+  // GASステータス更新（失敗時はスレッドに警告）
+  await safeUpdateStatus(client, channelId, messageTs, poNumber, { "発注承認ステータス": "承認済" }, "approve");
 
   // 承認後の通知分岐
   const { applicantSlackId } = parseActionValue(actionValue);
@@ -116,14 +143,18 @@ export const handleApprove: SlackActionHandler = async ({
 
   // カード払いの場合、予測テーブルに明細を生成（照合用）
   if (isCardPayment(payMethod)) {
-    generatePrediction({
+    const predictionId = await generatePrediction({
       poNumber,
       applicantSlackId,
       applicantName: info?.applicant?.replace(/<@[^>]+>/g, "").trim() || "",
       amount: amountNum,
       supplierName: info?.supplierName || "",
       paymentMethod: payMethod,
-    }).catch((e) => console.error("[approve] Prediction error:", e));
+    }).catch((e) => { console.error("[approve] Prediction error:", e); return null; });
+    if (!predictionId) {
+      // カード情報未登録 → OPSチャネルに警告
+      await notifyOps(client, `⚠️ *カード情報未登録* ${poNumber} — <@${applicantSlackId}> の従業員マスタにカード下4桁が未設定のため、照合用予測レコードを生成できませんでした。`);
+    }
   }
   // 購入済（立替）判定: メッセージのヘッダーに「購買報告」があるか
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -258,10 +289,8 @@ export const handleOrderComplete: SlackActionHandler = async ({
 
   await notifyOps(client, `🛒 *発注完了* ${poNumber}（${userName} が発注）— ${info?.itemName || ""} ${info?.amount || ""}`);
 
-  // GASステータス更新
-  updateStatus(poNumber, { "発注ステータス": "発注済" }).catch((e) =>
-    console.error("[order] GAS update error:", e)
-  );
+  // GASステータス更新（失敗時はスレッドに警告）
+  await safeUpdateStatus(client, channelId, messageTs, poNumber, { "発注ステータス": "発注済" }, "order");
 
   // 申請者に検収依頼DM
   if (applicantSlackId && applicantSlackId !== userId) {
@@ -402,11 +431,9 @@ export const handleInspectionComplete: SlackActionHandler = async ({
     );
   }
 
-  // GASステータス更新
+  // GASステータス更新（失敗時はスレッドに警告）
   const todayStr = new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" });
-  updateStatus(poNumber, { "検収ステータス": "検収済", "検収日": todayStr }).catch((e) =>
-    console.error("[inspection] GAS update error:", e)
-  );
+  await safeUpdateStatus(client, channelId, messageTs, poNumber, { "検収ステータス": "検収済", "検収日": todayStr }, "inspection");
 };
 
 /**
@@ -562,9 +589,7 @@ export const handleReturn: SlackActionHandler = async ({
     ].join("\n"),
   );
 
-  updateStatus(poNumber, { "検収ステータス": "返品", "備考": `${userName}が返品処理` }).catch((e) =>
-    console.error("[return] GAS update error:", e)
-  );
+  await safeUpdateStatus(client, channelId, messageTs, poNumber, { "検収ステータス": "返品", "備考": `${userName}が返品処理` }, "return");
 };
 
 function buildReturnedBlocks(

@@ -249,9 +249,30 @@ export async function getJournals(params: {
 }
 
 /**
- * 仕訳を作成
+ * 仕訳を作成（PO番号による重複防止付き）
+ *
+ * memoにPO番号が含まれている場合、同一PO番号の仕訳が既に存在しないか確認する。
+ * タイムアウトやネットワークエラーでリトライした場合の二重仕訳を防止。
  */
 export async function createJournal(request: CreateJournalRequest): Promise<JournalResponse> {
+  // memo からPO番号を抽出して重複チェック
+  const poMatch = request.memo?.match(/(PO-\d{4}-\d{4}|PR-\d{4})/);
+  if (poMatch) {
+    try {
+      const today = new Date();
+      const from = new Date(today.getFullYear(), today.getMonth() - 1, 1).toISOString().split("T")[0];
+      const to = today.toISOString().split("T")[0];
+      const existing = await getJournals({ from, to });
+      const duplicate = existing.find((j) => j.memo?.includes(poMatch[1]));
+      if (duplicate) {
+        console.warn(`[mf-journal] Duplicate detected for ${poMatch[1]}, returning existing journal #${duplicate.id}`);
+        return { id: duplicate.id };
+      }
+    } catch (e) {
+      // 重複チェック失敗は仕訳作成をブロックしない
+      console.warn("[mf-journal] Duplicate check failed, proceeding:", e);
+    }
+  }
   return authenticatedRequest<JournalResponse>("POST", "/journals", request);
 }
 

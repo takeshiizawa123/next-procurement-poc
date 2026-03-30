@@ -105,6 +105,17 @@ async function refreshAccessToken(refreshToken: string): Promise<MfTokens> {
     const text = await res.text();
     // リフレッシュ失敗 → 再認証が必要
     cachedTokens = null;
+    console.error(`[mf-oauth] Token refresh failed (${res.status}): ${text}`);
+    // OPSチャネルにアラート（Slack直接呼出しで循環依存を回避）
+    const slackToken = process.env.SLACK_BOT_TOKEN;
+    const opsChannel = process.env.SLACK_OPS_CHANNEL;
+    if (slackToken && opsChannel) {
+      fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${slackToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: opsChannel, text: `🚨 *MF会計Plus認証エラー* — トークン更新に失敗しました（${res.status}）。/api/mf/auth から再認証が必要です。` }),
+      }).catch(() => {});
+    }
     throw new Error(`MF token refresh failed (${res.status}): ${text}。再認証が必要です。`);
   }
 
