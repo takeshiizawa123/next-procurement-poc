@@ -117,82 +117,97 @@ function JournalDetail({ r, edits, onEdit }: {
 
   return (
     <div className="bg-gray-50 px-4 py-4 border-t text-xs">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* 左: 仕訳プレビュー */}
-        <div>
-          <div className="font-medium text-gray-700 mb-2">仕訳プレビュー</div>
-          <table className="w-full border text-xs">
-            <thead><tr className="bg-gray-100"><th className="px-2 py-1.5 text-left">区分</th><th className="px-2 py-1.5 text-left">勘定科目</th><th className="px-2 py-1.5 text-left">補助</th><th className="px-2 py-1.5 text-right">金額</th><th className="px-2 py-1.5 text-right">消費税</th></tr></thead>
-            <tbody>
-              <tr className="border-t">
-                <td className="px-2 py-1.5 text-blue-700 font-medium">借方</td>
-                <td className="px-2 py-1.5">{current.debitAccount} <AiBadge confidence={r.debitConfidence} /></td>
-                <td className="px-2 py-1.5 text-gray-400">-</td>
-                <td className="px-2 py-1.5 text-right">{"\u00A5"}{current.totalAmount.toLocaleString()}</td>
-                <td className="px-2 py-1.5 text-right text-gray-500">{"\u00A5"}{tax.toLocaleString()}</td>
-              </tr>
-              <tr className="border-t">
-                <td className="px-2 py-1.5 text-red-700 font-medium">貸方</td>
-                <td className="px-2 py-1.5">{current.creditAccount}</td>
-                <td className="px-2 py-1.5 text-gray-500">{current.creditSubAccount || "-"}</td>
-                <td className="px-2 py-1.5 text-right">{"\u00A5"}{current.totalAmount.toLocaleString()}</td>
-                <td className="px-2 py-1.5 text-right text-gray-400">-</td>
-              </tr>
-            </tbody>
-          </table>
-
-          {/* データソース凡例 */}
-          <div className="mt-3 p-2 bg-white border rounded text-[11px]">
-            <div className="font-medium text-gray-600 mb-1">データソース</div>
-            <div className="grid grid-cols-2 gap-1">
-              <div><SourceTag type="input" /> 品目・金額・購入先・支払方法・部門</div>
-              <div><SourceTag type="ai" /> 勘定科目（借方）・税区分</div>
-              <div><SourceTag type="system" /> 貸方科目・摘要</div>
-              <div><SourceTag type="ocr" /> 税率・金額照合・適格請求書</div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* 左: 証憑プレビュー（大）+ OCR結果 */}
+        <div className="flex flex-col">
+          <div className="font-medium text-gray-700 mb-2 flex items-center justify-between">
+            <span>証憑プレビュー</span>
+            <div className="flex gap-2">
+              {r.slackLink && <a href={r.slackLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 bg-purple-50 text-purple-700 rounded hover:bg-purple-100" onClick={(e) => e.stopPropagation()}>Slackスレッド</a>}
+              {r.voucherDriveUrl && <a href={r.voucherDriveUrl} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded hover:bg-green-100" onClick={(e) => e.stopPropagation()}>Google Driveで開く</a>}
             </div>
           </div>
-        </div>
-
-        {/* 中央: 証憑プレビュー + OCR結果 */}
-        <div>
-          <div className="font-medium text-gray-700 mb-2">証憑プレビュー</div>
-          <div className="bg-white border rounded p-3">
-            {/* ファイルプレビュー（ダミー） */}
-            <div className="bg-gray-100 rounded h-32 flex items-center justify-center mb-2 border border-dashed border-gray-300">
-              <div className="text-center text-gray-400">
-                <div className="text-2xl mb-1">📄</div>
-                <div className="text-xs">{r.voucherFileName || "証憑なし"}</div>
+          {/* ドキュメントビューア */}
+          <div className="bg-white border rounded flex-1 min-h-[360px] flex flex-col">
+            <div className="flex-1 bg-gray-100 rounded-t flex items-center justify-center relative">
+              {/* 実運用ではiframe/img でDriveファイルをプレビュー */}
+              <div className="text-center text-gray-400 p-8">
+                <div className="text-5xl mb-3">{r.voucherType === "領収書" ? "\uD83E\uDDFE" : r.voucherType === "請求書" ? "\uD83D\uDCC4" : "\uD83D\uDCE6"}</div>
+                <div className="text-sm font-medium text-gray-500 mb-1">{r.voucherFileName}</div>
+                <div className="text-xs text-gray-400">種別: {r.voucherType}</div>
+                <div className="text-[10px] text-gray-300 mt-2">（実運用時はGoogle Driveのドキュメントがここに表示されます）</div>
               </div>
             </div>
-            <div className="flex gap-2">
-              {r.slackLink && <a href={r.slackLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 bg-purple-50 text-purple-700 rounded hover:bg-purple-100">Slackスレッド</a>}
-              {r.voucherDriveUrl && <a href={r.voucherDriveUrl} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded hover:bg-green-100">Google Drive</a>}
+            {/* OCR読取結果バー */}
+            <div className="p-3 border-t bg-white rounded-b">
+              <div className="font-medium text-gray-600 mb-1.5 flex items-center gap-1">OCR読取結果 <SourceTag type="ocr" /></div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {r.ocrTaxRate != null && (
+                  <div className="bg-gray-50 rounded p-1.5">
+                    <div className="text-gray-400 text-[10px]">税率</div>
+                    <div className="font-medium">{r.ocrTaxRate}%{r.ocrTaxRate === 8 ? " (軽減)" : ""}</div>
+                  </div>
+                )}
+                {r.ocrAmount != null && (
+                  <div className={`rounded p-1.5 ${r.ocrAmountMatch ? "bg-green-50" : "bg-red-50"}`}>
+                    <div className="text-gray-400 text-[10px]">読取金額</div>
+                    <div className={`font-medium ${r.ocrAmountMatch ? "text-green-700" : "text-red-600"}`}>
+                      {"\u00A5"}{r.ocrAmount.toLocaleString()} {r.ocrAmountMatch ? "\u2713" : "\u2717"}
+                    </div>
+                  </div>
+                )}
+                {r.ocrRegistrationNumber ? (
+                  <div className="bg-green-50 rounded p-1.5 col-span-2">
+                    <div className="text-gray-400 text-[10px]">適格請求書</div>
+                    <div className="font-medium text-green-700 truncate">{r.ocrRegistrationNumber}</div>
+                    <div className="text-[10px] text-green-600 truncate">{r.ocrRegistrationName}</div>
+                  </div>
+                ) : r.voucherType === "請求書" ? (
+                  <div className="bg-amber-50 rounded p-1.5 col-span-2">
+                    <div className="text-gray-400 text-[10px]">適格請求書</div>
+                    <div className="font-medium text-amber-600">番号未検出</div>
+                  </div>
+                ) : null}
+              </div>
             </div>
-            <div className="text-xs text-gray-500 mt-1">種別: {r.voucherType}</div>
-          </div>
-
-          {/* OCR読取結果 */}
-          <div className="mt-2 bg-white border rounded p-2">
-            <div className="font-medium text-gray-600 mb-1 flex items-center gap-1">OCR読取結果 <SourceTag type="ocr" /></div>
-            <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs">
-              {r.ocrTaxRate != null && <><dt className="text-gray-500">税率:</dt><dd>{r.ocrTaxRate}%{r.ocrTaxRate === 8 ? " (軽減税率)" : ""}</dd></>}
-              {r.ocrAmount != null && (
-                <><dt className="text-gray-500">読取金額:</dt>
-                <dd className={r.ocrAmountMatch ? "text-green-700" : "text-red-600 font-medium"}>
-                  {"\u00A5"}{r.ocrAmount.toLocaleString()} {r.ocrAmountMatch ? "✓一致" : `✗不一致（申請: ¥${r.totalAmount.toLocaleString()}）`}
-                </dd></>
-              )}
-              {r.ocrRegistrationNumber && (
-                <><dt className="text-gray-500">適格番号:</dt><dd>{r.ocrRegistrationNumber}（{r.ocrRegistrationName}）</dd></>
-              )}
-              {!r.ocrRegistrationNumber && r.voucherType === "請求書" && (
-                <><dt className="text-gray-500">適格番号:</dt><dd className="text-amber-600">未検出 — 適格請求書でない可能性</dd></>
-              )}
-            </dl>
           </div>
         </div>
 
+        {/* 右: 仕訳プレビュー + 編集フォーム */}
+        <div className="flex flex-col gap-3">
+
         {/* 右: 編集フォーム */}
+          {/* 仕訳プレビュー */}
+          <div>
+            <div className="font-medium text-gray-700 mb-2">仕訳プレビュー</div>
+            <table className="w-full border text-xs">
+              <thead><tr className="bg-gray-100"><th className="px-2 py-1.5 text-left">区分</th><th className="px-2 py-1.5 text-left">勘定科目</th><th className="px-2 py-1.5 text-left">補助</th><th className="px-2 py-1.5 text-right">金額</th><th className="px-2 py-1.5 text-right">消費税</th></tr></thead>
+              <tbody>
+                <tr className="border-t">
+                  <td className="px-2 py-1.5 text-blue-700 font-medium">借方</td>
+                  <td className="px-2 py-1.5">{current.debitAccount} <AiBadge confidence={r.debitConfidence} /></td>
+                  <td className="px-2 py-1.5 text-gray-400">-</td>
+                  <td className="px-2 py-1.5 text-right">{"\u00A5"}{current.totalAmount.toLocaleString()}</td>
+                  <td className="px-2 py-1.5 text-right text-gray-500">{"\u00A5"}{tax.toLocaleString()}</td>
+                </tr>
+                <tr className="border-t">
+                  <td className="px-2 py-1.5 text-red-700 font-medium">貸方</td>
+                  <td className="px-2 py-1.5">{current.creditAccount}</td>
+                  <td className="px-2 py-1.5 text-gray-500">{current.creditSubAccount || "-"}</td>
+                  <td className="px-2 py-1.5 text-right">{"\u00A5"}{current.totalAmount.toLocaleString()}</td>
+                  <td className="px-2 py-1.5 text-right text-gray-400">-</td>
+                </tr>
+              </tbody>
+            </table>
+            {/* ソース凡例 */}
+            <div className="flex gap-3 mt-1.5 text-[10px] text-gray-400">
+              <span><SourceTag type="input" /> 申請データ</span>
+              <span><SourceTag type="ai" /> 要確認</span>
+              <span><SourceTag type="system" /> 自動</span>
+            </div>
+          </div>
+
+          {/* 編集フォーム */}
         <div className="space-y-2">
           <div className="font-medium text-gray-700 mb-2">仕訳内容の編集 <span className="text-gray-400 font-normal text-[10px]">（AI推定項目は要確認）</span></div>
 
@@ -256,6 +271,7 @@ function JournalDetail({ r, edits, onEdit }: {
           </label>
 
           {hasEdits && <p className="text-amber-600 text-xs mt-1">* 変更あり — 仕訳登録時に反映されます</p>}
+        </div>
         </div>
       </div>
     </div>
