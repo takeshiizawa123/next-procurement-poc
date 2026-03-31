@@ -44,9 +44,10 @@ export interface JournalResponse {
 
 interface MasterItem {
   id: number;
-  code: string;
+  code: string | null;
   name: string;
-  search_key?: string;
+  search_key?: string | null;
+  available?: boolean;
 }
 
 // --- マスタキャッシュ (1時間TTL) ---
@@ -95,28 +96,28 @@ async function authenticatedRequest<T>(
 
 // --- マスタAPI ---
 
-async function fetchMaster(endpoint: string): Promise<MasterItem[]> {
+async function fetchMaster(endpoint: string, responseKey: string): Promise<MasterItem[]> {
   const cached = masterCache[endpoint];
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL) {
     return cached.data;
   }
 
-  const data = await authenticatedRequest<{ data: MasterItem[] }>("GET", endpoint);
-  const items = data.data || [];
+  const data = await authenticatedRequest<Record<string, MasterItem[]>>("GET", endpoint);
+  const items = data[responseKey] || [];
   masterCache[endpoint] = { data: items, fetchedAt: Date.now() };
   return items;
 }
 
 export async function getAccounts(): Promise<MasterItem[]> {
-  return fetchMaster("/masters/accounts");
+  return fetchMaster("/masters/accounts", "accounts");
 }
 
 export async function getTaxes(): Promise<MasterItem[]> {
-  return fetchMaster("/masters/taxes");
+  return fetchMaster("/masters/taxes", "taxes");
 }
 
 export async function getDepartments(): Promise<MasterItem[]> {
-  return fetchMaster("/masters/departments");
+  return fetchMaster("/masters/departments", "departments");
 }
 
 // --- 補助科目マスタ ---
@@ -183,28 +184,30 @@ export async function resolveSubAccountCode(
 function resolveMasterItem(items: MasterItem[], nameOrCode: string): MasterItem | null {
   if (!nameOrCode) return null;
   const q = nameOrCode.trim();
+  // available===false（無効化済み）とcode===null を除外
+  const active = items.filter((i) => i.available !== false && i.code != null);
   return (
-    items.find((i) => i.code === q) ||
-    items.find((i) => i.name === q) ||
-    items.find((i) => i.name.includes(q)) ||
-    items.find((i) => i.search_key?.includes(q)) ||
+    active.find((i) => i.code === q) ||
+    active.find((i) => i.name === q) ||
+    active.find((i) => i.name.includes(q)) ||
+    active.find((i) => i.search_key?.includes(q)) ||
     null
   );
 }
 
 export async function resolveAccountCode(nameOrCode: string): Promise<string | undefined> {
   const items = await getAccounts();
-  return resolveMasterItem(items, nameOrCode)?.code;
+  return resolveMasterItem(items, nameOrCode)?.code ?? undefined;
 }
 
 export async function resolveTaxCode(nameOrCode: string): Promise<string | undefined> {
   const items = await getTaxes();
-  return resolveMasterItem(items, nameOrCode)?.code;
+  return resolveMasterItem(items, nameOrCode)?.code ?? undefined;
 }
 
 export async function resolveDepartmentCode(nameOrCode: string): Promise<string | undefined> {
   const items = await getDepartments();
-  return resolveMasterItem(items, nameOrCode)?.code;
+  return resolveMasterItem(items, nameOrCode)?.code ?? undefined;
 }
 
 // --- 仕訳CRUD ---
@@ -213,7 +216,7 @@ export async function resolveDepartmentCode(nameOrCode: string): Promise<string 
 export interface JournalListItem {
   id: number;
   transaction_date: string;
-  status: string;
+  approval_status: string;
   entered_by: string | null;
   memo: string | null;
   tags: string[];
@@ -237,8 +240,8 @@ export async function getJournals(params: {
   enteredBy?: string;
 }): Promise<JournalListItem[]> {
   const query = new URLSearchParams({
-    from: params.from,
-    to: params.to,
+    start_date: params.from,
+    end_date: params.to,
     ...(params.enteredBy ? { entered_by: params.enteredBy } : {}),
   });
   const data = await authenticatedRequest<{ journals: JournalListItem[] }>(
@@ -273,7 +276,8 @@ export async function createJournal(request: CreateJournalRequest): Promise<Jour
       console.warn("[mf-journal] Duplicate check failed, proceeding:", e);
     }
   }
-  return authenticatedRequest<JournalResponse>("POST", "/journals", request);
+  // APIはリクエストボディを { journal: { ... } } でラップする必要がある
+  return authenticatedRequest<JournalResponse>("POST", "/journals", { journal: request });
 }
 
 /**
