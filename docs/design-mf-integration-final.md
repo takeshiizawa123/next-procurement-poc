@@ -90,9 +90,9 @@ MF経費の用途:
      → /購買証憑/2026/03/2026-03-15_52800_Amazon_PO-2026-0042_納品書.pdf
 ⑤-c. Gemini OCRで金額照合
 ⑤-d. POST /journals → MF会計Plusに仕訳ドラフト作成
-     → status: "draft"
+     → { journal: { status: "draft", transaction_date: "検収日", ... } }
      → tags: ["PO-2026-0042"]
-     → memo: "PO-2026-0042 Amazon モニター | 証憑: https://drive.google.com/file/d/xxx"
+     → memo: "2026/03 PO-2026-0042 Amazon | 証憑: https://drive.google.com/file/d/xxx"
      → 借方: 消耗品費 ¥52,800
      → 貸方: 未払金(MFカード:未請求) ¥52,800
 ⑤-e. GAS更新（証憑=添付済, DriveURL, 仕訳ID, Stage=1）
