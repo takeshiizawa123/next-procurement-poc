@@ -261,6 +261,10 @@ export interface PastRequest {
   type: string;
   department: string;
   accountTitle: string;
+  hubspotInfo?: string;
+  voucherType?: string;
+  journalId?: string;
+  remarks?: string;
 }
 
 /**
