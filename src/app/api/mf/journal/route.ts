@@ -47,8 +47,14 @@ export async function POST(request: NextRequest) {
 
     // 仕訳リクエストを構築
     const amount = Number((purchase as Record<string, unknown>)["金額"] || 0);
+    // 仕訳日 = 検収日（原則）→ 申請日 → 本日のフォールバック
+    const transactionDate = String(
+      (purchase as Record<string, unknown>)["検収日"] ||
+      (purchase as Record<string, unknown>)["申請日"] ||
+      new Date().toISOString().split("T")[0]
+    );
     const journalRequest = await buildJournalFromPurchase({
-      transactionDate: new Date().toISOString().split("T")[0],
+      transactionDate,
       accountTitle: String((purchase as Record<string, unknown>)["勘定科目"] || "消耗品費"),
       amount,
       paymentMethod: String((purchase as Record<string, unknown>)["支払方法"] || ""),

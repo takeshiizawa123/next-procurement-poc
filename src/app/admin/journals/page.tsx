@@ -71,6 +71,7 @@ interface PurchaseRequest {
   voucherType?: string;
   journalId?: string;
   remarks?: string;
+  inspectionDate?: string;
 }
 
 interface JournalEdits {
@@ -99,7 +100,9 @@ function JournalDetail({ r, edits, onEdit }: {
   const taxCat = edits.taxCategory ?? (ACCOUNT_TAX_MAP[debitAccount] || "共-課仕 10%");
   const dept = edits.department ?? r.department;
   const hubspot = edits.hubspotDealId ?? (r.hubspotInfo || "");
-  const ym = r.applicationDate ? r.applicationDate.slice(0, 7).replace("-", "/") : new Date().toISOString().slice(0, 7).replace("-", "/");
+  // 摘要の年月 = 検収日（原則）→ 申請日 → 本日
+  const baseDate = r.inspectionDate || r.applicationDate || new Date().toISOString().slice(0, 10);
+  const ym = baseDate.slice(0, 7).replace("-", "/");
   const memo = edits.memo ?? `${ym} ${r.prNumber} ${r.supplierName}`;
   const tax = calcTax(r.totalAmount, taxCat);
   const creditOptions = CREDIT_MAP[r.paymentMethod] || CREDIT_MAP["請求書払い"];

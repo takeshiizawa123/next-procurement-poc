@@ -1041,7 +1041,8 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
             if (fileRes.ok) {
               const buf = Buffer.from(await fileRes.arrayBuffer());
               const statusData = statusResult?.data as Record<string, unknown> | undefined;
-              const txDate = String(statusData?.["取引日"] || new Date().toISOString().slice(0, 10));
+              // 仕訳日 = 検収日（原則）→ 取引日 → 本日のフォールバック
+              const txDate = String(statusData?.["検収日"] || statusData?.["取引日"] || new Date().toISOString().slice(0, 10));
               const txAmount = Number(statusData?.["金額"] || 0);
               const supplier = String(statusData?.["購入先"] || "不明");
 

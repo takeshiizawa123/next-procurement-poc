@@ -265,6 +265,7 @@ export interface PastRequest {
   voucherType?: string;
   journalId?: string;
   remarks?: string;
+  inspectionDate?: string;
 }
 
 /**
