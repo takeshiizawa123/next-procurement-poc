@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 
+// --- 型定義 ---
+
 interface MockRequest {
   prNumber: string;
   applicationDate: string;
@@ -11,15 +13,28 @@ interface MockRequest {
   supplierName: string;
   applicant: string;
   department: string;
-  debitAccount: string;
-  creditAccount: string;
+  debitAccount: string;       // AI推定
+  debitConfidence: "high" | "medium" | "low"; // 推定確度
+  creditAccount: string;      // システム導出
   creditSubAccount: string;
-  taxCategory: string;
-  paymentMethod: string;
+  taxCategory: string;        // AI推定（科目連動）
+  paymentMethod: string;      // 申請者入力
   slackLink: string;
-  hubspotDealId: string;
-  memo: string;
+  hubspotDealId: string;      // 申請者入力
+  memo: string;               // 自動生成
+  // OCR結果
+  ocrTaxRate?: number;
+  ocrAmount?: number;
+  ocrRegistrationNumber?: string;
+  ocrRegistrationName?: string;
+  ocrAmountMatch?: boolean;
+  // 証憑情報
+  voucherType: string;
+  voucherFileName?: string;
+  voucherDriveUrl?: string;
 }
+
+// --- 定数 ---
 
 const DEBIT_ACCOUNTS = [
   "消耗品費", "備品消耗品費", "事務用消耗品費", "工具器具備品", "ソフトウェア",
@@ -27,65 +42,83 @@ const DEBIT_ACCOUNTS = [
   "地代家賃", "雑費", "研究開発費", "管理諸費", "会議費",
   "接待交際費", "修繕費", "材料費", "材料仕入",
 ];
-
-const TAX_CATEGORIES = [
-  "共-課仕 10%", "共-課仕 8%", "課仕 10%", "課仕 8%", "非課税", "不課税", "対象外",
-];
-
+const TAX_CATEGORIES = ["共-課仕 10%", "共-課仕 8%", "課仕 10%", "課仕 8%", "非課税", "不課税", "対象外"];
 const DEPARTMENTS = ["営業部", "開発部", "管理本部", "製造部", "ロジスティクス"];
+const CREDIT_MAP: Record<string, { account: string; sub: string }[]> = {
+  "会社カード": [{ account: "未払金", sub: "MFカード:未請求" }, { account: "未払金", sub: "MFカード:請求" }],
+  "請求書払い": [{ account: "買掛金", sub: "" }, { account: "未払金", sub: "" }],
+};
+const ACCOUNT_TAX_MAP: Record<string, string> = {
+  消耗品費: "共-課仕 10%", 工具器具備品: "共-課仕 10%", ソフトウェア: "共-課仕 10%",
+  外注費: "共-課仕 10%", 通信費: "共-課仕 10%", 研究開発費: "課仕 10%",
+  広告宣伝費: "共-課仕 10%", 旅費交通費: "共-課仕 10%", 地代家賃: "共-課仕 10%",
+  雑費: "共-課仕 10%", 会議費: "共-課仕 10%", 接待交際費: "共-課仕 10%",
+  修繕費: "共-課仕 10%", 材料費: "共-課仕 10%", 材料仕入: "共-課仕 10%",
+  備品消耗品費: "共-課仕 10%", 事務用消耗品費: "共-課仕 10%", 業務委託費: "共-課仕 10%", 管理諸費: "共-課仕 10%",
+};
 
-const CREDIT_OPTIONS_CARD = [
-  { account: "未払金", sub: "MFカード:未請求" },
-  { account: "未払金", sub: "MFカード:請求" },
-];
-const CREDIT_OPTIONS_INVOICE = [
-  { account: "買掛金", sub: "" },
-  { account: "未払金", sub: "" },
-];
-
-function calcTax(amount: number, rate: number): number {
+function calcTax(amount: number, cat: string): number {
+  const rate = cat.includes("10%") ? 10 : cat.includes("8%") ? 8 : 0;
   return rate > 0 ? Math.floor(amount * rate / (100 + rate)) : 0;
 }
 
-function taxRate(cat: string): number {
-  if (cat.includes("10%")) return 10;
-  if (cat.includes("8%")) return 8;
-  return 0;
-}
+// --- サンプルデータ ---
 
 const SAMPLE_PENDING: MockRequest[] = [
-  { prNumber: "PR-0055", applicationDate: "2026-03-28", itemName: "ノートPC Dell Latitude 5550", totalAmount: 248000, supplierName: "Amazon.co.jp", applicant: "田中太郎", department: "営業部", debitAccount: "工具器具備品", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0055 Amazon.co.jp" },
-  { prNumber: "PR-0053", applicationDate: "2026-03-27", itemName: "Adobe Creative Cloud 年間ライセンス", totalAmount: 86400, supplierName: "Adobe Inc.", applicant: "佐藤花子", department: "開発部", debitAccount: "ソフトウェア", creditAccount: "買掛金", creditSubAccount: "", taxCategory: "共-課仕 10%", paymentMethod: "請求書払い", slackLink: "#", hubspotDealId: "", memo: "PR-0053 Adobe Inc." },
-  { prNumber: "PR-0051", applicationDate: "2026-03-26", itemName: "A4コピー用紙 5000枚 x 10箱", totalAmount: 32000, supplierName: "ASKUL", applicant: "鈴木一郎", department: "管理本部", debitAccount: "消耗品費", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0051 ASKUL" },
-  { prNumber: "PR-0049", applicationDate: "2026-03-25", itemName: "会議用プロジェクター EPSON EB-992F", totalAmount: 145000, supplierName: "ヨドバシカメラ", applicant: "山田部長", department: "営業部", debitAccount: "工具器具備品", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0049 ヨドバシカメラ" },
-  { prNumber: "PR-0047", applicationDate: "2026-03-24", itemName: "外注デザイン制作費（LP制作）", totalAmount: 330000, supplierName: "デザイン工房ABC", applicant: "伊澤剛志", department: "管理本部", debitAccount: "外注費", creditAccount: "買掛金", creditSubAccount: "", taxCategory: "共-課仕 10%", paymentMethod: "請求書払い", slackLink: "#", hubspotDealId: "HS-2026-042", memo: "PR-0047 デザイン工房ABC LP制作" },
-  { prNumber: "PR-0045", applicationDate: "2026-03-22", itemName: "プリンタートナー CT203091 x 4色", totalAmount: 48500, supplierName: "モノタロウ", applicant: "田中太郎", department: "営業部", debitAccount: "消耗品費", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0045 モノタロウ" },
+  { prNumber: "PR-0055", applicationDate: "2026-03-28", itemName: "ノートPC Dell Latitude 5550", totalAmount: 248000, supplierName: "Amazon.co.jp", applicant: "田中太郎", department: "営業部", debitAccount: "工具器具備品", debitConfidence: "high", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0055 Amazon.co.jp", ocrTaxRate: 10, ocrAmount: 248000, ocrAmountMatch: true, ocrRegistrationNumber: "T1234567890123", ocrRegistrationName: "アマゾンジャパン合同会社", voucherType: "領収書", voucherFileName: "PR-0055_Amazon_領収書.pdf", voucherDriveUrl: "#" },
+  { prNumber: "PR-0053", applicationDate: "2026-03-27", itemName: "Adobe Creative Cloud 年間ライセンス", totalAmount: 86400, supplierName: "Adobe Inc.", applicant: "佐藤花子", department: "開発部", debitAccount: "ソフトウェア", debitConfidence: "high", creditAccount: "買掛金", creditSubAccount: "", taxCategory: "共-課仕 10%", paymentMethod: "請求書払い", slackLink: "#", hubspotDealId: "", memo: "PR-0053 Adobe Inc.", ocrTaxRate: 10, ocrAmount: 86400, ocrAmountMatch: true, voucherType: "請求書", voucherFileName: "PR-0053_Adobe_請求書.pdf", voucherDriveUrl: "#" },
+  { prNumber: "PR-0051", applicationDate: "2026-03-26", itemName: "A4コピー用紙 5000枚 x 10箱", totalAmount: 32000, supplierName: "ASKUL", applicant: "鈴木一郎", department: "管理本部", debitAccount: "消耗品費", debitConfidence: "high", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0051 ASKUL", ocrTaxRate: 10, ocrAmount: 31500, ocrAmountMatch: false, ocrRegistrationNumber: "T9876543210987", ocrRegistrationName: "アスクル株式会社", voucherType: "納品書", voucherFileName: "PR-0051_ASKUL_納品書.pdf", voucherDriveUrl: "#" },
+  { prNumber: "PR-0049", applicationDate: "2026-03-25", itemName: "会議用プロジェクター EPSON EB-992F", totalAmount: 145000, supplierName: "ヨドバシカメラ", applicant: "山田部長", department: "営業部", debitAccount: "工具器具備品", debitConfidence: "high", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0049 ヨドバシカメラ", ocrTaxRate: 10, ocrAmount: 145000, ocrAmountMatch: true, voucherType: "領収書", voucherFileName: "PR-0049_ヨドバシ_領収書.pdf", voucherDriveUrl: "#" },
+  { prNumber: "PR-0047", applicationDate: "2026-03-24", itemName: "外注デザイン制作費（LP制作）", totalAmount: 330000, supplierName: "デザイン工房ABC", applicant: "伊澤剛志", department: "管理本部", debitAccount: "外注費", debitConfidence: "medium", creditAccount: "買掛金", creditSubAccount: "", taxCategory: "共-課仕 10%", paymentMethod: "請求書払い", slackLink: "#", hubspotDealId: "HS-2026-042", memo: "PR-0047 デザイン工房ABC LP制作", ocrTaxRate: 10, ocrAmount: 330000, ocrAmountMatch: true, ocrRegistrationNumber: "", ocrRegistrationName: "", voucherType: "請求書", voucherFileName: "PR-0047_デザイン工房_請求書.pdf", voucherDriveUrl: "#" },
+  { prNumber: "PR-0045", applicationDate: "2026-03-22", itemName: "プリンタートナー CT203091 x 4色", totalAmount: 48500, supplierName: "モノタロウ", applicant: "田中太郎", department: "営業部", debitAccount: "消耗品費", debitConfidence: "low", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0045 モノタロウ", ocrTaxRate: 8, ocrAmount: 48500, ocrAmountMatch: true, voucherType: "納品書", voucherFileName: "PR-0045_モノタロウ_納品書.pdf", voucherDriveUrl: "#" },
 ];
 
 const SAMPLE_REGISTERED: MockRequest[] = [
-  { prNumber: "PR-0044", applicationDate: "2026-03-20", itemName: "Slackビジネスプラン 月額", totalAmount: 18700, supplierName: "Slack Technologies", applicant: "伊澤剛志", department: "管理本部", debitAccount: "通信費", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0044 Slack Technologies" },
-  { prNumber: "PR-0042", applicationDate: "2026-03-18", itemName: "社員用デスクチェア x 3脚", totalAmount: 195000, supplierName: "Amazon.co.jp", applicant: "佐藤花子", department: "開発部", debitAccount: "工具器具備品", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0042 Amazon.co.jp" },
-  { prNumber: "PR-0040", applicationDate: "2026-03-15", itemName: "Google Workspace Business Plus", totalAmount: 24000, supplierName: "Google LLC", applicant: "伊澤剛志", department: "管理本部", debitAccount: "通信費", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0040 Google LLC" },
+  { prNumber: "PR-0044", applicationDate: "2026-03-20", itemName: "Slackビジネスプラン 月額", totalAmount: 18700, supplierName: "Slack Technologies", applicant: "伊澤剛志", department: "管理本部", debitAccount: "通信費", debitConfidence: "high", creditAccount: "未払金", creditSubAccount: "MFカード:未請求", taxCategory: "共-課仕 10%", paymentMethod: "会社カード", slackLink: "#", hubspotDealId: "", memo: "PR-0044 Slack Technologies", voucherType: "請求書", voucherFileName: "PR-0044_Slack_Invoice.pdf", voucherDriveUrl: "#" },
 ];
 
 type Tab = "pending" | "registered";
 
-/** 仕訳明細の展開表示（編集可能） */
+// --- AI推定バッジ ---
+
+function AiBadge({ confidence }: { confidence: "high" | "medium" | "low" }) {
+  const styles = {
+    high: "bg-blue-50 text-blue-600 border-blue-200",
+    medium: "bg-amber-50 text-amber-600 border-amber-200",
+    low: "bg-red-50 text-red-600 border-red-200",
+  };
+  const labels = { high: "AI:高", medium: "AI:中", low: "AI:低" };
+  return <span className={`text-[10px] px-1 py-0.5 rounded border ${styles[confidence]}`}>{labels[confidence]}</span>;
+}
+
+function SourceTag({ type }: { type: "input" | "ai" | "system" | "ocr" }) {
+  const map = {
+    input: { label: "申請者入力", style: "bg-gray-100 text-gray-600" },
+    ai: { label: "AI推定", style: "bg-blue-50 text-blue-700 border border-blue-200" },
+    system: { label: "システム", style: "bg-purple-50 text-purple-600" },
+    ocr: { label: "OCR読取", style: "bg-cyan-50 text-cyan-700 border border-cyan-200" },
+  };
+  const { label, style } = map[type];
+  return <span className={`text-[10px] px-1.5 py-0.5 rounded ${style}`}>{label}</span>;
+}
+
+// --- 仕訳明細コンポーネント ---
+
 function JournalDetail({ r, edits, onEdit }: {
   r: MockRequest;
   edits: Partial<MockRequest>;
   onEdit: (field: keyof MockRequest, value: string) => void;
 }) {
   const current = { ...r, ...edits };
-  const rate = taxRate(current.taxCategory);
-  const tax = calcTax(current.totalAmount, rate);
+  const tax = calcTax(current.totalAmount, current.taxCategory);
   const isCard = current.paymentMethod.includes("カード");
-  const creditOptions = isCard ? CREDIT_OPTIONS_CARD : CREDIT_OPTIONS_INVOICE;
+  const creditOptions = CREDIT_MAP[isCard ? "会社カード" : "請求書払い"] || CREDIT_MAP["請求書払い"];
+  const hasEdits = Object.keys(edits).length > 0;
 
   return (
     <div className="bg-gray-50 px-4 py-4 border-t text-xs">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* 仕訳プレビュー */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* 左: 仕訳プレビュー */}
         <div>
           <div className="font-medium text-gray-700 mb-2">仕訳プレビュー</div>
           <table className="w-full border text-xs">
@@ -93,7 +126,7 @@ function JournalDetail({ r, edits, onEdit }: {
             <tbody>
               <tr className="border-t">
                 <td className="px-2 py-1.5 text-blue-700 font-medium">借方</td>
-                <td className="px-2 py-1.5">{current.debitAccount}</td>
+                <td className="px-2 py-1.5">{current.debitAccount} <AiBadge confidence={r.debitConfidence} /></td>
                 <td className="px-2 py-1.5 text-gray-400">-</td>
                 <td className="px-2 py-1.5 text-right">{"\u00A5"}{current.totalAmount.toLocaleString()}</td>
                 <td className="px-2 py-1.5 text-right text-gray-500">{"\u00A5"}{tax.toLocaleString()}</td>
@@ -107,48 +140,102 @@ function JournalDetail({ r, edits, onEdit }: {
               </tr>
             </tbody>
           </table>
+
+          {/* データソース凡例 */}
+          <div className="mt-3 p-2 bg-white border rounded text-[11px]">
+            <div className="font-medium text-gray-600 mb-1">データソース</div>
+            <div className="grid grid-cols-2 gap-1">
+              <div><SourceTag type="input" /> 品目・金額・購入先・支払方法・部門</div>
+              <div><SourceTag type="ai" /> 勘定科目（借方）・税区分</div>
+              <div><SourceTag type="system" /> 貸方科目・摘要</div>
+              <div><SourceTag type="ocr" /> 税率・金額照合・適格請求書</div>
+            </div>
+          </div>
         </div>
 
-        {/* 編集フォーム */}
-        <div className="space-y-2">
-          <div className="font-medium text-gray-700 mb-2">仕訳内容の編集</div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <label className="block">
-              <span className="text-gray-500 text-xs">借方科目</span>
-              <select value={current.debitAccount} onChange={(e) => onEdit("debitAccount", e.target.value)}
-                className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                {DEBIT_ACCOUNTS.map((a) => <option key={a} value={a}>{a}</option>)}
-              </select>
-            </label>
-            <label className="block">
-              <span className="text-gray-500 text-xs">貸方科目</span>
-              <select value={`${current.creditAccount}|${current.creditSubAccount}`}
-                onChange={(e) => {
-                  const [acc, sub] = e.target.value.split("|");
-                  onEdit("creditAccount", acc);
-                  onEdit("creditSubAccount", sub || "");
-                }}
-                className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                {creditOptions.map((o) => (
-                  <option key={`${o.account}|${o.sub}`} value={`${o.account}|${o.sub}`}>
-                    {o.account}{o.sub ? ` / ${o.sub}` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
+        {/* 中央: 証憑プレビュー + OCR結果 */}
+        <div>
+          <div className="font-medium text-gray-700 mb-2">証憑プレビュー</div>
+          <div className="bg-white border rounded p-3">
+            {/* ファイルプレビュー（ダミー） */}
+            <div className="bg-gray-100 rounded h-32 flex items-center justify-center mb-2 border border-dashed border-gray-300">
+              <div className="text-center text-gray-400">
+                <div className="text-2xl mb-1">📄</div>
+                <div className="text-xs">{r.voucherFileName || "証憑なし"}</div>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              {r.slackLink && <a href={r.slackLink} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 bg-purple-50 text-purple-700 rounded hover:bg-purple-100">Slackスレッド</a>}
+              {r.voucherDriveUrl && <a href={r.voucherDriveUrl} target="_blank" rel="noopener noreferrer" className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded hover:bg-green-100">Google Drive</a>}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">種別: {r.voucherType}</div>
           </div>
 
+          {/* OCR読取結果 */}
+          <div className="mt-2 bg-white border rounded p-2">
+            <div className="font-medium text-gray-600 mb-1 flex items-center gap-1">OCR読取結果 <SourceTag type="ocr" /></div>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs">
+              {r.ocrTaxRate != null && <><dt className="text-gray-500">税率:</dt><dd>{r.ocrTaxRate}%{r.ocrTaxRate === 8 ? " (軽減税率)" : ""}</dd></>}
+              {r.ocrAmount != null && (
+                <><dt className="text-gray-500">読取金額:</dt>
+                <dd className={r.ocrAmountMatch ? "text-green-700" : "text-red-600 font-medium"}>
+                  {"\u00A5"}{r.ocrAmount.toLocaleString()} {r.ocrAmountMatch ? "✓一致" : `✗不一致（申請: ¥${r.totalAmount.toLocaleString()}）`}
+                </dd></>
+              )}
+              {r.ocrRegistrationNumber && (
+                <><dt className="text-gray-500">適格番号:</dt><dd>{r.ocrRegistrationNumber}（{r.ocrRegistrationName}）</dd></>
+              )}
+              {!r.ocrRegistrationNumber && r.voucherType === "請求書" && (
+                <><dt className="text-gray-500">適格番号:</dt><dd className="text-amber-600">未検出 — 適格請求書でない可能性</dd></>
+              )}
+            </dl>
+          </div>
+        </div>
+
+        {/* 右: 編集フォーム */}
+        <div className="space-y-2">
+          <div className="font-medium text-gray-700 mb-2">仕訳内容の編集 <span className="text-gray-400 font-normal text-[10px]">（AI推定項目は要確認）</span></div>
+
+          <label className="block">
+            <span className="text-gray-500 text-xs flex items-center gap-1">借方科目 <SourceTag type="ai" /></span>
+            <select value={current.debitAccount}
+              onChange={(e) => {
+                onEdit("debitAccount", e.target.value);
+                const newTax = ACCOUNT_TAX_MAP[e.target.value];
+                if (newTax) onEdit("taxCategory" as keyof MockRequest, newTax);
+              }}
+              className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
+              {DEBIT_ACCOUNTS.map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-gray-500 text-xs flex items-center gap-1">貸方科目 <SourceTag type="system" /></span>
+            <select value={`${current.creditAccount}|${current.creditSubAccount}`}
+              onChange={(e) => {
+                const [acc, sub] = e.target.value.split("|");
+                onEdit("creditAccount", acc);
+                onEdit("creditSubAccount", sub || "");
+              }}
+              className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
+              {creditOptions.map((o) => (
+                <option key={`${o.account}|${o.sub}`} value={`${o.account}|${o.sub}`}>
+                  {o.account}{o.sub ? ` / ${o.sub}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+
           <div className="grid grid-cols-2 gap-2">
             <label className="block">
-              <span className="text-gray-500 text-xs">税区分</span>
+              <span className="text-gray-500 text-xs flex items-center gap-1">税区分 <SourceTag type="ai" /></span>
               <select value={current.taxCategory} onChange={(e) => onEdit("taxCategory", e.target.value)}
                 className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
                 {TAX_CATEGORIES.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </label>
             <label className="block">
-              <span className="text-gray-500 text-xs">部門</span>
+              <span className="text-gray-500 text-xs flex items-center gap-1">部門 <SourceTag type="input" /></span>
               <select value={current.department} onChange={(e) => onEdit("department", e.target.value)}
                 className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
                 {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
@@ -157,25 +244,25 @@ function JournalDetail({ r, edits, onEdit }: {
           </div>
 
           <label className="block">
-            <span className="text-gray-500 text-xs">プロジェクトコード（HubSpot案件番号）</span>
+            <span className="text-gray-500 text-xs flex items-center gap-1">プロジェクトコード <SourceTag type="input" /></span>
             <input type="text" value={current.hubspotDealId} onChange={(e) => onEdit("hubspotDealId", e.target.value)}
               placeholder="例: HS-2026-042" className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
           </label>
 
           <label className="block">
-            <span className="text-gray-500 text-xs">摘要</span>
+            <span className="text-gray-500 text-xs flex items-center gap-1">摘要 <SourceTag type="system" /></span>
             <input type="text" value={current.memo} onChange={(e) => onEdit("memo", e.target.value)}
               className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
           </label>
 
-          {Object.keys(edits).length > 0 && (
-            <p className="text-amber-600 text-xs mt-1">* 変更あり — 仕訳登録時に反映されます</p>
-          )}
+          {hasEdits && <p className="text-amber-600 text-xs mt-1">* 変更あり — 仕訳登録時に反映されます</p>}
         </div>
       </div>
     </div>
   );
 }
+
+// --- メインコンポーネント ---
 
 export default function JournalMock() {
   const [tab, setTab] = useState<Tab>("pending");
@@ -190,16 +277,9 @@ export default function JournalMock() {
   const displayed = tab === "pending" ? pending : registered;
   const totalPendingAmount = pending.reduce((s, r) => s + r.totalAmount, 0);
 
-  const toggleExpand = (prNumber: string) => {
-    setExpanded((prev) => ({ ...prev, [prNumber]: !prev[prNumber] }));
-  };
-
-  const handleEdit = (prNumber: string, field: keyof MockRequest, value: string) => {
-    setEdits((prev) => ({
-      ...prev,
-      [prNumber]: { ...prev[prNumber], [field]: value },
-    }));
-  };
+  const toggleExpand = (pr: string) => setExpanded((p) => ({ ...p, [pr]: !p[pr] }));
+  const handleEdit = (pr: string, field: keyof MockRequest, value: string) =>
+    setEdits((p) => ({ ...p, [pr]: { ...p[pr], [field]: value } }));
 
   const registerJournal = async (prNumber: string) => {
     setRegistering((prev) => ({ ...prev, [prNumber]: true }));
@@ -222,25 +302,38 @@ export default function JournalMock() {
     setBulkRegistering(false);
   };
 
+  // 要確認件数（AI確度が中低 or OCR金額不一致 or 適格番号なし請求書）
+  const needsReview = pending.filter((r) =>
+    r.debitConfidence !== "high" || !r.ocrAmountMatch || (!r.ocrRegistrationNumber && r.voucherType === "請求書")
+  );
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b px-4 py-3">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Link href="/" className="text-blue-600 hover:text-blue-800 text-sm">{"\u2190"} 戻る</Link>
             <h1 className="text-lg font-bold">仕訳管理</h1>
             <span className="text-xs px-2 py-0.5 bg-gray-200 text-gray-500 rounded">MOCK</span>
           </div>
-          <span className="text-xs text-gray-400">行クリックで編集</span>
+          <div className="flex items-center gap-3">
+            <div className="flex gap-1">
+              <SourceTag type="input" /><SourceTag type="ai" /><SourceTag type="system" /><SourceTag type="ocr" />
+            </div>
+          </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto p-4 sm:p-6">
+      <main className="max-w-7xl mx-auto p-4 sm:p-6">
         {/* サマリーカード */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
           <div className="bg-white border rounded-lg p-3 text-center">
             <div className="text-2xl font-bold text-amber-600">{pending.length}</div>
             <div className="text-xs text-gray-500">仕訳待ち</div>
+          </div>
+          <div className="bg-white border rounded-lg p-3 text-center">
+            <div className="text-2xl font-bold text-red-500">{needsReview.length}</div>
+            <div className="text-xs text-gray-500">要確認</div>
           </div>
           <div className="bg-white border rounded-lg p-3 text-center">
             <div className="text-2xl font-bold text-green-600">{Object.values(results).filter((r) => r.ok).length}</div>
@@ -256,25 +349,30 @@ export default function JournalMock() {
           </div>
         </div>
 
-        {/* タブ */}
-        <div className="flex gap-1 mb-4">
-          <button onClick={() => setTab("pending")} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === "pending" ? "bg-amber-100 text-amber-800" : "bg-white text-gray-600 hover:bg-gray-100"}`}>
-            仕訳待ち（{pending.length}）
-          </button>
-          <button onClick={() => setTab("registered")} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === "registered" ? "bg-green-100 text-green-800" : "bg-white text-gray-600 hover:bg-gray-100"}`}>
-            登録済み（{registered.length}）
-          </button>
-        </div>
-
-        {/* 一括登録ボタン */}
-        {tab === "pending" && pending.length > 0 && (
-          <div className="mb-4">
-            <button onClick={registerAll} disabled={bulkRegistering}
-              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed">
-              {bulkRegistering ? "登録中..." : `全${pending.length}件を一括登録`}
-            </button>
+        {/* 要確認バナー */}
+        {needsReview.length > 0 && tab === "pending" && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 text-sm text-amber-800">
+            <strong>要確認 {needsReview.length}件</strong>: AI推定確度が低い・OCR金額不一致・適格請求書番号なしの案件があります。行を展開して内容を確認してください。
           </div>
         )}
+
+        {/* タブ + 一括登録 */}
+        <div className="flex items-center gap-3 mb-4">
+          <div className="flex gap-1">
+            <button onClick={() => setTab("pending")} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === "pending" ? "bg-amber-100 text-amber-800" : "bg-white text-gray-600 hover:bg-gray-100"}`}>
+              仕訳待ち（{pending.length}）
+            </button>
+            <button onClick={() => setTab("registered")} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === "registered" ? "bg-green-100 text-green-800" : "bg-white text-gray-600 hover:bg-gray-100"}`}>
+              登録済み（{registered.length}）
+            </button>
+          </div>
+          {tab === "pending" && pending.length > 0 && (
+            <button onClick={registerAll} disabled={bulkRegistering}
+              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed ml-auto">
+              {bulkRegistering ? "登録中..." : `全${pending.length}件を一括登録`}
+            </button>
+          )}
+        </div>
 
         {/* テーブル */}
         {displayed.length === 0 ? (
@@ -289,13 +387,13 @@ export default function JournalMock() {
                   <tr className="bg-gray-50 border-b text-left">
                     <th className="px-3 py-2.5 font-medium text-gray-600 w-8"></th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">PO番号</th>
-                    <th className="px-3 py-2.5 font-medium text-gray-600">品目</th>
+                    <th className="px-3 py-2.5 font-medium text-gray-600">品目 <SourceTag type="input" /></th>
                     <th className="px-3 py-2.5 font-medium text-gray-600 text-right">金額</th>
-                    <th className="px-3 py-2.5 font-medium text-gray-600">借方</th>
-                    <th className="px-3 py-2.5 font-medium text-gray-600">貸方</th>
+                    <th className="px-3 py-2.5 font-medium text-gray-600">借方 <SourceTag type="ai" /></th>
+                    <th className="px-3 py-2.5 font-medium text-gray-600">貸方 <SourceTag type="system" /></th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">税区分</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">部門</th>
-                    <th className="px-3 py-2.5 font-medium text-gray-600">PJ</th>
+                    <th className="px-3 py-2.5 font-medium text-gray-600">証憑</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600 text-center">操作</th>
                   </tr>
                 </thead>
@@ -303,22 +401,28 @@ export default function JournalMock() {
                   {displayed.map((r) => {
                     const result = results[r.prNumber];
                     const isReg = registering[r.prNumber];
-                    const isRegisteredTab = tab === "registered" && !result;
                     const isExpanded = expanded[r.prNumber];
                     const e = edits[r.prNumber] || {};
                     const current = { ...r, ...e };
                     const edited = Object.keys(e).length > 0;
+                    const isRegisteredTab = tab === "registered" && !result;
+                    const hasWarning = r.debitConfidence !== "high" || !r.ocrAmountMatch || (!r.ocrRegistrationNumber && r.voucherType === "請求書");
                     return (
                       <><tr key={r.prNumber}
-                        className={`border-b hover:bg-gray-50 cursor-pointer ${result?.ok ? "bg-green-50" : result && !result.ok ? "bg-red-50" : edited ? "bg-amber-50/50" : ""}`}
+                        className={`border-b hover:bg-gray-50 cursor-pointer ${result?.ok ? "bg-green-50" : result && !result.ok ? "bg-red-50" : edited ? "bg-amber-50/50" : hasWarning ? "bg-yellow-50/30" : ""}`}
                         onClick={() => toggleExpand(r.prNumber)}>
-                        <td className="px-3 py-2.5 text-gray-400 text-xs">{isExpanded ? "\u25BC" : "\u25B6"}</td>
+                        <td className="px-3 py-2.5 text-gray-400 text-xs">{isExpanded ? "\u25BC" : hasWarning ? "\u26A0\uFE0F" : "\u25B6"}</td>
                         <td className="px-3 py-2.5 font-mono text-xs">
                           <a href={r.slackLink} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline" onClick={(e) => e.stopPropagation()}>{r.prNumber}</a>
                         </td>
-                        <td className="px-3 py-2.5 max-w-[160px] truncate" title={r.itemName}>{r.itemName}</td>
-                        <td className="px-3 py-2.5 text-right font-mono">{"\u00A5"}{r.totalAmount.toLocaleString()}</td>
-                        <td className="px-3 py-2.5 text-xs">{current.debitAccount}</td>
+                        <td className="px-3 py-2.5 max-w-[150px] truncate" title={r.itemName}>{r.itemName}</td>
+                        <td className="px-3 py-2.5 text-right font-mono">
+                          {"\u00A5"}{r.totalAmount.toLocaleString()}
+                          {r.ocrAmountMatch === false && <span className="ml-1 text-red-500 text-[10px]">✗OCR</span>}
+                        </td>
+                        <td className="px-3 py-2.5 text-xs">
+                          {current.debitAccount} <AiBadge confidence={r.debitConfidence} />
+                        </td>
                         <td className="px-3 py-2.5 text-xs">
                           <div>{current.creditAccount}</div>
                           {current.creditSubAccount && <div className="text-gray-400 text-[10px]">{current.creditSubAccount}</div>}
@@ -329,21 +433,25 @@ export default function JournalMock() {
                           </span>
                         </td>
                         <td className="px-3 py-2.5 text-xs">{current.department}</td>
-                        <td className="px-3 py-2.5 text-xs text-gray-500">{current.hubspotDealId || "-"}</td>
+                        <td className="px-3 py-2.5 text-xs">
+                          <span className="text-gray-500">{r.voucherType}</span>
+                          {r.ocrRegistrationNumber && <span className="ml-1 text-green-600 text-[10px]">適格</span>}
+                          {!r.ocrRegistrationNumber && r.voucherType === "請求書" && <span className="ml-1 text-amber-500 text-[10px]">番号なし</span>}
+                        </td>
                         <td className="px-3 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
                           {result?.ok ? (
                             <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded">{result.message}</span>
                           ) : result && !result.ok ? (
                             <div className="flex items-center gap-1 justify-center">
-                              <span className="text-xs text-red-600">{result.message}</span>
-                              <button onClick={() => registerJournal(r.prNumber)} className="text-xs text-red-600 underline">再試行</button>
+                              <span className="text-xs text-red-600 max-w-[100px] truncate">{result.message}</span>
+                              <button onClick={() => registerJournal(r.prNumber)} className="text-xs text-red-600 underline shrink-0">再試行</button>
                             </div>
                           ) : isRegisteredTab ? (
                             <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded">MF仕訳ID: {50000 + parseInt(r.prNumber.replace(/\D/g, ""))}</span>
                           ) : (
                             <button onClick={() => registerJournal(r.prNumber)} disabled={isReg}
                               className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300">
-                              {isReg ? <span className="flex items-center gap-1"><span className="inline-block animate-spin rounded-full h-3 w-3 border border-white border-t-transparent" />登録中</span> : "仕訳登録"}
+                              {isReg ? "登録中..." : "仕訳登録"}
                             </button>
                           )}
                         </td>
@@ -351,11 +459,7 @@ export default function JournalMock() {
                       {isExpanded && (
                         <tr key={`${r.prNumber}-detail`}>
                           <td colSpan={10}>
-                            <JournalDetail
-                              r={r}
-                              edits={edits[r.prNumber] || {}}
-                              onEdit={(field, value) => handleEdit(r.prNumber, field, value)}
-                            />
+                            <JournalDetail r={r} edits={edits[r.prNumber] || {}} onEdit={(field, value) => handleEdit(r.prNumber, field, value)} />
                           </td>
                         </tr>
                       )}
@@ -367,18 +471,6 @@ export default function JournalMock() {
             </div>
           </div>
         )}
-
-        {/* 操作ガイド */}
-        <div className="mt-6 bg-white border rounded-lg p-4 text-sm text-gray-600">
-          <h3 className="font-medium text-gray-800 mb-2">操作ガイド</h3>
-          <ul className="space-y-1 list-disc list-inside">
-            <li>行をクリックすると仕訳プレビュー + 編集フォームが展開されます</li>
-            <li><strong>編集可能項目</strong>: 借方科目、貸方科目、税区分、部門、プロジェクトコード、摘要</li>
-            <li>編集した内容は仕訳登録時にMF会計Plusに反映されます（行が黄色くハイライト）</li>
-            <li><strong>PJ列</strong>: HubSpot案件番号。展開して入力/変更できます</li>
-            <li>MF会計Plusにはドラフトとして登録。最終承認はMF会計Plus上で行ってください</li>
-          </ul>
-        </div>
       </main>
     </div>
   );
