@@ -99,7 +99,8 @@ function JournalDetail({ r, edits, onEdit }: {
   const taxCat = edits.taxCategory ?? (ACCOUNT_TAX_MAP[debitAccount] || "共-課仕 10%");
   const dept = edits.department ?? r.department;
   const hubspot = edits.hubspotDealId ?? (r.hubspotInfo || "");
-  const memo = edits.memo ?? `${r.prNumber} ${r.supplierName}`;
+  const ym = r.applicationDate ? r.applicationDate.slice(0, 7).replace("-", "/") : new Date().toISOString().slice(0, 7).replace("-", "/");
+  const memo = edits.memo ?? `${ym} ${r.prNumber} ${r.supplierName}`;
   const tax = calcTax(r.totalAmount, taxCat);
   const creditOptions = CREDIT_MAP[r.paymentMethod] || CREDIT_MAP["請求書払い"];
   const hasEdits = Object.keys(edits).length > 0;

@@ -365,7 +365,7 @@ export async function buildJournalFromPurchase(params: {
     transaction_date: transactionDate,
     journal_type: "journal_entry",
     tags: [poNumber],
-    memo: memo || `${poNumber} ${supplierName}`,
+    memo: memo || `${transactionDate.slice(0, 7).replace("-", "/")} ${poNumber} ${supplierName}`,
     branches: [
       {
         remark: `${poNumber} ${supplierName}${memo ? ` ${memo}` : ""}`,
