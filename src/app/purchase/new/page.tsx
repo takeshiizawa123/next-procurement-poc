@@ -372,6 +372,9 @@ function PurchaseFormInner() {
 
   // 購入先サジェスト
   const [supplierSuggestions, setSupplierSuggestions] = useState<string[]>([]);
+  // MF取引先マスタ（請求書払い時に使用）
+  type MfCounterparty = { code: string; name: string; invoiceNumber?: string };
+  const [mfCounterparties, setMfCounterparties] = useState<MfCounterparty[]>([]);
 
   // KATANA POサジェスト
   type KatanaPO = { id: number; poNumber: string; supplierName: string; status: string; total: number };
@@ -527,6 +530,15 @@ function PurchaseFormInner() {
     localStorage.setItem("purchase_applicant_name", selectedEmployee.name);
     fetchMyTasks(selectedEmployee.name);
   }, [selectedEmployee, fetchMyTasks]);
+
+  // 請求書払い選択時にMF取引先マスタを取得
+  useEffect(() => {
+    if (!paymentMethod.includes("請求書")) { setMfCounterparties([]); return; }
+    apiFetch("/api/mf/counterparties")
+      .then((r) => r.json())
+      .then((d: { counterparties?: MfCounterparty[] }) => setMfCounterparties(d.counterparties || []))
+      .catch(() => setMfCounterparties([]));
+  }, [paymentMethod]);
 
   // 承認ルート取得（金額・区分が変わるたび）
   useEffect(() => {
@@ -1263,15 +1275,20 @@ function PurchaseFormInner() {
                 placeholder="例: Amazon、モノタロウ、ASKUL等"
                 className="w-full border rounded-lg px-3 py-2"
               />
-              {supplierSuggestions.length > 0 && (
+              {(supplierSuggestions.length > 0 || mfCounterparties.length > 0) && (
                 <datalist id="supplier-list">
-                  {supplierSuggestions.map((s) => (
+                  {mfCounterparties.map((c) => (
+                    <option key={`mf-${c.code}`} value={c.name} label={`${c.name}${c.invoiceNumber ? ` (${c.invoiceNumber})` : ""}`} />
+                  ))}
+                  {supplierSuggestions.filter((s) => !mfCounterparties.some((c) => c.name === s)).map((s) => (
                     <option key={s} value={s} />
                   ))}
                 </datalist>
               )}
               <p className="text-xs text-gray-500 mt-1">
-                Amazonマーケットプレイスの場合は出品者名を記入してください
+                {paymentMethod.includes("請求書")
+                  ? "MF会計Plusの取引先マスタから候補が表示されます。新規取引先はそのまま入力してください"
+                  : "Amazonマーケットプレイスの場合は出品者名を記入してください"}
               </p>
             </fieldset>
 

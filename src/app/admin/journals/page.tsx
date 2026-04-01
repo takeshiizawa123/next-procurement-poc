@@ -78,6 +78,7 @@ interface JournalEdits {
   debitAccount: string;
   creditAccount: string;
   creditSubAccount: string;
+  counterpartyCode: string;
   taxCategory: string;
   department: string;
   hubspotDealId: string;

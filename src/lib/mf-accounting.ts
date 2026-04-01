@@ -120,6 +120,48 @@ export async function getDepartments(): Promise<MasterItem[]> {
   return fetchMaster("/masters/departments", "departments");
 }
 
+// --- 取引先マスタ ---
+
+export interface CounterpartyItem {
+  id: number;
+  code: string | null;
+  name: string;
+  search_key?: string | null;
+  available?: boolean;
+  invoice_registration_number?: string | null;
+}
+
+const counterpartyCache: CacheEntry<CounterpartyItem[]> | null = null;
+
+export async function getCounterparties(): Promise<CounterpartyItem[]> {
+  if (counterpartyCache && Date.now() - counterpartyCache.fetchedAt < CACHE_TTL) {
+    return counterpartyCache.data;
+  }
+  const data = await authenticatedRequest<{ counterparties: CounterpartyItem[] }>(
+    "GET",
+    "/masters/counterparties",
+  );
+  const items = (data.counterparties || []).filter((c) => c.available !== false);
+  masterCache["_counterparties"] = {
+    data: items as unknown as MasterItem[],
+    fetchedAt: Date.now(),
+  };
+  return items;
+}
+
+/** 取引先名からコードを解決（部分一致対応） */
+export async function resolveCounterpartyCode(name: string): Promise<string | undefined> {
+  if (!name) return undefined;
+  const items = await getCounterparties();
+  const q = name.trim();
+  const found =
+    items.find((c) => c.name === q) ||
+    items.find((c) => c.code === q) ||
+    items.find((c) => c.name.includes(q) || q.includes(c.name)) ||
+    items.find((c) => c.search_key?.includes(q));
+  return found?.code ?? undefined;
+}
+
 // --- 補助科目マスタ ---
 
 interface SubAccountItem {
@@ -360,6 +402,12 @@ export async function buildJournalFromPurchase(params: {
   // 部門
   const departmentCode = department ? await resolveDepartmentCode(department) : undefined;
 
+  // 取引先（請求書払い・前払いの場合のみ — 買掛金の消込に必要）
+  const isCard = paymentMethod.includes("カード");
+  const counterpartyCode = !isCard && supplierName
+    ? await resolveCounterpartyCode(supplierName)
+    : undefined;
+
   // 税込金額から税額を計算（税区分名から税率を解決）
   const taxRatePercent = TAX_RATE_MAP[taxTypeName] ?? 10;
   const taxValue = taxRatePercent > 0 ? Math.floor(amount * taxRatePercent / (100 + taxRatePercent)) : 0;
@@ -383,6 +431,7 @@ export async function buildJournalFromPurchase(params: {
         creditor: {
           account_code: credit.accountCode,
           sub_account_code: credit.subAccountCode,
+          counterparty_code: counterpartyCode,
           value: amount,
         },
       },
