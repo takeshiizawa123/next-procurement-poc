@@ -489,13 +489,14 @@ function buildCancelledBlocks(poNumber: string, canceller: string) {
  * 返品ボタン押下時の処理（検収済みの申請に対して）
  * 権限: 申請者・検収者・管理本部メンバー
  */
+/**
+ * 返品ボタン → モーダルを開く（数量・理由を入力）
+ */
 export const handleReturn: SlackActionHandler = async ({
   client,
   body,
   userId,
-  userName,
   channelId,
-  messageTs,
   actionValue,
 }) => {
   const { poNumber, applicantSlackId, inspectorSlackId } = parseActionValue(actionValue);
@@ -511,86 +512,160 @@ export const handleReturn: SlackActionHandler = async ({
     return;
   }
 
+  const triggerId = (body as { trigger_id?: string }).trigger_id;
+  if (!triggerId) return;
+
   const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
   const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
+  const totalAmount = parseInt((info?.amount || "0").replace(/[^\d]/g, ""), 10);
+  // 数量はブロックから直接取得できないため、GASから取得を試みる
+  let quantity = 1;
+  try {
+    const { getStatus } = await import("./gas-client");
+    const statusResult = await getStatus(poNumber);
+    if (statusResult.success && statusResult.data) {
+      quantity = Number((statusResult.data as Record<string, unknown>)["数量"] || 1) || 1;
+    }
+  } catch { /* フォールバック: 1 */ }
 
-  await client.chat.update({
-    channel: channelId,
-    ts: messageTs,
-    blocks: buildReturnedBlocks(poNumber, userName, info),
-    text: `返品処理（${userName}）`,
+  // private_metadata にコンテキスト情報を埋め込む
+  const metadata = JSON.stringify({
+    poNumber, channelId, messageTs: (body as { message?: { ts?: string } }).message?.ts || "",
+    actionValue, totalAmount, quantity,
+    itemName: info?.itemName || "", supplierName: info?.supplierName || "",
+    paymentMethod: info?.paymentMethod || "",
   });
 
-  // 取消仕訳の自動作成を試みる
+  await client.views.open({
+    trigger_id: triggerId,
+    view: {
+      type: "modal",
+      callback_id: "return_submit",
+      private_metadata: metadata,
+      title: { type: "plain_text", text: "返品処理" },
+      submit: { type: "plain_text", text: "返品を実行" },
+      close: { type: "plain_text", text: "キャンセル" },
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: `*${poNumber}* — ${info?.itemName || ""}\n金額: ${info?.amount || ""} / 数量: ${quantity}` },
+        },
+        {
+          type: "input",
+          block_id: "return_qty",
+          label: { type: "plain_text", text: "返品数量" },
+          element: {
+            type: "plain_text_input",
+            action_id: "value",
+            placeholder: { type: "plain_text", text: `全量返品の場合は ${quantity}` },
+            initial_value: String(quantity),
+          },
+          hint: { type: "plain_text", text: `注文数量: ${quantity}。一部返品の場合は返品する数量を入力` },
+        },
+        {
+          type: "input",
+          block_id: "return_reason",
+          label: { type: "plain_text", text: "返品理由" },
+          element: {
+            type: "plain_text_input",
+            action_id: "value",
+            placeholder: { type: "plain_text", text: "例: 商品不良、注文間違い、数量過剰" },
+          },
+          optional: false,
+        },
+      ],
+    },
+  });
+};
+
+/**
+ * 返品モーダル送信ハンドラ（events/route.ts から呼び出される）
+ */
+export async function handleReturnSubmit(
+  client: WebClient,
+  view: { private_metadata: string; state: { values: Record<string, Record<string, { value?: string | null }>> } },
+  userId: string,
+  userName: string,
+): Promise<void> {
+  const meta = JSON.parse(view.private_metadata);
+  const { poNumber, channelId, messageTs, totalAmount, quantity, itemName, supplierName, paymentMethod } = meta;
+
+  const returnQty = parseInt(view.state.values.return_qty?.value?.value || String(quantity), 10) || quantity;
+  const returnReason = view.state.values.return_reason?.value?.value || "";
+  const isPartial = returnQty < quantity;
+  const returnAmount = quantity > 0 ? Math.round(totalAmount * returnQty / quantity) : totalAmount;
+
+  const message = (await client.conversations.replies({ channel: channelId, ts: messageTs, limit: 1 })).messages?.[0];
+  const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks as Array<{ type: string; fields?: Array<{ text: string }> }>) : null;
+
+  // メッセージ更新
+  if (!isPartial) {
+    await client.chat.update({
+      channel: channelId,
+      ts: messageTs,
+      blocks: buildReturnedBlocks(poNumber, userName, info),
+      text: `返品処理（${userName}）`,
+    });
+  }
+
+  // 取消仕訳の作成
   let reversalNote = "仕訳が計上済みの場合、管理本部が取消仕訳を作成してください。";
-  const amountNum = parseInt((info?.amount || "0").replace(/[^\d]/g, ""), 10);
-  if (amountNum > 0) {
+  if (returnAmount > 0) {
     try {
       const { createJournal, resolveAccountCode, resolveTaxCode } = await import("@/lib/mf-accounting");
       const { estimateAccount } = await import("@/lib/account-estimator");
 
-      const estimation = estimateAccount(info?.itemName || "", info?.supplierName || "", amountNum);
+      const estimation = estimateAccount(itemName, supplierName, returnAmount);
       const mainAccount = estimation.account.split("（")[0].trim();
       const debitCode = await resolveAccountCode(mainAccount) || mainAccount;
-      const payMethod = info?.paymentMethod || "";
-      const isCard = payMethod.includes("カード");
+      const isCard = paymentMethod.includes("カード");
       const creditAccountName = isCard ? "未払金" : "買掛金";
       const creditCode = await resolveAccountCode(creditAccountName) || creditAccountName;
       const taxCode = await resolveTaxCode("共-課仕 10%");
-      const taxValue = Math.floor(amountNum * 10 / 110);
+      const taxValue = Math.floor(returnAmount * 10 / 110);
 
       const journal = await createJournal({
         status: "draft",
         transaction_date: new Date().toISOString().slice(0, 10),
         journal_type: "journal_entry",
         tags: [poNumber, "reversal"],
-        memo: `${poNumber} 返品取消仕訳 ${info?.supplierName || ""}`,
+        memo: `${new Date().toISOString().slice(0, 7).replace("-", "/")} ${poNumber} 返品取消仕訳 ${supplierName}`,
         branches: [
           {
-            remark: `${poNumber} ${info?.supplierName || ""} 返品取消`,
-            debitor: {
-              account_code: creditCode,
-              value: amountNum,
-            },
-            creditor: {
-              account_code: debitCode,
-              ...(taxCode ? { tax_code: taxCode } : {}),
-              value: amountNum,
-              tax_value: taxValue,
-            },
+            remark: `${poNumber} ${supplierName} ${isPartial ? `一部返品(${returnQty}/${quantity})` : "全量返品"} ${returnReason}`,
+            debitor: { account_code: creditCode, value: returnAmount },
+            creditor: { account_code: debitCode, ...(taxCode ? { tax_code: taxCode } : {}), value: returnAmount, tax_value: taxValue },
           },
         ],
       });
-      reversalNote = `取消仕訳をドラフト作成しました（MF仕訳ID: ${journal.id}）。MF会計Plusで確認・承認してください。`;
-      console.log(`[return] Reversal journal created: ${journal.id} for ${poNumber}`);
+      reversalNote = `取消仕訳をドラフト作成しました（MF仕訳ID: ${journal.id} / ¥${returnAmount.toLocaleString()}）。MF会計Plusで確認・承認してください。`;
     } catch (e) {
       console.error("[return] Reversal journal error:", e);
       reversalNote = "取消仕訳の自動作成に失敗しました。管理本部が手動で作成してください。";
     }
   }
 
+  const returnLabel = isPartial ? `一部返品（${returnQty}/${quantity}個 — ¥${returnAmount.toLocaleString()}）` : `全量返品（¥${returnAmount.toLocaleString()}）`;
+
   await client.chat.postMessage({
     channel: channelId,
     thread_ts: messageTs,
-    text: [
-      `↩️ 返品処理を開始しました（${userName}）`,
-      reversalNote,
-    ].join("\n"),
+    text: [`↩️ ${returnLabel}（${userName}）`, `理由: ${returnReason}`, reversalNote].join("\n"),
   });
 
-  await notifyOps(
-    client,
-    [
-      `↩️ *返品処理* ${poNumber}`,
-      `  品目: ${info?.itemName || ""}`,
-      `  金額: ${info?.amount || ""}`,
-      `  処理者: ${userName}`,
-      `  → ${reversalNote}`,
-    ].join("\n"),
-  );
+  await notifyOps(client, [
+    `↩️ *返品処理* ${poNumber}`,
+    `  ${returnLabel}`,
+    `  品目: ${itemName}`,
+    `  理由: ${returnReason}`,
+    `  処理者: ${userName}`,
+    `  → ${reversalNote}`,
+  ].join("\n"));
 
-  await safeUpdateStatus(client, channelId, messageTs, poNumber, { "検収ステータス": "返品", "備考": `${userName}が返品処理` }, "return");
-};
+  const status = isPartial ? "一部返品" : "返品";
+  const note = `${userName}が${isPartial ? `一部返品(${returnQty}/${quantity})` : "全量返品"}: ${returnReason}`;
+  await safeUpdateStatus(client, channelId, messageTs, poNumber, { "検収ステータス": status, "備考": note }, "return");
+}
 
 function buildReturnedBlocks(
   poNumber: string,

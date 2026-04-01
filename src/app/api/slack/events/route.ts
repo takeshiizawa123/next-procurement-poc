@@ -6,6 +6,7 @@ import {
   actionHandlers,
   handlePoTestCommand,
   handlePurchaseCommand,
+  handleReturnSubmit,
   parsePurchaseFormValues,
   buildNewRequestBlocks,
   buildPurchasedRequestBlocks,
@@ -260,6 +261,20 @@ export async function POST(request: NextRequest) {
 
         after(async () => {
           await handlePartialInspectionSubmit(userId, actionValue, inspectedQty, note);
+        });
+
+        return NextResponse.json({ response_action: "clear" });
+      }
+
+      if (view.callback_id === "return_submit") {
+        const userId = (payload.user as { id: string }).id;
+        const userName = (payload.user as { name?: string; username?: string }).name
+          || (payload.user as { username?: string }).username
+          || userId;
+
+        after(async () => {
+          const client = getSlackClient();
+          await handleReturnSubmit(client, view, userId, userName);
         });
 
         return NextResponse.json({ response_action: "clear" });
