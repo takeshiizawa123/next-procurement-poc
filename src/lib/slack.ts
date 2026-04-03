@@ -1,6 +1,7 @@
 import { WebClient } from "@slack/web-api";
-import { updateStatus, getPendingVouchers } from "./gas-client";
+import { updateStatus, getStatus, getPendingVouchers } from "./gas-client";
 import { generatePrediction, isCardPayment } from "./prediction";
+import { buildAmountDiffJournal, createJournal } from "./mf-accounting";
 
 /** GAS更新を実行し、失敗時にSlackスレッドに警告を投稿する */
 async function safeUpdateStatus(
@@ -1042,6 +1043,38 @@ const handleAmountDiffApprove: SlackActionHandler = async ({
   await safeUpdateStatus(client, channelId, messageTs, prNumber, gasUpdates, "amount_diff_approve");
 
   await notifyOps(client, `✅ *金額差異承認* ${prNumber}（${userName}）— 証憑¥${ocrAmount.toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}→ 合計額を税抜¥${ocrSubtotal.toLocaleString()}に更新`);
+
+  // 差額仕訳の自動生成（MF会計Plus）
+  const difference = ocrAmount - Number(requestedAmountStr);
+  if (difference !== 0) {
+    try {
+      const statusResult = await getStatus(prNumber);
+      const purchase = (statusResult.success && statusResult.data) ? statusResult.data as Record<string, unknown> : {};
+      const diffJournal = await buildAmountDiffJournal({
+        poNumber: prNumber,
+        difference,
+        paymentMethod: String(purchase["支払方法"] || ""),
+        supplierName: String(purchase["購入先"] || ""),
+        transactionDate: new Date().toISOString().split("T")[0],
+        department: String(purchase["部門"] || ""),
+        ocrTaxRate: undefined, // OCR税率は actionValue に含まれないためデフォルト10%
+      });
+      const journalResult = await createJournal(diffJournal);
+      await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: messageTs,
+        text: `📝 差額仕訳を登録しました（MF仕訳ID: ${journalResult.id} / ${difference > 0 ? "雑損失" : "仕入値引"} ¥${Math.abs(difference).toLocaleString()}）`,
+      });
+      await notifyOps(client, `📝 *差額仕訳* ${prNumber} — MF仕訳ID: ${journalResult.id} / ${difference > 0 ? "雑損失" : "仕入値引"} ¥${Math.abs(difference).toLocaleString()}`);
+    } catch (journalErr) {
+      console.error(`[amount_diff] Journal creation failed for ${prNumber}:`, journalErr);
+      await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: messageTs,
+        text: `⚠️ 差額仕訳の自動登録に失敗しました。手動で登録してください。（${journalErr instanceof Error ? journalErr.message : String(journalErr)}）`,
+      });
+    }
+  }
 };
 
 /**

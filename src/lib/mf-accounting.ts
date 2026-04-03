@@ -482,3 +482,86 @@ export const EXPENSE_ACCOUNT_MAP: Record<string, { account: string; taxType: str
   材料費: { account: "材料費", taxType: "共-課仕 10%" },
   材料仕入: { account: "材料仕入", taxType: "共-課仕 10%" },
 };
+
+// --- 差額仕訳 ---
+
+/**
+ * 金額差異の調整仕訳を構築
+ *
+ * 証憑 > 申請（追加コスト）: 借方「雑損失」/ 貸方「買掛金 or 未払金」
+ * 証憑 < 申請（値引き）:   借方「買掛金 or 未払金」/ 貸方「仕入値引」
+ */
+export async function buildAmountDiffJournal(params: {
+  poNumber: string;
+  difference: number;
+  paymentMethod: string;
+  supplierName: string;
+  transactionDate: string;
+  department?: string;
+  ocrTaxRate?: number;
+}): Promise<CreateJournalRequest> {
+  const { poNumber, difference, paymentMethod, supplierName, transactionDate, department, ocrTaxRate } = params;
+  const absDiff = Math.abs(difference);
+
+  // 貸方/借方の相手科目（支払方法に応じた負債科目）
+  const credit = await resolveCreditAccount(paymentMethod);
+  const departmentCode = department ? await resolveDepartmentCode(department) : undefined;
+  const counterpartyCode = supplierName ? await resolveCounterpartyCode(supplierName) : undefined;
+
+  // 税区分
+  const taxRate = ocrTaxRate ?? 10;
+  const taxTypeName = taxRate === 8 ? "共-課仕 8%" : "共-課仕 10%";
+  const taxCode = await resolveTaxCode(taxTypeName);
+  const taxValue = taxRate > 0 ? Math.floor(absDiff * taxRate / (100 + taxRate)) : 0;
+
+  let branch: JournalBranch;
+
+  if (difference > 0) {
+    // 証憑 > 申請 → 追加コスト（雑損失）
+    const lossAccountCode = await resolveAccountCode("雑損失");
+    branch = {
+      remark: `${poNumber} ${supplierName} 金額差異調整（+¥${absDiff.toLocaleString()}）`,
+      debitor: {
+        account_code: lossAccountCode || "雑損失",
+        tax_code: taxCode,
+        department_code: departmentCode,
+        value: absDiff,
+        tax_value: taxValue,
+      },
+      creditor: {
+        account_code: credit.accountCode,
+        sub_account_code: credit.subAccountCode,
+        counterparty_code: counterpartyCode,
+        value: absDiff,
+      },
+    };
+  } else {
+    // 証憑 < 申請 → 値引き（仕入値引）
+    const discountAccountCode = await resolveAccountCode("仕入値引");
+    branch = {
+      remark: `${poNumber} ${supplierName} 金額差異調整（-¥${absDiff.toLocaleString()}）`,
+      debitor: {
+        account_code: credit.accountCode,
+        sub_account_code: credit.subAccountCode,
+        counterparty_code: counterpartyCode,
+        value: absDiff,
+      },
+      creditor: {
+        account_code: discountAccountCode || "仕入値引",
+        tax_code: taxCode,
+        department_code: departmentCode,
+        value: absDiff,
+        tax_value: taxValue,
+      },
+    };
+  }
+
+  return {
+    status: "draft",
+    transaction_date: transactionDate,
+    journal_type: "adjusting_entry",
+    tags: [poNumber, "金額差異"],
+    memo: `${transactionDate.slice(0, 7).replace("-", "/")} ${poNumber} ${supplierName} 金額差異調整`,
+    branches: [branch],
+  };
+}
