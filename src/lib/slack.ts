@@ -941,10 +941,11 @@ export async function sendAmountDiffApproval(
   requestedAmount: number,
   difference: number,
   approverSlackId: string,
+  ocrSubtotal?: number,
 ): Promise<void> {
   const pctDiff = requestedAmount > 0 ? Math.abs(difference) / requestedAmount * 100 : 0;
   const diffSign = difference > 0 ? "+" : "";
-  const actionValue = `${prNumber}|${approverSlackId}|${ocrAmount}|${requestedAmount}`;
+  const actionValue = `${prNumber}|${approverSlackId}|${ocrAmount}|${requestedAmount}|${ocrSubtotal ?? ""}`;
 
   await client.chat.postMessage({
     channel: channelId,
@@ -1007,7 +1008,8 @@ const handleAmountDiffApprove: SlackActionHandler = async ({
   messageTs,
   actionValue,
 }) => {
-  const [prNumber, approverSlackId, ocrAmountStr, requestedAmountStr] = actionValue.split("|");
+  const [prNumber, approverSlackId, ocrAmountStr, requestedAmountStr, subtotalStr] = actionValue.split("|");
+  const ocrAmount = Number(ocrAmountStr);
 
   if (approverSlackId && userId !== approverSlackId) {
     await client.chat.postEphemeral({
@@ -1018,23 +1020,28 @@ const handleAmountDiffApprove: SlackActionHandler = async ({
     return;
   }
 
+  // 証憑金額（税抜）で合計額を上書き
+  const ocrSubtotal = subtotalStr ? Number(subtotalStr) : Math.round(ocrAmount / 1.1);
+  const gasUpdates: Record<string, string> = {
+    "金額照合": `承認済（差額承認: ${userName}）`,
+    "合計額（税抜）": String(ocrSubtotal),
+  };
+
   await client.chat.update({
     channel: channelId,
     ts: messageTs,
     blocks: [
       {
         type: "section",
-        text: { type: "mrkdwn", text: `✅ *金額差異承認済*（${userName}）\n${prNumber}: 証憑¥${Number(ocrAmountStr).toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}` },
+        text: { type: "mrkdwn", text: `✅ *金額差異承認済*（${userName}）\n${prNumber}: 証憑¥${ocrAmount.toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}\n合計額を証憑ベース（税抜¥${ocrSubtotal.toLocaleString()}）に更新しました` },
       },
     ],
     text: `金額差異承認済（${userName}）`,
   });
 
-  await safeUpdateStatus(client, channelId, messageTs, prNumber, {
-    "金額照合": `承認済（差額承認: ${userName}）`,
-  }, "amount_diff_approve");
+  await safeUpdateStatus(client, channelId, messageTs, prNumber, gasUpdates, "amount_diff_approve");
 
-  await notifyOps(client, `✅ *金額差異承認* ${prNumber}（${userName}）— 証憑¥${Number(ocrAmountStr).toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}`);
+  await notifyOps(client, `✅ *金額差異承認* ${prNumber}（${userName}）— 証憑¥${ocrAmount.toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}→ 合計額を税抜¥${ocrSubtotal.toLocaleString()}に更新`);
 };
 
 /**

@@ -1100,10 +1100,11 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
                   // 20%超 & ¥1,000超 → 承認者に再承認ボタン送信
                   const approver = String(dataObj["approverSlackId"] || "");
                   confirmLines.push(`🔄 金額差異が大きいため、承認者に再承認を依頼しました`);
+                  const ocrSubtotal = ocrResult.subtotal ?? Math.round(ocrResult.amount / (1 + (ocrResult.tax_rate ?? 10) / 100));
                   await sendAmountDiffApproval(
                     client, channelId, threadTs, prNumber,
                     ocrResult.amount, requestedAmount, match.difference,
-                    approver,
+                    approver, ocrSubtotal,
                   );
                   await notifyOps(client, `🔄 *金額差異再承認* ${prNumber} — ${match.message}（承認者: <@${approver}>）`);
                 } else {
@@ -1132,12 +1133,18 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
           if (ocrResult.tax_rate != null) {
             ocrUpdates["税区分"] = `課税${ocrResult.tax_rate}%`;
           }
-          // 金額照合結果
+          // 金額照合結果 + 証憑ベースで合計額上書き
           if (statusResult.success && statusResult.data) {
             const reqAmt = requestedAmount;
             if (reqAmt > 0 && ocrResult.amount > 0) {
               const diff = ocrResult.amount - reqAmt;
+              const match = matchAmount(ocrResult, reqAmt);
               ocrUpdates["金額照合"] = diff === 0 ? "一致" : `不一致（差額${diff > 0 ? "+" : ""}¥${diff.toLocaleString()}）`;
+              // 一致 or 許容範囲内 → 証憑金額で合計額を上書き（再承認要は承認後に上書き）
+              if (match.isMatched && ocrResult.amount > 0) {
+                const ocrSubtotal = ocrResult.subtotal ?? Math.round(ocrResult.amount / (1 + (ocrResult.tax_rate ?? 10) / 100));
+                ocrUpdates["合計額（税抜）"] = String(ocrSubtotal);
+              }
             }
           }
 
