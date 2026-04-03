@@ -140,7 +140,28 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, ...result, adjustmentResults });
+    // 概算差額超過の通知（is_estimate予測で閾値超過のもの）
+    const estimateAlerts = result.confidentMatches.filter((m) => m.isEstimateDiffExceeded);
+    if (estimateAlerts.length > 0) {
+      try {
+        const { notifyOps } = await import("@/lib/slack");
+        const { getSlackClient } = await import("@/lib/slack");
+        const client = getSlackClient();
+        for (const m of estimateAlerts) {
+          const diffSign = m.diff > 0 ? "+" : "";
+          await notifyOps(client,
+            `📊 *概算差額超過* ${m.poNumber} — ` +
+            `概算 ¥${m.predictedAmount.toLocaleString()} → 実額 ¥${m.actualAmount.toLocaleString()} ` +
+            `(差額 ${diffSign}¥${m.diff.toLocaleString()}) [${m.applicant}]\n` +
+            `再承認の確認が必要です。`);
+        }
+        console.log(`[card-matching] Estimate alerts sent: ${estimateAlerts.length}`);
+      } catch (alertErr) {
+        console.error("[card-matching] Estimate alert error:", alertErr);
+      }
+    }
+
+    return NextResponse.json({ ok: true, ...result, adjustmentResults, estimateAlerts: estimateAlerts.length });
   } catch (error) {
     console.error("[card-matching] Error:", error);
     return NextResponse.json(

@@ -1040,6 +1040,7 @@ function buildPurchaseModal(channelId: string) {
           options: [
             { text: { type: "plain_text", text: "購入前" }, value: "購入前" },
             { text: { type: "plain_text", text: "購入済" }, value: "購入済" },
+            { text: { type: "plain_text", text: "🚨 緊急事後報告" }, value: "緊急事後報告" },
           ],
         },
       },
@@ -1064,6 +1065,47 @@ function buildPurchaseModal(channelId: string) {
           type: "plain_text_input",
           action_id: "amount_input",
           placeholder: { type: "plain_text", text: "例: 165000" },
+        },
+      },
+      // 3b. 概算チェックボックス
+      {
+        type: "input",
+        block_id: "is_estimate",
+        label: { type: "plain_text", text: "金額の確度" },
+        optional: true,
+        element: {
+          type: "checkboxes",
+          action_id: "is_estimate_check",
+          options: [
+            {
+              text: { type: "plain_text", text: "📐 概算（金額未確定）" },
+              value: "estimate",
+              description: { type: "plain_text", text: "実額確定後にMFカード明細と自動比較されます" },
+            },
+          ],
+        },
+      },
+      // 3c. 購入日（事後報告用）
+      {
+        type: "input",
+        block_id: "purchase_date",
+        label: { type: "plain_text", text: "購入日（事後報告の場合）" },
+        hint: { type: "plain_text", text: "緊急事後報告の場合は購入日を選択してください" },
+        optional: true,
+        element: { type: "datepicker", action_id: "purchase_date_picker" },
+      },
+      // 3d. 緊急理由（事後報告用）
+      {
+        type: "input",
+        block_id: "emergency_reason",
+        label: { type: "plain_text", text: "緊急理由（事後報告の場合）" },
+        hint: { type: "plain_text", text: "緊急事後報告の場合は必ず記入してください" },
+        optional: true,
+        element: {
+          type: "plain_text_input",
+          action_id: "emergency_reason_input",
+          multiline: true,
+          placeholder: { type: "plain_text", text: "例: 出張先で急遽必要になったため" },
         },
       },
       // 4. 数量
@@ -1233,6 +1275,12 @@ export interface PurchaseFormData {
   hubspotDealId: string;
   budgetNumber: string;
   notes: string;
+  /** 概算フラグ — 金額未確定の場合 true */
+  isEstimate: boolean;
+  /** 緊急理由（事後報告の場合のみ） */
+  emergencyReason: string;
+  /** 購入日（事後報告の場合のみ） */
+  purchaseDate: string;
 }
 
 export function parsePurchaseFormValues(
@@ -1245,6 +1293,11 @@ export function parsePurchaseFormValues(
 
   const amount = parseInt(get("amount", "amount_input").replace(/[,，]/g, ""), 10) || 0;
   const quantity = parseInt(get("quantity", "quantity_input"), 10) || 1;
+
+  // 概算チェックボックスの解析
+  const estimateBlock = values["is_estimate"]?.["is_estimate_check"];
+  const selectedOptions = (estimateBlock as { selected_options?: { value: string }[] })?.selected_options || [];
+  const isEstimate = selectedOptions.some((o: { value: string }) => o.value === "estimate");
 
   return {
     requestType: get("request_type", "request_type_select"),
@@ -1260,6 +1313,9 @@ export function parsePurchaseFormValues(
     hubspotDealId: get("hubspot_deal_id", "hubspot_deal_id_input"),
     budgetNumber: get("budget_number", "budget_number_input"),
     notes: get("notes", "notes_input"),
+    isEstimate,
+    emergencyReason: get("emergency_reason", "emergency_reason_input"),
+    purchaseDate: get("purchase_date", "purchase_date_picker"),
   };
 }
 

@@ -18,6 +18,9 @@ interface PurchaseRequest {
   slackLink: string;
   type: string;
   department: string;
+  isEstimate?: boolean;
+  isPostReport?: boolean;
+  isQualifiedInvoice?: string;
 }
 
 function statusColor(status: string): string {
@@ -298,6 +301,12 @@ function MyPageInner() {
                       <StatusBadge label={overall.label} className={overall.color} />
                       {req.type === "購入報告" && (
                         <StatusBadge label="購入済" className="bg-purple-100 text-purple-700" />
+                      )}
+                      {req.isEstimate && (
+                        <StatusBadge label="概算" className="bg-purple-100 text-purple-700" />
+                      )}
+                      {req.isPostReport && (
+                        <StatusBadge label="事後報告" className="bg-red-100 text-red-700" />
                       )}
                     </div>
                     <h3 className="font-medium mt-1">{req.itemName}</h3>

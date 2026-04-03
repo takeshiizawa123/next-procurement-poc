@@ -18,6 +18,9 @@ interface PurchaseRequest {
   department: string;
   accountTitle: string;
   slackLink: string;
+  isEstimate?: boolean;
+  isPostReport?: boolean;
+  isQualifiedInvoice?: string;
 }
 
 function overallLabel(req: PurchaseRequest): string {
@@ -87,6 +90,22 @@ function DashboardInner() {
     monthlyStats[month].count++;
     monthlyStats[month].amount += req.totalAmount || 0;
   }
+
+  // 適格請求書・概算・事後報告の集計
+  const invoiceCounts = { qualified: 0, unqualified: 0, noNumber: 0, total: 0 };
+  let estimateCount = 0;
+  let postReportCount = 0;
+  for (const req of requests) {
+    if (req.isQualifiedInvoice) {
+      invoiceCounts.total++;
+      if (req.isQualifiedInvoice === "適格") invoiceCounts.qualified++;
+      else if (req.isQualifiedInvoice === "非適格") invoiceCounts.unqualified++;
+      else invoiceCounts.noNumber++;
+    }
+    if (req.isEstimate) estimateCount++;
+    if (req.isPostReport) postReportCount++;
+  }
+  const qualifiedRate = invoiceCounts.total > 0 ? Math.round((invoiceCounts.qualified / invoiceCounts.total) * 100) : 0;
 
   const statusOrder = ["承認待ち", "発注待ち", "検収待ち", "証憑待ち", "差戻し", "完了"];
   const statusColorMap: Record<string, string> = {
@@ -252,6 +271,41 @@ function DashboardInner() {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* 適格請求書・概算・事後報告 */}
+      <div className="grid sm:grid-cols-3 gap-4 mb-6">
+        <div className="bg-white border rounded-xl p-4 shadow-sm">
+          <h2 className="text-sm font-bold text-gray-700 mb-2">適格請求書</h2>
+          {invoiceCounts.total > 0 ? (
+            <div>
+              <div className="text-3xl font-bold text-green-600">{qualifiedRate}%</div>
+              <div className="text-xs text-gray-500 mt-1">適格率（{invoiceCounts.qualified}/{invoiceCounts.total}件）</div>
+              {invoiceCounts.unqualified > 0 && (
+                <div className="mt-2 text-xs px-2 py-1 bg-red-50 text-red-700 rounded">
+                  非適格: {invoiceCounts.unqualified}件
+                </div>
+              )}
+              {invoiceCounts.noNumber > 0 && (
+                <div className="mt-1 text-xs px-2 py-1 bg-gray-50 text-gray-600 rounded">
+                  番号なし: {invoiceCounts.noNumber}件
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-sm text-gray-400">データなし</div>
+          )}
+        </div>
+        <div className="bg-white border rounded-xl p-4 shadow-sm">
+          <h2 className="text-sm font-bold text-gray-700 mb-2">概算申請</h2>
+          <div className="text-3xl font-bold text-purple-600">{estimateCount}</div>
+          <div className="text-xs text-gray-500 mt-1">金額未確定の申請</div>
+        </div>
+        <div className="bg-white border rounded-xl p-4 shadow-sm">
+          <h2 className="text-sm font-bold text-gray-700 mb-2">事後報告</h2>
+          <div className="text-3xl font-bold text-red-600">{postReportCount}</div>
+          <div className="text-xs text-gray-500 mt-1">事前承認なし緊急購入</div>
         </div>
       </div>
 

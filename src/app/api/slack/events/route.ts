@@ -397,6 +397,24 @@ function buildTripModal(channelId: string) {
           placeholder: { type: "plain_text", text: "例: 45000" },
         },
       },
+      // 概算チェックボックス
+      {
+        type: "input",
+        block_id: "trip_estimate_block",
+        label: { type: "plain_text", text: "金額の確度" },
+        optional: true,
+        element: {
+          type: "checkboxes",
+          action_id: "trip_estimate_check",
+          options: [
+            {
+              text: { type: "plain_text" as const, text: "📐 概算（金額未確定）" },
+              value: "estimate",
+              description: { type: "plain_text" as const, text: "実額確定後にMFカード明細と自動比較されます" },
+            },
+          ],
+        },
+      },
       {
         type: "input",
         block_id: "accommodation_block",
@@ -531,6 +549,11 @@ async function handleTripSubmission(
   const accommodation = vals.accommodation_block?.accommodation?.value || "";
   const hubspotDealId = vals.hubspot_block?.hubspot_deal_id?.value || "";
 
+  // 概算チェックボックスの解析
+  const tripEstimateBlock = vals.trip_estimate_block?.trip_estimate_check;
+  const tripSelectedOptions = (tripEstimateBlock as unknown as { selected_options?: { value: string }[] })?.selected_options || [];
+  const isTripEstimate = tripSelectedOptions.some((o: { value: string }) => o.value === "estimate");
+
   // バリデーション
   const tripErrors: string[] = [];
   if (!destination) tripErrors.push("行き先が未入力です");
@@ -606,6 +629,9 @@ async function handleTripSubmission(
       type: "header",
       text: { type: "plain_text", text: `✈️ 出張申請 — ${userName}` },
     },
+    ...(isTripEstimate
+      ? [{ type: "context", elements: [{ type: "mrkdwn", text: "📐 概算（金額未確定）— 実額確定後にMFカード明細と自動比較されます" }] }]
+      : []),
     {
       type: "section",
       fields: [
@@ -613,7 +639,7 @@ async function handleTripSubmission(
         { type: "mrkdwn", text: `*日程:* ${startDate} 〜 ${endDate}（${tripType}）` },
         { type: "mrkdwn", text: `*目的:* ${purpose}` },
         { type: "mrkdwn", text: `*交通:* ${transport}` },
-        { type: "mrkdwn", text: `*概算額:* ¥${amount.toLocaleString()}` },
+        { type: "mrkdwn", text: `*概算額:* ¥${amount.toLocaleString()}${isTripEstimate ? "（概算）" : ""}` },
         { type: "mrkdwn", text: `*日当:* ¥${dailyAllowance.toLocaleString()}（${nights > 0 ? `¥${DAILY_ALLOWANCE_OVERNIGHT.toLocaleString()}×${nights + 1}日` : "日帰り"}）` },
         { type: "mrkdwn", text: `*合計見込:* ¥${totalEstimate.toLocaleString()}` },
         { type: "mrkdwn", text: `*申請者:* <@${userId}>${department ? `（${department}）` : ""}` },
@@ -687,6 +713,7 @@ async function handleTripSubmission(
     startDate,
     checkInDate: startDate, // チェックイン日は出発日と同じとする
     destination,
+    isEstimate: isTripEstimate,
   }).catch((e) => console.error("[trip] Prediction generation error:", e));
 
   console.log("[trip] Submission complete:", { userId, destination, startDate, endDate, amount });
@@ -727,6 +754,18 @@ async function handlePurchaseSubmission(
     }
 
     const isPurchased = formData.requestType === "購入済";
+    const isPostReport = formData.requestType === "緊急事後報告";
+    const isEstimate = formData.isEstimate;
+
+    // 事後報告のバリデーション: 緊急理由が必須
+    if (isPostReport && !formData.emergencyReason) {
+      const client = getSlackClient();
+      await client.chat.postMessage({
+        channel: userId,
+        text: "⚠️ 緊急事後報告の場合は「緊急理由」の入力が必須です。再度申請してください。",
+      });
+      return;
+    }
 
     // GAS登録を先に行い、GAS発番のPO番号を取得
     const estimation = estimateAccount(formData.itemName, formData.supplierName, formData.amount);
@@ -739,7 +778,7 @@ async function handlePurchaseSubmission(
         purchaseSource: formData.supplierName,
         paymentMethod: formData.paymentMethod,
         accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
-        isPurchased,
+        isPurchased: isPurchased || isPostReport,
       });
       if (gasResult.success && gasResult.data?.prNumber) {
         poNumber = gasResult.data.prNumber;
@@ -776,13 +815,36 @@ async function handlePurchaseSubmission(
         : formData.paymentMethod.includes("請求書") ? calcPaymentDueDate() : undefined,
     };
 
-    // 購入済 → 承認・発注スキップ、即「検収済・証憑待ち」
+    // 購入済・事後報告 → 承認・発注スキップ、即「検収済・証憑待ち」（事後報告は事後承認へ）
     // 購入前 → 通常の承認フロー
-    const blocks = isPurchased
+    const blocks = (isPurchased || isPostReport)
       ? buildPurchasedRequestBlocks(requestInfo)
       : buildNewRequestBlocks(requestInfo);
 
-    const mentionText = !isPurchased && approverSlackId
+    // 概算・事後報告のバッジをブロックに挿入
+    const badges: string[] = [];
+    if (isEstimate) badges.push("📐 概算（金額未確定）");
+    if (isPostReport) badges.push("🚨 緊急事後報告");
+    if (badges.length > 0) {
+      blocks.splice(1, 0, {
+        type: "context" as const,
+        elements: [{ type: "mrkdwn" as const, text: badges.join("　") }],
+      });
+    }
+    if (isPostReport && formData.emergencyReason) {
+      blocks.splice(badges.length > 0 ? 2 : 1, 0, {
+        type: "section" as const,
+        text: { type: "mrkdwn" as const, text: `*🚨 緊急理由:* ${formData.emergencyReason}` },
+      });
+    }
+    if (isPostReport && formData.purchaseDate) {
+      blocks.splice(badges.length > 0 ? 3 : 1, 0, {
+        type: "section" as const,
+        text: { type: "mrkdwn" as const, text: `*📅 購入日:* ${formData.purchaseDate}` },
+      });
+    }
+
+    const mentionText = !(isPurchased || isPostReport) && approverSlackId
       ? ` — 承認者: <@${approverSlackId}>`
       : "";
     const result = await client.chat.postMessage({
@@ -820,7 +882,40 @@ async function handlePurchaseSubmission(
       approver: approverSlackId,
     });
 
-    if (isPurchased) {
+    if (isPostReport) {
+      // 緊急事後報告: 証憑催促 + 事後承認依頼
+      if (result.ts) {
+        await client.chat.postMessage({
+          channel: channelId,
+          thread_ts: result.ts,
+          text: [
+            `🚨 緊急事後報告を受け付けました（${userName}）`,
+            `緊急理由: ${formData.emergencyReason}`,
+            ...(formData.purchaseDate ? [`購入日: ${formData.purchaseDate}`] : []),
+            `📎 納品書・領収書をこのスレッドに添付してください。`,
+            `⏸️ 事後承認が必要です。`,
+          ].join("\n"),
+        });
+      }
+      // 事後承認依頼を承認者にDM
+      if (approverSlackId && result.ts) {
+        try {
+          await client.chat.postMessage({
+            channel: approverSlackId,
+            text: [
+              `🚨 *緊急事後報告の承認依頼* ${poNumber}`,
+              `申請者: <@${userId}>`,
+              `品目: ${formData.itemName} ${amount}`,
+              `緊急理由: ${formData.emergencyReason}`,
+              `<https://slack.com/archives/${channelId}/p${(result.ts || "").replace(".", "")}|詳細を確認>`,
+            ].join("\n"),
+          });
+        } catch (dmError) {
+          console.error("[purchase] Failed to send post-report approval DM:", dmError);
+        }
+      }
+      await notifyOps(client, `🚨 *緊急事後報告* ${poNumber} — ${formData.itemName} ${amount}（<@${userId}>）— 事後承認待ち`);
+    } else if (isPurchased) {
       // 購入済: スレッドに証憑催促を投稿
       if (result.ts) {
         await client.chat.postMessage({
@@ -1000,18 +1095,41 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
             confirmLines.push(`消費税: ${taxInfo}`);
           }
 
-          // 適格請求書の検証
+          // 適格請求書の検証 + GAS保存
+          const invoiceUpdates: Record<string, string> = {};
           if (ocrResult.registration_number) {
             const verification = await verifyInvoiceRegistration(ocrResult.registration_number);
+            invoiceUpdates["登録番号"] = ocrResult.registration_number;
             if (verification.valid) {
               confirmLines.push(`適格請求書: ${verification.registrationNumber}（${verification.name}）`);
+              invoiceUpdates["適格請求書"] = "適格";
+              invoiceUpdates["登録番号検証"] = "verified";
             } else {
               confirmLines.push(`⚠️ 適格請求書: ${verification.registrationNumber} — ${verification.error}`);
-              await notifyOps(client, `⚠️ *適格請求書検証失敗* ${prNumber} — ${verification.registrationNumber}: ${verification.error}`);
+              invoiceUpdates["適格請求書"] = "非適格";
+              invoiceUpdates["登録番号検証"] = verification.error || "not_found";
+              const { getTransitionalDeductionRate } = await import("@/lib/ocr");
+              const deduction = getTransitionalDeductionRate();
+              confirmLines.push(`💰 ${deduction.message}`);
+              await notifyOps(client,
+                `⚠️ *適格請求書検証失敗* ${prNumber} — ${verification.registrationNumber}: ${verification.error}\n` +
+                `💰 *${deduction.message}*（仕入税額控除 ${deduction.rate}%）`);
             }
           } else if (ocrResult.document_type === "invoice") {
             confirmLines.push(`⚠️ 登録番号なし（適格請求書でない可能性）`);
-            await notifyOps(client, `⚠️ *登録番号なし* ${prNumber} — 請求書に適格請求書の登録番号が見当たりません`);
+            invoiceUpdates["適格請求書"] = "番号なし";
+            invoiceUpdates["登録番号検証"] = "no_number";
+            const { getTransitionalDeductionRate } = await import("@/lib/ocr");
+            const deduction = getTransitionalDeductionRate();
+            confirmLines.push(`💰 ${deduction.message}`);
+            await notifyOps(client,
+              `⚠️ *登録番号なし* ${prNumber} — 請求書に適格請求書の登録番号が見当たりません\n` +
+              `💰 *${deduction.message}*（仕入税額控除 ${deduction.rate}%）`);
+          }
+          // 適格請求書情報をGASスプレッドシートに保存
+          if (Object.keys(invoiceUpdates).length > 0) {
+            updateStatus(prNumber, invoiceUpdates).catch((e) =>
+              console.error(`[file-share] GAS invoice update error for ${prNumber}:`, e));
           }
         } catch (ocrErr) {
           console.error(`[file-share] OCR error for ${prNumber}:`, ocrErr);

@@ -261,6 +261,29 @@ export async function verifyInvoiceRegistration(
 }
 
 /**
+ * 免税事業者からの仕入に対する経過措置の控除率を算出
+ *
+ * インボイス制度の経過措置:
+ * - ~2026/9/30: 仕入税額の80%を控除可能
+ * - 2026/10/1~2029/9/30: 50%を控除可能
+ * - 2029/10/1~: 控除不可
+ */
+export function getTransitionalDeductionRate(transactionDate?: string): {
+  rate: number;
+  period: string;
+  message: string;
+} {
+  const d = transactionDate ? new Date(transactionDate) : new Date();
+  if (d < new Date("2026-10-01")) {
+    return { rate: 80, period: "~2026/9", message: "経過措置: 80%控除可能" };
+  } else if (d < new Date("2029-10-01")) {
+    return { rate: 50, period: "2026/10~2029/9", message: "経過措置: 50%控除" };
+  } else {
+    return { rate: 0, period: "2029/10~", message: "控除不可（経過措置終了）" };
+  }
+}
+
+/**
  * Slackファイルをダウンロードしてbase64に変換
  */
 export async function downloadSlackFile(

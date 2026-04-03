@@ -1,5 +1,79 @@
 # CURRENT_WORK
 
+## [Handoff] "MFカード統一運用・適格請求書管理・概算緊急フロー実装" — 2026-04-03 09:42 (branch: master)
+
+### Goal / Scope
+- 出張手配・購買を「会社メール個人アカウント + MFビジネスカード（物理+バーチャル）」で統一する運用設計
+- 適格請求書（インボイス）管理の仕組み実装（OCR結果のGAS保存・免税事業者控除率警告）
+- 概算フロー・緊急事後報告フローのSlackモーダル＋予測レコード対応
+- カード照合時の概算差額検知・未報告カード利用の社員DM通知
+- やらないこと: GASスプレッドシートのカラム追加（手動）、管理画面UIへの新項目反映 ← **次のタスク**
+
+### Key decisions
+- **法人契約なし（案A）を推奨** — 全サービス個人アカウント+MFカード統一
+- **PJ紐付けは既存の /trip + HubSpot案件番号で解決済み**
+- **カード払いでも取引先コードを設定** — 適格請求書の発行元管理のため
+- **JCSの「与信審査不要」は誤り** — リクルート所定の審査あり（JCS_detail p11）
+- **全社員にMFカード（物理+バーチャル）配布が前提**
+- **緊急時こそMFカード** — 現金立替より管理容易
+
+### Done
+- [x] 提案書・PPT 13枚（docs/travel-services/）
+- [x] /purchase: 概算フラグ・緊急事後報告・購入日・緊急理由追加
+- [x] /trip: 概算フラグ追加
+- [x] 予測レコードに is_estimate, is_post_report, emergency_reason 追加
+- [x] 事後報告の処理分岐（事後承認DM・OPS通知）
+- [x] カード払いでも取引先コード設定（mf-accounting.ts）
+- [x] OCR結果の適格請求書情報をGASに保存
+- [x] 免税事業者の経過措置控除率警告（ocr.ts）
+- [x] 概算差額検知（card-matcher.ts ±20%/±5,000円）
+- [x] 未報告カード利用の社員DM通知
+
+### Pending
+- [ ] **GASスプレッドシート+UIの一括設計**（次のタスク）
+- [ ] GASに新カラム7項目追加（手動）
+- [ ] /admin/journals, /purchase/my, ダッシュボードに新項目反映
+- [ ] コミット・デプロイ
+
+### Next actions
+1. GASスプレッドシート+UIの一括設計
+2. /admin/journals に概算・事後報告・適格請求書ステータス表示
+3. GASスプレッドシートにカラム追加
+4. コミット・デプロイ
+
+### Affected files
+- `src/lib/slack.ts`, `src/app/api/slack/events/route.ts`, `src/lib/prediction.ts`, `src/lib/gas-client.ts`, `src/lib/ocr.ts`, `src/lib/mf-accounting.ts`, `src/lib/card-matcher.ts`, `src/app/api/admin/card-matching/execute/route.ts`, `src/app/api/cron/card-reconciliation/route.ts`, `scripts/gen_pptx.py`, `docs/travel-services/`
+
+### Repro / Commands
+```bash
+npx tsc --noEmit && npm run build  # ビルド確認済み
+python scripts/gen_pptx.py         # PPT再生成
+```
+
+---
+
+## [Handoff] "出張手配サービス検討・仕訳管理UI・MF取引先連携・一部返品対応" — 2026-04-01 12:43 (branch: master)
+
+### Goal / Scope
+- システム全体精査 → Tier 1-4改善、仕訳管理UI、MF API修正・取引先連携、一部返品、出張手配比較
+- やらないこと: MF認証実施、手動設定14項目、E2Eテスト
+
+### Done
+- [x] Tier 1-4 全改善（セキュリティ・整合性・UX・新機能）
+- [x] 仕訳管理UI（/admin/journals）— 編集・証憑プレビュー・一括登録
+- [x] MF API仕様準拠（致命的バグ3件）+ 取引先マスタ連携
+- [x] 一部返品（数量指定モーダル・按分取消仕訳）
+- [x] 出張手配比較メモ（docs/travel-services/comparison.md）
+
+### Pending
+- [ ] 出張手配推奨案4の資料作成（JCS+ANA Biz/JAL直）← **中断箇所**
+- [ ] MF会計Plus OAuth初回認証
+- [ ] 手動設定14項目 / E2Eテスト / Vercel GitHub連携
+
+### Next actions → docs/handoffs/handoff-20260401-1243-master.md 参照
+
+---
+
 ## [Handoff] "セキュリティ強化・整合性検証・税区分修正・Vercel法人移行・Slack動作確認" — 2026-03-30 17:04 (branch: master)
 
 ### Goal / Scope

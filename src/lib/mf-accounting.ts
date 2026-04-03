@@ -402,9 +402,8 @@ export async function buildJournalFromPurchase(params: {
   // 部門
   const departmentCode = department ? await resolveDepartmentCode(department) : undefined;
 
-  // 取引先（請求書払い・前払いの場合のみ — 買掛金の消込に必要）
-  const isCard = paymentMethod.includes("カード");
-  const counterpartyCode = !isCard && supplierName
+  // 取引先（全支払方法で設定 — 適格請求書の発行元管理・購入先別支出分析に必要）
+  const counterpartyCode = supplierName
     ? await resolveCounterpartyCode(supplierName)
     : undefined;
 

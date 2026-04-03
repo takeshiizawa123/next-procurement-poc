@@ -74,6 +74,44 @@ export async function GET(request: NextRequest) {
       }
 
       await notifyOps(client, lines.join("\n"));
+
+      // 未申請カード利用を社員にDM通知
+      if (result.noRequest.length > 0) {
+        try {
+          const { getEmployees } = await import("@/lib/gas-client");
+          const empResult = await getEmployees();
+          const employees = empResult.success ? (empResult.data?.employees || []) : [];
+
+          // カード名 → 社員のSlackIDを解決してDM送信
+          const grouped = new Map<string, CardStatement[]>();
+          for (const st of result.noRequest) {
+            const key = st.cardName || "不明";
+            if (!grouped.has(key)) grouped.set(key, []);
+            grouped.get(key)!.push(st);
+          }
+
+          for (const [cardName, items] of grouped) {
+            const emp = employees.find((e) =>
+              e.name === cardName || (e as unknown as Record<string, unknown>).card_holder_name === cardName);
+            if (emp?.slackId) {
+              const itemLines = items.slice(0, 5).map((s) =>
+                `  • ${s.date} ${s.description} ¥${s.amount.toLocaleString()}`);
+              if (items.length > 5) itemLines.push(`  …他 ${items.length - 5}件`);
+              await client.chat.postMessage({
+                channel: emp.slackId,
+                text: [
+                  `🔴 *未申請のカード利用が ${items.length}件 検出されました*`,
+                  `事後報告が必要な場合は /purchase で「🚨 緊急事後報告」を選択してください。`,
+                  "",
+                  ...itemLines,
+                ].join("\n"),
+              });
+            }
+          }
+        } catch (dmErr) {
+          console.error("[card-reconciliation] DM notification error:", dmErr);
+        }
+      }
     }
 
     return NextResponse.json({

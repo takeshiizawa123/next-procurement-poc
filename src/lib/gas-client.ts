@@ -266,6 +266,12 @@ export interface PastRequest {
   journalId?: string;
   remarks?: string;
   inspectionDate?: string;
+  /** 適格請求書の登録番号（T+13桁） */
+  registrationNumber?: string;
+  /** 適格請求書判定: "適格" / "非適格" / "番号なし" */
+  isQualifiedInvoice?: string;
+  /** 登録番号検証ステータス: "verified" / "not_found" / "no_number" / "error" */
+  invoiceVerificationStatus?: string;
 }
 
 /**
@@ -348,6 +354,12 @@ export interface PredictedTransaction {
   matched_at?: string;
   amount_diff?: number;
   created_at: string;
+  /** 概算フラグ — 金額が確定していない場合 true */
+  is_estimate?: boolean;
+  /** 事後報告フラグ — 事前承認なしの緊急購入 */
+  is_post_report?: boolean;
+  /** 緊急理由（事後報告時のみ） */
+  emergency_reason?: string;
 }
 
 export interface EmployeeCard {

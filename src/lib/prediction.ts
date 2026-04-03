@@ -23,6 +23,12 @@ interface ApprovalInfo {
   paymentMethod: string;
   /** 予定利用日（未指定なら承認日を使用） */
   expectedDate?: string;
+  /** 概算フラグ — 金額未確定の場合 true */
+  isEstimate?: boolean;
+  /** 事後報告フラグ */
+  isPostReport?: boolean;
+  /** 緊急理由（事後報告時のみ） */
+  emergencyReason?: string;
 }
 
 // 従業員カード情報のキャッシュ（プロセス単位、5分TTL）
@@ -91,6 +97,9 @@ export async function generatePrediction(
     applicant: info.applicantName,
     status: "pending",
     created_at: now.toISOString(),
+    ...(info.isEstimate && { is_estimate: true }),
+    ...(info.isPostReport && { is_post_report: true }),
+    ...(info.emergencyReason && { emergency_reason: info.emergencyReason }),
   };
 
   try {
@@ -126,6 +135,8 @@ export interface TripPredictionInfo {
   checkInDate?: string;
   /** 行き先（加盟店名のヒントとして使用） */
   destination: string;
+  /** 概算フラグ */
+  isEstimate?: boolean;
 }
 
 /**
@@ -169,6 +180,7 @@ export async function generateTripPredictions(
         applicant: info.applicantName,
         status: "pending",
         created_at: now.toISOString(),
+        ...(info.isEstimate && { is_estimate: true }),
       });
       if (res.success) {
         ids.push(predId);
@@ -198,6 +210,7 @@ export async function generateTripPredictions(
         applicant: info.applicantName,
         status: "pending",
         created_at: now.toISOString(),
+        ...(info.isEstimate && { is_estimate: true }),
       });
       if (res.success) {
         ids.push(predId);

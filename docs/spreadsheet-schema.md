@@ -45,6 +45,10 @@
 | 30 | notes | string | | 備考 |
 | 31 | created_at | datetime | * | 申請日時 |
 | 32 | updated_at | datetime | * | 最終更新日時 |
+| 33 | registration_number | string | | 適格請求書登録番号（T+13桁） |
+| 34 | is_qualified_invoice | enum | | 適格 / 非適格 / 番号なし |
+| 35 | invoice_verification_status | enum | | verified / not_found / no_number / error |
+| 36 | purchase_date | date | | 購入日（事後報告・概算確定時に使用） |
 
 ### ステータス遷移
 
@@ -100,6 +104,9 @@
 | L | matched_at | string | マッチ日時 |
 | M | amount_diff | number | 実額との差額 |
 | N | created_at | string | 作成日時 |
+| O | is_estimate | boolean | 概算フラグ（金額未確定の場合 true） |
+| P | is_post_report | boolean | 事後報告フラグ（事前承認なしの緊急購入） |
+| Q | emergency_reason | string | 緊急理由（事後報告時のみ） |
 
 > シートは初回の予測生成時に自動作成される（GAS webApi.js `getPredictionSheet()`）
 
@@ -117,7 +124,6 @@
 - voucher_amount（証憑金額）
 - amount_match（金額照合結果）
 - mf_supplier（MF取引先）
-- mf_invoice_number（適格番号）
 - mf_tax_category（税区分）
 - mf_summary（MF摘要）
 - mf_journal_status（MF計上ステータス）

@@ -72,6 +72,10 @@ interface PurchaseRequest {
   journalId?: string;
   remarks?: string;
   inspectionDate?: string;
+  isEstimate?: boolean;
+  isPostReport?: boolean;
+  registrationNumber?: string;
+  isQualifiedInvoice?: string;
 }
 
 interface JournalEdits {
@@ -372,6 +376,7 @@ export default function JournalManagement() {
                   <tr className="bg-gray-50 border-b text-left">
                     <th className="px-3 py-2.5 font-medium text-gray-600 w-8"></th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">PO番号</th>
+                    <th className="px-3 py-2.5 font-medium text-gray-600 w-16">区分</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">品目</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600 text-right">金額</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">借方</th>
@@ -379,6 +384,7 @@ export default function JournalManagement() {
                     <th className="px-3 py-2.5 font-medium text-gray-600">税区分</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">部門</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">PJ</th>
+                    <th className="px-3 py-2.5 font-medium text-gray-600 text-center">適格</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600 text-center">操作</th>
                   </tr>
                 </thead>
@@ -404,6 +410,12 @@ export default function JournalManagement() {
                         <td className="px-3 py-2.5 font-mono text-xs">
                           {r.slackLink ? <a href={r.slackLink} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline" onClick={(e) => e.stopPropagation()}>{r.prNumber}</a> : r.prNumber}
                         </td>
+                        <td className="px-3 py-2.5 text-xs">
+                          <div className="flex gap-0.5">
+                            {r.isEstimate && <span className="px-1 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px]" title="概算（金額未確定）">概算</span>}
+                            {r.isPostReport && <span className="px-1 py-0.5 bg-red-100 text-red-700 rounded text-[10px]" title="事後報告（緊急購入）">事後</span>}
+                          </div>
+                        </td>
                         <td className="px-3 py-2.5 max-w-[160px] truncate" title={r.itemName}>{r.itemName}</td>
                         <td className="px-3 py-2.5 text-right font-mono">¥{r.totalAmount.toLocaleString()}</td>
                         <td className="px-3 py-2.5 text-xs">{debit}</td>
@@ -418,6 +430,15 @@ export default function JournalManagement() {
                         </td>
                         <td className="px-3 py-2.5 text-xs">{dept}</td>
                         <td className="px-3 py-2.5 text-xs text-gray-500">{hubspot || "-"}</td>
+                        <td className="px-3 py-2.5 text-center text-xs">
+                          {r.isQualifiedInvoice === "適格" ? (
+                            <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded" title={r.registrationNumber || ""}>適格</span>
+                          ) : r.isQualifiedInvoice === "非適格" ? (
+                            <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded">非適格</span>
+                          ) : (
+                            <span className="text-gray-300">-</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
                           {result?.ok ? (
                             <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded">{result.message}</span>
@@ -440,7 +461,7 @@ export default function JournalManagement() {
                       </tr>
                       {isExpanded && (
                         <tr key={`${r.prNumber}-detail`}>
-                          <td colSpan={10}>
+                          <td colSpan={12}>
                             <JournalDetail r={r} edits={e} onEdit={(field, value) => handleEdit(r.prNumber, field, value)} />
                           </td>
                         </tr>

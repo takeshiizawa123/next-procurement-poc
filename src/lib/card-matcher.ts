@@ -40,6 +40,10 @@ export interface ConfidentMatch {
   matchMethod: "prediction" | "score";
   score: number;
   confidence: MatchConfidence;
+  /** 概算フラグ付き予測で差額が閾値を超えた場合 true */
+  isEstimateDiffExceeded?: boolean;
+  /** 概算元の金額（is_estimate 予測の場合のみ） */
+  estimateOriginalAmount?: number;
 }
 
 export interface CandidateInfo {
@@ -220,7 +224,11 @@ function phase1PredictionMatch(
         ? amountDiff / pred.predicted_amount
         : (amountDiff === 0 ? 0 : 1);
 
-      if (amountRatio > settings.predictionAmountTolerance * 2) continue; // 10%超は除外
+      // 概算予測は許容差を拡大（通常10%→概算40%）
+      const maxTolerance = pred.is_estimate
+        ? settings.predictionAmountTolerance * 8  // 5% * 8 = 40%
+        : settings.predictionAmountTolerance * 2; // 5% * 2 = 10%
+      if (amountRatio > maxTolerance) continue;
 
       let score = 0;
       // 金額完全一致: 100, 5%以内: 90, 10%以内: 70
@@ -244,7 +252,7 @@ function phase1PredictionMatch(
 
     if (best.score >= settings.scoreAutoThreshold && scored.length === 1) {
       // 自動確定
-      confident.push({
+      const match: ConfidentMatch = {
         statementId: stmt.id,
         poNumber: best.pred.po_number,
         applicant: best.pred.applicant,
@@ -257,7 +265,22 @@ function phase1PredictionMatch(
         matchMethod: "prediction",
         score: best.score,
         confidence: best.score === 100 ? "high" : "medium",
-      });
+      };
+
+      // 概算フラグ付き予測の差額チェック
+      if (best.pred.is_estimate) {
+        const ESTIMATE_DIFF_RATE = 0.20;  // ±20%
+        const ESTIMATE_DIFF_ABS = 5000;   // ±5,000円
+        const absDiff = Math.abs(stmt.amount - best.pred.predicted_amount);
+        const rateDiff = best.pred.predicted_amount > 0
+          ? absDiff / best.pred.predicted_amount : 1;
+        match.estimateOriginalAmount = best.pred.predicted_amount;
+        if (absDiff > ESTIMATE_DIFF_ABS && rateDiff > ESTIMATE_DIFF_RATE) {
+          match.isEstimateDiffExceeded = true;
+        }
+      }
+
+      confident.push(match);
       usedStatementIds.add(stmt.id);
       usedPredictionIds.add(best.pred.id);
     } else if (scored.length >= 1 && best.score >= settings.scoreCandidateThreshold) {
