@@ -31,7 +31,7 @@ function overallLabel(req: PurchaseRequest): string {
   if (req.approvalStatus === "承認待ち") return "承認待ち";
   if (req.orderStatus === "未発注") return "発注待ち";
   if (req.inspectionStatus === "未検収") return "検収待ち";
-  if (req.voucherStatus === "要取得") return "証憑待ち";
+  if (req.voucherStatus !== "添付済") return "証憑待ち";
   return "完了";
 }
 

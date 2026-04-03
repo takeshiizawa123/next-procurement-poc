@@ -19,7 +19,7 @@ const TAX_CATEGORIES = [
 const DEPARTMENTS = ["営業部", "開発部", "管理本部", "製造部", "ロジスティクス"];
 
 const CREDIT_MAP: Record<string, { account: string; sub: string }[]> = {
-  "会社カード": [{ account: "未払金", sub: "MFカード:未請求" }, { account: "未払金", sub: "MFカード:請求" }],
+  "MFカード": [{ account: "未払金", sub: "MFカード:未請求" }, { account: "未払金", sub: "MFカード:請求" }],
   "請求書払い": [{ account: "買掛金", sub: "" }, { account: "未払金", sub: "" }],
   "請求書払い（前払い）": [{ account: "前払金", sub: "" }, { account: "買掛金", sub: "" }],
 };

@@ -1130,7 +1130,7 @@ function buildPurchaseModal(channelId: string) {
           action_id: "payment_method_select",
           placeholder: { type: "plain_text", text: "選択してください" },
           options: [
-            { text: { type: "plain_text", text: "会社カード" }, value: "会社カード" },
+            { text: { type: "plain_text", text: "MFカード" }, value: "MFカード" },
             { text: { type: "plain_text", text: "請求書払い" }, value: "請求書払い" },
             { text: { type: "plain_text", text: "請求書払い（前払い）" }, value: "請求書払い（前払い）" },
             { text: { type: "plain_text", text: "立替" }, value: "立替" },
@@ -1337,7 +1337,7 @@ export async function handlePoTestCommand(
     applicant: `<@${userId}>`,
     department: "テスト部門",
     supplierName: "Amazon",
-    paymentMethod: "会社カード",
+    paymentMethod: "MFカード",
     applicantSlackId: userId,
     approverSlackId,
     inspectorSlackId: userId,

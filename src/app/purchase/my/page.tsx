@@ -48,7 +48,7 @@ function overallStatus(req: PurchaseRequest): { label: string; color: string } {
   if (req.approvalStatus === "承認待ち") return { label: "承認待ち", color: "bg-yellow-500 text-white" };
   if (req.orderStatus === "未発注") return { label: "発注待ち", color: "bg-blue-500 text-white" };
   if (req.inspectionStatus === "未検収") return { label: "検収待ち", color: "bg-indigo-500 text-white" };
-  if (req.voucherStatus === "要取得") return { label: "証憑待ち", color: "bg-amber-500 text-white" };
+  if (req.voucherStatus !== "添付済") return { label: "証憑待ち", color: "bg-amber-500 text-white" };
   return { label: "完了", color: "bg-green-500 text-white" };
 }
 

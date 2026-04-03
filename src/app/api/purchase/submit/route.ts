@@ -133,6 +133,20 @@ export async function POST(request: NextRequest) {
     const estimation = estimateAccount(itemName, supplierName, totalAmount);
     let poNumber = "";
     try {
+      // 承認者名を解決（SlackID → 表示名）
+      let approverName = "";
+      if (approverSlackId) {
+        const approverEmp = employees.find((e) => e.slackId === approverSlackId);
+        if (approverEmp) {
+          approverName = approverEmp.name;
+        } else {
+          try {
+            const approverInfo = await client.users.info({ user: approverSlackId });
+            approverName = approverInfo.user?.real_name || approverInfo.user?.name || approverSlackId;
+          } catch { /* ignore */ }
+        }
+      }
+
       const gasResult = await registerPurchase({
         applicant: userName,
         itemName,
@@ -144,7 +158,10 @@ export async function POST(request: NextRequest) {
         hubspotInfo: sanitize((formData.get("hubspot_deal_id") as string)?.trim() || ""),
         budgetNumber: sanitize((formData.get("budget_number") as string)?.trim() || ""),
         paymentMethod,
+        approver: approverName,
         purpose: sanitize((formData.get("asset_usage") as string)?.trim() || ""),
+        deliveryLocation: sanitize((formData.get("delivery_location") as string)?.trim() || ""),
+        poNumber: sanitize((formData.get("katana_po") as string)?.trim() || ""),
         accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
         remarks: sanitize((formData.get("notes") as string)?.trim() || ""),
         isPurchased,

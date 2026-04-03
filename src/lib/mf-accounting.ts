@@ -325,7 +325,7 @@ export async function createJournal(request: CreateJournalRequest): Promise<Jour
 /**
  * 支払方法から貸方科目・補助科目を解決
  *
- * 会社カード → 未払金 / MFカード:未請求（Stage 1）
+ * MFカード → 未払金 / MFカード:未請求（Stage 1）
  * 請求書払い → 買掛金（補助科目なし）
  * 従業員立替 → この関数は呼ばれない（MF経費経由）
  */

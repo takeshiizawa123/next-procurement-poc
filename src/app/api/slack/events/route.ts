@@ -23,8 +23,8 @@ import { createTripExpense } from "@/lib/mf-expense";
 import { generateTripPredictions } from "@/lib/prediction";
 import { extractFromImage, matchAmount, downloadSlackFile, verifyInvoiceRegistration } from "@/lib/ocr";
 
-// Vercel Serverless の最大実行時間
-export const maxDuration = 10;
+// Vercel Serverless の最大実行時間（証憑処理: OCR+Drive+仕訳で時間がかかる）
+export const maxDuration = 60;
 
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || "";
 
@@ -297,11 +297,21 @@ export async function POST(request: NextRequest) {
 
     // Events API（file_shared等）
     if (payload.type === "event_callback") {
-      const event = payload.event as { type: string; file_id?: string; channel_id?: string; thread_ts?: string; files?: Array<{ id: string }>; ts?: string; subtype?: string };
-      if (event.type === "message" && event.subtype === "file_share" && event.thread_ts) {
+      const event = payload.event as { type: string; file_id?: string; channel_id?: string; channel?: string; thread_ts?: string; files?: Array<{ id: string }>; ts?: string; subtype?: string };
+      const eventChannel = event.channel_id || event.channel || "";
+
+      // ファイル添付検知: スレッド内メッセージのファイル、または file_shared イベント
+      const isFileShare = event.thread_ts && (
+        (event.type === "message" && event.subtype === "file_share") ||
+        (event.type === "message" && event.files && event.files.length > 0) ||
+        (event.type === "file_shared" && event.file_id)
+      );
+
+      if (isFileShare) {
+        console.log(`[slack] file_share detected: channel=${eventChannel} thread=${event.thread_ts}`);
         after(async () => {
           try {
-            await handleFileSharedInThread(event.channel_id || "", event.thread_ts || "", event.ts || "");
+            await handleFileSharedInThread(eventChannel, event.thread_ts || "", event.ts || "");
           } catch (e) {
             console.error("[slack] file_share handler error:", e);
           }
@@ -1003,21 +1013,19 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
     fileNames = files.map((f) => f.name || "");
     fileMimeTypes = files.map((f) => f.mimetype || "");
     fileUrls = files.map((f) => f.url_private || "");
-  } catch {
-    // ファイル情報取得失敗でもPO番号検知は続行
+  } catch (repliesErr) {
+    console.error(`[file-share] conversations.replies failed:`, repliesErr);
   }
 
   // 証憑として有効なファイルがあるか検証
   const validFiles = fileMimeTypes.filter((m) => m in VOUCHER_MIME_TYPES);
   if (fileMimeTypes.length > 0 && validFiles.length === 0) {
-    // 添付ファイルはあるが証憑として無効
     const accepted = Object.values(VOUCHER_MIME_TYPES).join("、");
     await client.chat.postMessage({
       channel: channelId,
       thread_ts: threadTs,
       text: `⚠️ 添付ファイルは証憑として認識できませんでした。対応形式: ${accepted}`,
     });
-    console.log(`[file-share] Invalid file types: ${fileMimeTypes.join(", ")}`);
     return;
   }
 
@@ -1032,12 +1040,13 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
     });
     parentText = (result.messages?.[0]?.text || "") + " " +
       JSON.stringify(result.messages?.[0]?.blocks || []);
-  } catch {
+  } catch (histErr) {
+    console.error(`[file-share] conversations.history failed:`, histErr);
     return;
   }
 
-  // PO番号を抽出（GAS発番形式 PR-XXXX にも対応）
-  const poMatch = parentText.match(/(?:PO-\d{6}-\d{4}|PR-\d{4,})/);
+  // PO番号を抽出（GAS発番形式 PR-YYYYMM-NNNN にも対応）
+  const poMatch = parentText.match(/(?:PO-\d{6}-\d{4}|PR-\d{6}-\d{1,4})/);
   if (!poMatch) return;
 
   const prNumber = poMatch[0];
@@ -1046,13 +1055,12 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
   const voucherType = fileNames.length > 0 ? classifyVoucher(fileNames[0]) : "その他証憑";
   const fileFormat = fileMimeTypes.length > 0 ? (VOUCHER_MIME_TYPES[fileMimeTypes[0]] || "不明") : "";
 
-  console.log(`[file-share] 証憑添付検知: ${prNumber} / ${voucherType} (${fileFormat}) in ${channelId}`);
+  console.log(`[file-share] ${prNumber} / ${voucherType} (${fileFormat})`);
 
-  // GASでステータスを「添付済」に更新 + 証憑種別を記録
+  // GASでステータスを「添付済」に更新
   try {
     const gasResult = await updateStatus(prNumber, {
       "証憑対応": "添付済",
-      "証憑種別": voucherType,
     });
     if (gasResult.success) {
       const confirmLines = [
@@ -1163,7 +1171,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
         }
         confirmLines.push(`📋 MF経費で経費申請の提出をお忘れなく。それ以外の作業は完了です。`);
       } else {
-        // 会社カード・請求書払い → Google Drive + MF会計Plus API仕訳
+        // MFカード・請求書払い → Google Drive + MF会計Plus API仕訳
         if (process.env.GOOGLE_SERVICE_ACCOUNT_KEY && fileUrls.length > 0) {
           try {
             const botToken = process.env.SLACK_BOT_TOKEN || "";
@@ -1240,9 +1248,25 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
       });
       await notifyOps(client, `📎 *証憑添付* ${prNumber} — ${voucherType} — 仕訳待ちに移行`);
       console.log(`[file-share] GAS updated: ${prNumber} → 添付済 (${voucherType})`);
+    } else {
+      // GAS更新レスポンスが success: false でも証憑検知は通知する
+      console.warn(`[file-share] GAS returned success=false but proceeding with notification for ${prNumber}`);
+      await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: `📎 証憑を確認しました（${prNumber}）\n種別: ${voucherType} / 形式: ${fileFormat}\n⚠️ ステータス更新に問題がある可能性があります。管理本部に確認してください。`,
+      });
     }
   } catch (e) {
     console.error(`[file-share] GAS update error for ${prNumber}:`, e);
+    // GASエラーでも最低限の通知
+    try {
+      await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: `📎 証憑ファイルを検知しました（${prNumber}）\n⚠️ 自動処理でエラーが発生しました。管理本部に確認してください。`,
+      });
+    } catch { /* Slack送信も失敗した場合は諦める */ }
   }
 }
 

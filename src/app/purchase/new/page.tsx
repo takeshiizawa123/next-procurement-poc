@@ -1228,7 +1228,7 @@ function PurchaseFormInner() {
                 className="w-full border rounded-lg px-3 py-2 bg-white"
               >
                 <option value="">選択してください</option>
-                <option value="会社カード">会社カード</option>
+                <option value="MFカード">MFカード</option>
                 <option value="請求書払い">請求書払い</option>
                 <option value="請求書払い（前払い）">請求書払い（前払い）</option>
                 <option value="立替">立替</option>
@@ -1645,10 +1645,10 @@ function PurchaseFormInner() {
               )}
             </fieldset>
 
-            {/* 証憑アップロード */}
+            {/* 添付ファイルアップロード */}
             <fieldset>
               <legend className="block text-sm font-medium mb-1">
-                証憑（納品書・領収書等）
+                {isPurchased ? "証憑（納品書・領収書等）" : "添付資料（見積書・発注書ドラフト等）"}
                 {isPurchased && <span className="text-red-500"> *</span>}
               </legend>
               {isPurchased && (
@@ -1659,7 +1659,7 @@ function PurchaseFormInner() {
               <FileUpload required={isPurchased} />
               {!isPurchased && (
                 <p className="text-xs text-gray-500 mt-2">
-                  購入前の場合は後からSlackスレッドに添付することもできます
+                  見積書や発注書ドラフトがあれば添付してください（任意）。証憑（納品書・領収書）は検収後にSlackスレッドで提出できます。
                 </p>
               )}
             </fieldset>
