@@ -205,13 +205,17 @@ export async function getStatus(
 }
 
 /**
- * 購買番号でステータスを更新
+ * 購買番号でステータスを更新（キャッシュ自動無効化）
  */
 export async function updateStatus(
   prNumber: string,
   updates: Record<string, string>,
 ): Promise<GasResponse<UpdateResult>> {
-  return callGasPost<UpdateResult>("update", { prNumber, updates });
+  const result = await callGasPost<UpdateResult>("update", { prNumber, updates });
+  // ステータス更新時にキャッシュを無効化
+  const { cacheDelete } = await import("./cache");
+  cacheDelete(`purchase:${prNumber}`);
+  return result;
 }
 
 export interface Employee {

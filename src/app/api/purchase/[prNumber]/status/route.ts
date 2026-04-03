@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateStatus, getStatus } from "@/lib/gas-client";
+import { cacheGet, cacheSet, cacheDelete } from "@/lib/cache";
+
+const CACHE_PREFIX = "purchase:";
+const CACHE_TTL = 60_000; // 60秒
 
 /**
  * 購買申請のステータスを更新（発注完了・検収完了）
@@ -44,8 +48,13 @@ export async function POST(
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: result.statusCode || 500 });
     }
+    // キャッシュ無効化
+    cacheDelete(`${CACHE_PREFIX}${prNumber}`);
     // 更新後の最新データを返す
     const status = await getStatus(prNumber);
+    if (status.success && status.data) {
+      cacheSet(`${CACHE_PREFIX}${prNumber}`, status.data, CACHE_TTL);
+    }
     return NextResponse.json({ success: true, data: status.data });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -55,7 +64,7 @@ export async function POST(
 }
 
 /**
- * 購買申請の詳細データを取得
+ * 購買申請の詳細データを取得（60秒キャッシュ付き）
  */
 export async function GET(
   _request: NextRequest,
@@ -66,10 +75,20 @@ export async function GET(
     return NextResponse.json({ error: "prNumber is required" }, { status: 400 });
   }
 
+  // キャッシュヒット
+  const cached = cacheGet<Record<string, unknown>>(`${CACHE_PREFIX}${prNumber}`);
+  if (cached) {
+    return NextResponse.json({ success: true, data: cached, cached: true });
+  }
+
   try {
     const result = await getStatus(prNumber);
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: result.statusCode || 404 });
+    }
+    // キャッシュに保存
+    if (result.data) {
+      cacheSet(`${CACHE_PREFIX}${prNumber}`, result.data, CACHE_TTL);
     }
     return NextResponse.json({ success: true, data: result.data });
   } catch (e) {
