@@ -129,19 +129,32 @@ function MyPageInner() {
   const [loadError, setLoadError] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "completed">("all");
 
-  const fetchRequests = () => {
-    setLoading(true);
+  const fetchRequests = (background = false) => {
+    if (!background) setLoading(true);
     setLoadError(false);
     apiFetch("/api/purchase/recent?limit=30")
       .then((r) => r.json())
       .then((d: { requests?: PurchaseRequest[] }) => {
         setRequests(d.requests || []);
+        try { sessionStorage.setItem("purchaseRequests_v2", JSON.stringify(d.requests || [])); } catch {}
       })
-      .catch(() => { setRequests([]); setLoadError(true); })
+      .catch(() => { if (!background) { setRequests([]); setLoadError(true); } })
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchRequests(); }, []);
+  useEffect(() => {
+    // キャッシュがあれば即表示 → バックグラウンド更新
+    try {
+      const cached = sessionStorage.getItem("purchaseRequests_v2");
+      if (cached) {
+        setRequests(JSON.parse(cached) as PurchaseRequest[]);
+        setLoading(false);
+        fetchRequests(true);
+        return;
+      }
+    } catch {}
+    fetchRequests();
+  }, []);
 
   const filtered = requests.filter((req) => {
     if (filter === "all") return true;
@@ -173,7 +186,7 @@ function MyPageInner() {
       {loadError && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center justify-between">
           <span className="text-sm text-red-800">申請一覧の読み込みに失敗しました。ネットワーク接続を確認してください。</span>
-          <button onClick={fetchRequests} className="text-sm text-red-600 hover:text-red-800 underline ml-2 shrink-0">再読み込み</button>
+          <button onClick={() => fetchRequests()} className="text-sm text-red-600 hover:text-red-800 underline ml-2 shrink-0">再読み込み</button>
         </div>
       )}
 
@@ -293,7 +306,7 @@ function MyPageInner() {
           {filtered.map((req) => {
             const overall = overallStatus(req);
             return (
-              <div key={req.prNumber} className="bg-white border rounded-lg p-4 hover:shadow-sm transition-shadow">
+              <a key={req.prNumber} href={`/purchase/${encodeURIComponent(req.prNumber)}`} className="block bg-white border rounded-lg p-4 hover:shadow-md hover:border-blue-300 transition-all cursor-pointer">
                 <div className="flex items-start justify-between mb-2">
                   <div>
                     <div className="flex items-center gap-2">
@@ -342,16 +355,14 @@ function MyPageInner() {
 
                 {/* Slackリンク */}
                 {req.slackLink && (
-                  <a
-                    href={req.slackLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <span
+                    onClick={(e) => { e.preventDefault(); window.open(req.slackLink, "_blank"); }}
                     className="inline-block mt-2 text-xs text-blue-600 hover:text-blue-800"
                   >
                     Slackスレッドを開く
-                  </a>
+                  </span>
                 )}
-              </div>
+              </a>
             );
           })}
         </div>
