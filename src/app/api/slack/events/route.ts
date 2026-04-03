@@ -1081,10 +1081,16 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
           const botToken = process.env.SLACK_BOT_TOKEN || "";
           const { base64, mimeType } = await downloadSlackFile(fileUrls[0], botToken);
           const ocrResult = await extractFromImage(base64, mimeType);
+          console.log(`[file-share] OCR result for ${prNumber}:`, JSON.stringify({ amount: ocrResult.amount, tax_rate: ocrResult.tax_rate, tax_amount: ocrResult.tax_amount, registration_number: ocrResult.registration_number, document_type: ocrResult.document_type }));
           detectedTaxRate = ocrResult.tax_rate ?? undefined;
 
           if (statusResult.success && statusResult.data) {
-            const requestedAmount = Number((statusResult.data as Record<string, unknown>)["金額"] || 0);
+            const dataObj = statusResult.data as Record<string, unknown>;
+            // GASは税抜金額で保存。OCRは税込金額を返す
+            const requestedExclTax = Number(dataObj["合計額（税抜）"] || 0);
+            // 税込に変換して比較（税率はOCR検出値 or デフォルト10%）
+            const taxRate = ocrResult.tax_rate ?? 10;
+            const requestedAmount = Math.round(requestedExclTax * (1 + taxRate / 100));
             if (requestedAmount > 0 && ocrResult.amount > 0) {
               const match = matchAmount(ocrResult, requestedAmount);
               confirmLines.push(`金額照合: ${match.message}`);
