@@ -929,6 +929,156 @@ export const handleJournalRegister: SlackActionHandler = async ({
   }
 };
 
+/**
+ * 金額差異の再承認リクエストを承認者に送信
+ */
+export async function sendAmountDiffApproval(
+  client: WebClient,
+  channelId: string,
+  threadTs: string,
+  prNumber: string,
+  ocrAmount: number,
+  requestedAmount: number,
+  difference: number,
+  approverSlackId: string,
+): Promise<void> {
+  const pctDiff = requestedAmount > 0 ? Math.abs(difference) / requestedAmount * 100 : 0;
+  const diffSign = difference > 0 ? "+" : "";
+  const actionValue = `${prNumber}|${approverSlackId}|${ocrAmount}|${requestedAmount}`;
+
+  await client.chat.postMessage({
+    channel: channelId,
+    thread_ts: threadTs,
+    text: `⚠️ 金額差異の再承認が必要です: ${prNumber}`,
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: "⚠️ 金額差異 — 再承認リクエスト" },
+      },
+      {
+        type: "section",
+        fields: [
+          { type: "mrkdwn", text: `*申請番号:*\n${prNumber}` },
+          { type: "mrkdwn", text: `*承認者:*\n<@${approverSlackId}>` },
+          { type: "mrkdwn", text: `*申請金額（税込）:*\n¥${requestedAmount.toLocaleString()}` },
+          { type: "mrkdwn", text: `*証憑金額:*\n¥${ocrAmount.toLocaleString()}` },
+          { type: "mrkdwn", text: `*差額:*\n${diffSign}¥${difference.toLocaleString()}` },
+          { type: "mrkdwn", text: `*乖離率:*\n${pctDiff.toFixed(1)}%` },
+        ],
+      },
+      {
+        type: "context",
+        elements: [
+          { type: "mrkdwn", text: "20%超かつ¥1,000超の差異のため再承認が必要です。承認すると証憑金額で処理を続行します。" },
+        ],
+      },
+      {
+        type: "actions",
+        block_id: "amount_diff_actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "✅ 承認（証憑金額で続行）" },
+            style: "primary",
+            value: actionValue,
+            action_id: "amount_diff_approve_button",
+          },
+          {
+            type: "button",
+            text: { type: "plain_text", text: "❌ 却下（差し戻し）" },
+            style: "danger",
+            value: actionValue,
+            action_id: "amount_diff_reject_button",
+          },
+        ],
+      },
+    ],
+  });
+}
+
+/**
+ * 金額差異承認ハンドラ
+ */
+const handleAmountDiffApprove: SlackActionHandler = async ({
+  client,
+  userId,
+  userName,
+  channelId,
+  messageTs,
+  actionValue,
+}) => {
+  const [prNumber, approverSlackId, ocrAmountStr, requestedAmountStr] = actionValue.split("|");
+
+  if (approverSlackId && userId !== approverSlackId) {
+    await client.chat.postEphemeral({
+      channel: channelId,
+      user: userId,
+      text: "⚠️ この金額差異の承認権限がありません。",
+    });
+    return;
+  }
+
+  await client.chat.update({
+    channel: channelId,
+    ts: messageTs,
+    blocks: [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: `✅ *金額差異承認済*（${userName}）\n${prNumber}: 証憑¥${Number(ocrAmountStr).toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}` },
+      },
+    ],
+    text: `金額差異承認済（${userName}）`,
+  });
+
+  await safeUpdateStatus(client, channelId, messageTs, prNumber, {
+    "金額照合": `承認済（差額承認: ${userName}）`,
+  }, "amount_diff_approve");
+
+  await notifyOps(client, `✅ *金額差異承認* ${prNumber}（${userName}）— 証憑¥${Number(ocrAmountStr).toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}`);
+};
+
+/**
+ * 金額差異却下ハンドラ
+ */
+const handleAmountDiffReject: SlackActionHandler = async ({
+  client,
+  userId,
+  userName,
+  channelId,
+  messageTs,
+  actionValue,
+}) => {
+  const [prNumber, approverSlackId, ocrAmountStr, requestedAmountStr] = actionValue.split("|");
+
+  if (approverSlackId && userId !== approverSlackId) {
+    await client.chat.postEphemeral({
+      channel: channelId,
+      user: userId,
+      text: "⚠️ この金額差異の却下権限がありません。",
+    });
+    return;
+  }
+
+  await client.chat.update({
+    channel: channelId,
+    ts: messageTs,
+    blocks: [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: `❌ *金額差異却下*（${userName}）\n${prNumber}: 証憑¥${Number(ocrAmountStr).toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}\n申請者に差し戻しが必要です。` },
+      },
+    ],
+    text: `金額差異却下（${userName}）`,
+  });
+
+  await safeUpdateStatus(client, channelId, messageTs, prNumber, {
+    "金額照合": `却下（差額却下: ${userName}）`,
+    "Stage": "差し戻し",
+  }, "amount_diff_reject");
+
+  await notifyOps(client, `❌ *金額差異却下* ${prNumber}（${userName}）— 証憑¥${Number(ocrAmountStr).toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}`);
+};
+
 // アクションIDとハンドラーのマッピング
 export const actionHandlers: Record<string, SlackActionHandler> = {
   approve_button: handleApprove,
@@ -942,6 +1092,8 @@ export const actionHandlers: Record<string, SlackActionHandler> = {
   dm_reject_button: handleDmReject,
   purchase_open_modal: handleOpenModal,
   journal_register_button: handleJournalRegister,
+  amount_diff_approve_button: handleAmountDiffApprove,
+  amount_diff_reject_button: handleAmountDiffReject,
 };
 
 // --- /purchase モーダル ---

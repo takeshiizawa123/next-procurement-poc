@@ -35,6 +35,7 @@ export interface OcrMatchResult {
   requestedAmount: number;
   difference: number;
   isMatched: boolean;
+  requiresReapproval: boolean;
   message: string;
 }
 
@@ -153,6 +154,8 @@ export async function extractFromImage(imageBase64: string, mimeType: string): P
 
 const AMOUNT_TOLERANCE = 500;       // ±500円
 const AMOUNT_TOLERANCE_PCT = 0.05;  // ±5%
+const REAPPROVAL_PCT = 0.20;        // 20%超で再承認
+const REAPPROVAL_ABS = 1000;        // ¥1,000超で再承認
 
 /**
  * OCR結果と申請金額を照合
@@ -163,6 +166,7 @@ export function matchAmount(ocrResult: OcrResult, requestedAmount: number): OcrM
   const pctDiff = requestedAmount > 0 ? absDiff / requestedAmount : 1;
 
   const isMatched = absDiff <= AMOUNT_TOLERANCE || pctDiff <= AMOUNT_TOLERANCE_PCT;
+  const requiresReapproval = !isMatched && pctDiff > REAPPROVAL_PCT && absDiff > REAPPROVAL_ABS;
 
   let message: string;
   if (absDiff === 0) {
@@ -178,6 +182,7 @@ export function matchAmount(ocrResult: OcrResult, requestedAmount: number): OcrM
     requestedAmount,
     difference: diff,
     isMatched,
+    requiresReapproval,
     message,
   };
 }

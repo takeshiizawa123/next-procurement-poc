@@ -13,6 +13,7 @@ import {
   sendApprovalDM,
   notifyOps,
   calcPaymentDueDate,
+  sendAmountDiffApproval,
   type PurchaseFormData,
   type RequestInfo,
 } from "@/lib/slack";
@@ -1095,8 +1096,20 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
               const match = matchAmount(ocrResult, requestedAmount);
               confirmLines.push(`金額照合: ${match.message}`);
               if (!match.isMatched) {
-                confirmLines.push(`⚠️ 管理本部に確認を依頼しました`);
-                await notifyOps(client, `⚠️ *金額不一致* ${prNumber} — ${match.message}`);
+                if (match.requiresReapproval) {
+                  // 20%超 & ¥1,000超 → 承認者に再承認ボタン送信
+                  const approver = String(dataObj["approverSlackId"] || "");
+                  confirmLines.push(`🔄 金額差異が大きいため、承認者に再承認を依頼しました`);
+                  await sendAmountDiffApproval(
+                    client, channelId, threadTs, prNumber,
+                    ocrResult.amount, requestedAmount, match.difference,
+                    approver,
+                  );
+                  await notifyOps(client, `🔄 *金額差異再承認* ${prNumber} — ${match.message}（承認者: <@${approver}>）`);
+                } else {
+                  confirmLines.push(`⚠️ 管理本部に確認を依頼しました`);
+                  await notifyOps(client, `⚠️ *金額不一致* ${prNumber} — ${match.message}`);
+                }
               }
             }
           }
