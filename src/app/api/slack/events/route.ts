@@ -1084,13 +1084,13 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
           console.log(`[file-share] OCR result for ${prNumber}:`, JSON.stringify({ amount: ocrResult.amount, tax_rate: ocrResult.tax_rate, tax_amount: ocrResult.tax_amount, registration_number: ocrResult.registration_number, document_type: ocrResult.document_type }));
           detectedTaxRate = ocrResult.tax_rate ?? undefined;
 
+          // GASは税抜金額で保存。OCRは税込金額を返す
+          let requestedAmount = 0;
           if (statusResult.success && statusResult.data) {
             const dataObj = statusResult.data as Record<string, unknown>;
-            // GASは税抜金額で保存。OCRは税込金額を返す
             const requestedExclTax = Number(dataObj["合計額（税抜）"] || 0);
-            // 税込に変換して比較（税率はOCR検出値 or デフォルト10%）
             const taxRate = ocrResult.tax_rate ?? 10;
-            const requestedAmount = Math.round(requestedExclTax * (1 + taxRate / 100));
+            requestedAmount = Math.round(requestedExclTax * (1 + taxRate / 100));
             if (requestedAmount > 0 && ocrResult.amount > 0) {
               const match = matchAmount(ocrResult, requestedAmount);
               confirmLines.push(`金額照合: ${match.message}`);
@@ -1109,19 +1109,34 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
             confirmLines.push(`消費税: ${taxInfo}`);
           }
 
+          // OCR結果をGASに保存（カラム名に合わせてマッピング）
+          const ocrUpdates: Record<string, string> = {};
+          // 証憑金額（OCR読み取り税込金額）
+          if (ocrResult.amount > 0) {
+            ocrUpdates["証憑金額"] = String(ocrResult.amount);
+          }
+          // 税区分
+          if (ocrResult.tax_rate != null) {
+            ocrUpdates["税区分"] = `課税${ocrResult.tax_rate}%`;
+          }
+          // 金額照合結果
+          if (statusResult.success && statusResult.data) {
+            const reqAmt = requestedAmount;
+            if (reqAmt > 0 && ocrResult.amount > 0) {
+              const diff = ocrResult.amount - reqAmt;
+              ocrUpdates["金額照合"] = diff === 0 ? "一致" : `不一致（差額${diff > 0 ? "+" : ""}¥${diff.toLocaleString()}）`;
+            }
+          }
+
           // 適格請求書の検証 + GAS保存
-          const invoiceUpdates: Record<string, string> = {};
           if (ocrResult.registration_number) {
             const verification = await verifyInvoiceRegistration(ocrResult.registration_number);
-            invoiceUpdates["登録番号"] = ocrResult.registration_number;
+            ocrUpdates["適格番号"] = ocrResult.registration_number;
             if (verification.valid) {
               confirmLines.push(`適格請求書: ${verification.registrationNumber}（${verification.name}）`);
-              invoiceUpdates["適格請求書"] = "適格";
-              invoiceUpdates["登録番号検証"] = "verified";
             } else {
               confirmLines.push(`⚠️ 適格請求書: ${verification.registrationNumber} — ${verification.error}`);
-              invoiceUpdates["適格請求書"] = "非適格";
-              invoiceUpdates["登録番号検証"] = verification.error || "not_found";
+              ocrUpdates["適格番号"] = `${ocrResult.registration_number}（検証失敗）`;
               const { getTransitionalDeductionRate } = await import("@/lib/ocr");
               const deduction = getTransitionalDeductionRate();
               confirmLines.push(`💰 ${deduction.message}`);
@@ -1131,8 +1146,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
             }
           } else if (ocrResult.document_type === "invoice") {
             confirmLines.push(`⚠️ 登録番号なし（適格請求書でない可能性）`);
-            invoiceUpdates["適格請求書"] = "番号なし";
-            invoiceUpdates["登録番号検証"] = "no_number";
+            ocrUpdates["適格番号"] = "番号なし";
             const { getTransitionalDeductionRate } = await import("@/lib/ocr");
             const deduction = getTransitionalDeductionRate();
             confirmLines.push(`💰 ${deduction.message}`);
@@ -1140,10 +1154,15 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
               `⚠️ *登録番号なし* ${prNumber} — 請求書に適格請求書の登録番号が見当たりません\n` +
               `💰 *${deduction.message}*（仕入税額控除 ${deduction.rate}%）`);
           }
-          // 適格請求書情報をGASスプレッドシートに保存
-          if (Object.keys(invoiceUpdates).length > 0) {
-            updateStatus(prNumber, invoiceUpdates).catch((e) =>
-              console.error(`[file-share] GAS invoice update error for ${prNumber}:`, e));
+          // OCR結果をGASスプレッドシートに保存
+          if (Object.keys(ocrUpdates).length > 0) {
+            console.log(`[file-share] Saving OCR data to GAS for ${prNumber}:`, JSON.stringify(ocrUpdates));
+            try {
+              const ocrGasResult = await updateStatus(prNumber, ocrUpdates);
+              console.log(`[file-share] GAS OCR update result:`, JSON.stringify({ success: ocrGasResult.success, error: ocrGasResult.error, data: ocrGasResult.data }));
+            } catch (e) {
+              console.error(`[file-share] GAS OCR update error for ${prNumber}:`, e);
+            }
           }
         } catch (ocrErr) {
           console.error(`[file-share] OCR error for ${prNumber}:`, ocrErr);
