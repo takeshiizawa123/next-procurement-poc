@@ -112,7 +112,10 @@ export async function extractFromImage(imageBase64: string, mimeType: string): P
   const data = await res.json();
   const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
   const finishReason = data.candidates?.[0]?.finishReason;
-  console.log(`[ocr] Gemini response: finishReason=${finishReason} contentLen=${content?.length || 0} raw=${content?.substring(0, 300)}`);
+  // finishReason が異常時のみログ出力
+  if (finishReason && finishReason !== "STOP") {
+    console.warn(`[ocr] Gemini finishReason=${finishReason}`);
+  }
   if (!content) {
     throw new Error("Gemini APIから結果が返されませんでした");
   }
@@ -315,7 +318,7 @@ export async function downloadSlackFile(
 
   const buffer = Buffer.from(await res.arrayBuffer());
   const mimeType = res.headers.get("content-type") || "image/jpeg";
-  console.log(`[ocr] Downloaded file: ${buffer.length} bytes, mimeType=${mimeType}`);
+  // ダウンロードログ削除（正常動作確認済み）
 
   return {
     base64: buffer.toString("base64"),

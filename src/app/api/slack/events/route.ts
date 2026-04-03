@@ -1082,7 +1082,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
           const botToken = process.env.SLACK_BOT_TOKEN || "";
           const { base64, mimeType } = await downloadSlackFile(fileUrls[0], botToken);
           const ocrResult = await extractFromImage(base64, mimeType);
-          console.log(`[file-share] OCR result for ${prNumber}:`, JSON.stringify({ amount: ocrResult.amount, tax_rate: ocrResult.tax_rate, tax_amount: ocrResult.tax_amount, registration_number: ocrResult.registration_number, document_type: ocrResult.document_type }));
+          // OCR詳細ログ削除（正常動作確認済み）
           detectedTaxRate = ocrResult.tax_rate ?? undefined;
 
           // GASは税抜金額で保存。OCRは税込金額を返す
@@ -1176,10 +1176,8 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
           }
           // OCR結果をGASスプレッドシートに保存
           if (Object.keys(ocrUpdates).length > 0) {
-            console.log(`[file-share] Saving OCR data to GAS for ${prNumber}:`, JSON.stringify(ocrUpdates));
             try {
-              const ocrGasResult = await updateStatus(prNumber, ocrUpdates);
-              console.log(`[file-share] GAS OCR update result:`, JSON.stringify({ success: ocrGasResult.success, error: ocrGasResult.error, data: ocrGasResult.data }));
+              await updateStatus(prNumber, ocrUpdates);
             } catch (e) {
               console.error(`[file-share] GAS OCR update error for ${prNumber}:`, e);
             }
