@@ -161,32 +161,40 @@ async function saveTokens(tokens: MfTokens): Promise<void> {
 async function loadTokens(): Promise<MfTokens | null> {
   if (cachedTokens) return cachedTokens;
 
-  // リフレッシュトークンの取得優先順位:
-  // 1. process.env.MF_REFRESH_TOKEN（saveTokensで更新された値 or 環境変数）
-  // 2. cookieのmf_refresh_token（コールバック時に保存）
-  let refreshToken = process.env.MF_REFRESH_TOKEN || "";
+  // リフレッシュトークン候補を収集（優先順位順）
+  const candidates: string[] = [];
 
-  if (!refreshToken) {
-    try {
-      const { cookies } = await import("next/headers");
-      const cookieStore = await cookies();
-      refreshToken = cookieStore.get("mf_refresh_token")?.value || "";
-    } catch {
-      // cookieアクセス不可（非リクエストコンテキスト）
-    }
+  // 1. process.env（saveTokensで更新された値 or Vercel環境変数）
+  if (process.env.MF_REFRESH_TOKEN) {
+    candidates.push(process.env.MF_REFRESH_TOKEN);
   }
 
-  if (refreshToken) {
-    console.log("[mf-oauth] Cold start — bootstrapping from refresh token");
+  // 2. cookieのmf_refresh_token（コールバック時に保存）
+  try {
+    const { cookies } = await import("next/headers");
+    const cookieStore = await cookies();
+    const cookieToken = cookieStore.get("mf_refresh_token")?.value;
+    if (cookieToken && !candidates.includes(cookieToken)) {
+      candidates.push(cookieToken);
+    }
+  } catch {
+    // cookieアクセス不可
+  }
+
+  // 各候補を順に試行
+  for (const refreshToken of candidates) {
     try {
+      console.log("[mf-oauth] Trying refresh token:", refreshToken.substring(0, 8) + "...");
       const tokens = await refreshAccessToken(refreshToken);
       return tokens;
     } catch (e) {
-      console.error("[mf-oauth] Failed to bootstrap:", e);
-      return null;
+      console.warn("[mf-oauth] Refresh failed for token:", refreshToken.substring(0, 8) + "...", e instanceof Error ? e.message : "");
     }
   }
 
+  if (candidates.length > 0) {
+    console.error("[mf-oauth] All refresh token candidates failed");
+  }
   return null;
 }
 
