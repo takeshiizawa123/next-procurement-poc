@@ -655,7 +655,7 @@ export default function JournalManagement() {
           </div>
         )}
 
-        {mastersError && (
+        {mastersError && !(mfAuthLoaded && (!mfAuth || !mfAuth.authenticated)) && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 text-sm text-amber-800">
             MF会計マスタ: {mastersError}（フォールバック値を使用中）
           </div>

@@ -6,6 +6,17 @@ import { getAuthStatus } from "@/lib/mf-oauth";
  * GET /api/mf/auth/status
  */
 export async function GET() {
-  const status = await getAuthStatus();
-  return NextResponse.json(status);
+  try {
+    const status = await getAuthStatus();
+    return NextResponse.json(status);
+  } catch (e) {
+    console.error("[mf-auth-status] Error:", e);
+    return NextResponse.json({
+      authenticated: false,
+      accessTokenExpiresAt: null,
+      cookieAuthAt: null,
+      cookieExpiresAt: null,
+      cookieDaysRemaining: null,
+    });
+  }
 }
