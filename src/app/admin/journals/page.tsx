@@ -31,6 +31,8 @@ interface MfMasters {
   taxes: { code: string | null; name: string; abbreviation?: string; taxRate?: number }[];
   departments: { code: string | null; name: string }[];
   subAccounts: { id: number; accountId: number; name: string }[];
+  projects: { code: string | null; name: string }[];
+  counterparties: { code: string | null; name: string; invoiceRegistrationNumber?: string | null }[];
 }
 
 /** マスタから勘定科目のデフォルト税区分を解決 */
@@ -348,11 +350,43 @@ function JournalDetail({ r, edits, onEdit, masters }: {
               </label>
             </div>
 
-            <label className="block">
-              <span className="text-gray-500 text-xs">プロジェクトコード（HubSpot案件番号）</span>
-              <input type="text" value={hubspot} onChange={(e) => onEdit("hubspotDealId", e.target.value)}
-                placeholder="例: HS-2026-042" className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
-            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="text-gray-500 text-xs">プロジェクト</span>
+                {masters && masters.projects.length > 0 ? (
+                  <select value={hubspot} onChange={(e) => onEdit("hubspotDealId", e.target.value)}
+                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
+                    <option value="">（なし）</option>
+                    {masters.projects.map((p) => (
+                      <option key={p.code || p.name} value={p.code || p.name}>
+                        {p.code ? `${p.code} ${p.name}` : p.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input type="text" value={hubspot} onChange={(e) => onEdit("hubspotDealId", e.target.value)}
+                    placeholder="例: HS-2026-042" className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
+                )}
+              </label>
+              <label className="block">
+                <span className="text-gray-500 text-xs">取引先</span>
+                {masters && masters.counterparties.length > 0 ? (
+                  <select value={edits.counterpartyCode ?? r.supplierName}
+                    onChange={(e) => onEdit("counterpartyCode", e.target.value)}
+                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
+                    <option value="">（なし）</option>
+                    {masters.counterparties.map((c) => (
+                      <option key={c.code || c.name} value={c.code || c.name}>
+                        {c.name}{c.invoiceRegistrationNumber ? ` (${c.invoiceRegistrationNumber})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input type="text" value={r.supplierName} disabled
+                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-gray-100" />
+                )}
+              </label>
+            </div>
 
             <label className="block">
               <span className="text-gray-500 text-xs">摘要</span>
@@ -396,6 +430,8 @@ export default function JournalManagement() {
             taxes: d.taxes || [],
             departments: d.departments || [],
             subAccounts: d.subAccounts || [],
+            projects: d.projects || [],
+            counterparties: d.counterparties || [],
           });
         } else {
           setMastersError(d.error || "マスタ取得失敗");
@@ -491,7 +527,7 @@ export default function JournalManagement() {
         )}
         {masters && !mastersError && (
           <div className="text-xs text-green-600 mb-2">
-            MF会計マスタ読込済（科目{masters.accounts.length} / 税区分{masters.taxes.length} / 部門{masters.departments.length}）
+            MF会計マスタ読込済（科目{masters.accounts.length} / 税区分{masters.taxes.length} / 部門{masters.departments.length} / PJ{masters.projects.length} / 取引先{masters.counterparties.length}）
           </div>
         )}
 

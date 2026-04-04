@@ -126,6 +126,12 @@ export async function getDepartments(): Promise<MasterItem[]> {
   return fetchMaster("/masters/departments", "departments");
 }
 
+// --- プロジェクトマスタ ---
+
+export async function getProjects(): Promise<MasterItem[]> {
+  return fetchMaster("/masters/projects", "projects");
+}
+
 // --- 取引先マスタ ---
 
 export interface CounterpartyItem {

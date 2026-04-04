@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAccounts, getTaxes, getDepartments, fetchSubAccounts } from "@/lib/mf-accounting";
+import {
+  getAccounts, getTaxes, getDepartments, getProjects,
+  getCounterparties, fetchSubAccounts,
+} from "@/lib/mf-accounting";
 import { requireApiKey, requireBearerAuth } from "@/lib/api-auth";
 
 /**
@@ -7,10 +10,12 @@ import { requireApiKey, requireBearerAuth } from "@/lib/api-auth";
  * GET /api/mf/masters
  *
  * OpenAPI仕様: docs/api-specs/openapi.yaml
- * - /masters/accounts → 勘定科目（id, code, name, tax_id, categories, available）
- * - /masters/taxes → 税区分（id, code, name, abbreviation, tax_rate, available）
- * - /masters/departments → 部門（id, code, name, available）
- * - /masters/sub_accounts → 補助科目（id, code, account_id, name, available）
+ * - /masters/accounts → 勘定科目
+ * - /masters/taxes → 税区分
+ * - /masters/departments → 部門
+ * - /masters/sub_accounts → 補助科目
+ * - /masters/projects → プロジェクト
+ * - /masters/counterparties → 取引先
  */
 export async function GET(request: NextRequest) {
   const bearerError = requireBearerAuth(request);
@@ -18,11 +23,13 @@ export async function GET(request: NextRequest) {
   if (bearerError && apiKeyError) return apiKeyError;
 
   try {
-    const [accounts, taxes, departments, subAccounts] = await Promise.all([
+    const [accounts, taxes, departments, subAccounts, projects, counterparties] = await Promise.all([
       getAccounts(),
       getTaxes(),
       getDepartments(),
       fetchSubAccounts(),
+      getProjects(),
+      getCounterparties(),
     ]);
 
     return NextResponse.json({
@@ -49,6 +56,15 @@ export async function GET(request: NextRequest) {
       subAccounts: subAccounts
         .filter((s) => s.available !== false)
         .map((s) => ({ id: s.id, accountId: s.account_id, name: s.name })),
+      projects: projects
+        .filter((p) => p.available !== false)
+        .map((p) => ({ code: p.code, name: p.name })),
+      counterparties: counterparties
+        .map((c) => ({
+          code: c.code,
+          name: c.name,
+          invoiceRegistrationNumber: c.invoice_registration_number,
+        })),
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
