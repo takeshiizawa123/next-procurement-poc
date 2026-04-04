@@ -145,7 +145,12 @@ function JournalDetail({ r, edits, onEdit, masters }: {
   const deptNames = masters ? masters.departments.map((d) => d.name) : FALLBACK_DEPARTMENTS;
 
   const rawDebit = r.accountTitle?.split("（")[0]?.trim() || "消耗品費";
-  const debitAccount = edits.debitAccount ?? (accountNames.includes(rawDebit) ? rawDebit : "消耗品費");
+  // MFマスタ科目名は「（販）消耗品費」等の場合があるので部分一致で検索
+  const resolvedDebit = accountNames.find((a) => a === rawDebit)
+    || accountNames.find((a) => a.includes(rawDebit) || rawDebit.includes(a))
+    || accountNames.find((a) => a.includes("消耗品費"))
+    || accountNames[0];
+  const debitAccount = edits.debitAccount ?? resolvedDebit;
   const defaultCredit = resolveCreditDefault(r.paymentMethod);
   const creditAccount = edits.creditAccount ?? defaultCredit.account;
   const creditSubAccount = edits.creditSubAccount ?? defaultCredit.sub;
@@ -745,7 +750,7 @@ export default function JournalManagement() {
                     <th className="px-3 py-2.5 font-medium text-gray-600">PO番号</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600 w-16">区分</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">品目</th>
-                    <th className="px-3 py-2.5 font-medium text-gray-600 text-right">金額</th>
+                    <th className="px-3 py-2.5 font-medium text-gray-600 text-right">発注金額</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">借方</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">貸方</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">税区分</th>
@@ -761,7 +766,13 @@ export default function JournalManagement() {
                     const isReg = registering[r.prNumber];
                     const isExpanded = expanded[r.prNumber];
                     const e = edits[r.prNumber] || {};
-                    const debit = e.debitAccount ?? (r.accountTitle?.split("（")[0] || "消耗品費");
+                    const acctNames = masters ? masters.accounts.map((a) => a.name) : FALLBACK_ACCOUNTS;
+                    const rawDebitRow = r.accountTitle?.split("（")[0]?.trim() || "消耗品費";
+                    const resolvedDebitRow = acctNames.find((a) => a === rawDebitRow)
+                      || acctNames.find((a) => a.includes(rawDebitRow) || rawDebitRow.includes(a))
+                      || acctNames.find((a) => a.includes("消耗品費"))
+                      || acctNames[0];
+                    const debit = e.debitAccount ?? resolvedDebitRow;
                     const credit = resolveCreditDefault(r.paymentMethod);
                     const creditAcc = e.creditAccount ?? credit.account;
                     const creditSub = e.creditSubAccount ?? credit.sub;
