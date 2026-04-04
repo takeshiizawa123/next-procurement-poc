@@ -499,37 +499,38 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
             </label>
 
             {/* 保存・登録ボタン */}
-            <div className="mt-3 pt-3 border-t space-y-2">
+            <div className="mt-3 pt-3 border-t flex gap-2">
               {/* 編集内容を保存 */}
-              {hasEdits && (
-                <button onClick={onSave} disabled={isSaving}
-                  className="w-full px-4 py-2 bg-gray-700 text-white text-sm font-medium rounded-lg hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed">
-                  {isSaving ? "保存中..." : "編集内容を保存"}
-                </button>
-              )}
-              {saved && !hasEdits && (
-                <p className="text-green-600 text-xs">保存済み</p>
-              )}
+              <button onClick={onSave} disabled={isSaving || !hasEdits}
+                className={`flex-1 px-4 py-2 text-sm font-medium rounded-lg disabled:cursor-not-allowed ${
+                  hasEdits
+                    ? "bg-gray-700 text-white hover:bg-gray-800 disabled:bg-gray-300"
+                    : saved
+                      ? "bg-green-50 text-green-700 border border-green-200"
+                      : "bg-gray-100 text-gray-400 border border-gray-200"
+                }`}>
+                {isSaving ? "保存中..." : saved && !hasEdits ? "保存済み" : "保存"}
+              </button>
 
               {/* MF会計に仕訳登録 */}
               {result?.ok ? (
-                <div className="text-sm text-green-700 bg-green-50 rounded px-3 py-2">{result.message}</div>
+                <div className="flex-1 text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2 text-center">{result.message}</div>
               ) : result && !result.ok ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-red-600">{result.message}</span>
-                  <button onClick={onRegister} className="text-xs px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700">再試行</button>
+                <div className="flex-1 flex items-center gap-2">
+                  <span className="text-xs text-red-600 truncate">{result.message}</span>
+                  <button onClick={onRegister} className="text-xs px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 shrink-0">再試行</button>
                 </div>
               ) : (
                 <button onClick={onRegister} disabled={isRegistering || hasEdits}
-                  className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-                  title={hasEdits ? "先に編集内容を保存してください" : ""}>
-                  {isRegistering ? "登録中..." : `MF会計に仕訳登録（¥${journalAmount.toLocaleString()} / ${amountSource}ベース）`}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                  title={hasEdits ? "先に保存してください" : ""}>
+                  {isRegistering ? "登録中..." : `仕訳登録（¥${journalAmount.toLocaleString()}）`}
                 </button>
               )}
-              {hasEdits && !result?.ok && (
-                <p className="text-amber-600 text-xs">* 未保存の変更があります — 先に保存してから仕訳登録してください</p>
-              )}
             </div>
+            {hasEdits && (
+              <p className="text-amber-600 text-xs mt-1">* 未保存の変更あり — 先に保存してから仕訳登録</p>
+            )}
           </div>
         </div>
       </div>
