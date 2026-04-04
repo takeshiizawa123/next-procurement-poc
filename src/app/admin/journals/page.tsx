@@ -188,8 +188,15 @@ function JournalDetail({ r, edits, onEdit, masters }: {
   const journalAmount = ocr?.voucherAmount || r.totalAmount;
   const amountSource = ocr?.voucherAmount ? "証憑" : "発注";
   const tax = calcTax(journalAmount, taxCat);
-  // 取引先: 国税API確定名優先
-  const journalSupplier = ocr?.verifiedSupplierName || r.supplierName;
+  // 取引先: 国税API確定名優先 → MFマスタからコード解決
+  const journalSupplierName = ocr?.verifiedSupplierName || r.supplierName;
+  const matchedCounterparty = masters?.counterparties.find((c) =>
+    c.name === journalSupplierName ||
+    c.name.includes(journalSupplierName) ||
+    journalSupplierName.includes(c.name) ||
+    (ocr?.registrationNumber && c.invoiceRegistrationNumber === ocr.registrationNumber)
+  );
+  const journalSupplierCode = matchedCounterparty?.code || matchedCounterparty?.name || "";
   // 摘要: 年月 PO番号 [予算番号] [KATANA PO] 品名
   const remarkParts = [ym, r.prNumber];
   if (ocr?.budgetNumber) remarkParts.push(ocr.budgetNumber);
@@ -441,7 +448,7 @@ function JournalDetail({ r, edits, onEdit, masters }: {
               <label className="block">
                 <span className="text-gray-500 text-xs">取引先</span>
                 {masters && masters.counterparties.length > 0 ? (
-                  <select value={edits.counterpartyCode ?? journalSupplier}
+                  <select value={edits.counterpartyCode ?? journalSupplierCode}
                     onChange={(e) => onEdit("counterpartyCode", e.target.value)}
                     className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
                     <option value="">（なし）</option>
