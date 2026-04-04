@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createJournal, buildJournalFromPurchase } from "@/lib/mf-accounting";
+import {
+  createJournal, buildJournalFromPurchase,
+  resolveAccountCode, resolveTaxCode, resolveCounterpartyCode, resolveDepartmentCode,
+} from "@/lib/mf-accounting";
 import { getStatus, updateStatus } from "@/lib/gas-client";
 import { getSlackClient, notifyOps } from "@/lib/slack";
 import { requireBearerAuth, requireApiKey } from "@/lib/api-auth";
@@ -20,7 +23,20 @@ export async function POST(request: NextRequest) {
   if (bearerError && apiKeyError) return apiKeyError;
 
   try {
-    const { prNumber } = (await request.json()) as { prNumber: string };
+    const body = (await request.json()) as {
+      prNumber: string;
+      overrides?: {
+        debitAccount?: string;
+        creditAccount?: string;
+        creditSubAccount?: string;
+        counterpartyCode?: string;
+        taxCategory?: string;
+        department?: string;
+        hubspotDealId?: string;
+        memo?: string;
+      };
+    };
+    const { prNumber, overrides } = body;
     if (!prNumber) {
       return NextResponse.json({ error: "prNumber is required" }, { status: 400 });
     }
@@ -76,6 +92,40 @@ export async function POST(request: NextRequest) {
       katanaPo: katanaPo || undefined,
       budgetNumber: budgetNum || undefined,
     });
+
+    // UI編集内容(overrides)を仕訳リクエストに反映
+    if (overrides && journalRequest.branches?.[0]) {
+      const branch = journalRequest.branches[0];
+      if (overrides.debitAccount) {
+        const code = await resolveAccountCode(overrides.debitAccount);
+        if (code) branch.debitor.account_code = code;
+      }
+      if (overrides.taxCategory) {
+        const code = await resolveTaxCode(overrides.taxCategory);
+        if (code) branch.debitor.tax_code = code;
+        // 税額再計算
+        const rate = overrides.taxCategory.includes("10%") ? 10 : overrides.taxCategory.includes("8%") ? 8 : 0;
+        branch.debitor.tax_value = rate > 0 ? Math.floor(amount * rate / (100 + rate)) : 0;
+      }
+      if (overrides.creditAccount) {
+        const code = await resolveAccountCode(overrides.creditAccount);
+        if (code) branch.creditor.account_code = code;
+      }
+      if (overrides.creditSubAccount !== undefined) {
+        branch.creditor.sub_account_code = overrides.creditSubAccount || undefined;
+      }
+      if (overrides.counterpartyCode) {
+        branch.creditor.counterparty_code = overrides.counterpartyCode;
+      }
+      if (overrides.department) {
+        const code = await resolveDepartmentCode(overrides.department);
+        if (code) branch.debitor.department_code = code;
+      }
+      if (overrides.memo) {
+        journalRequest.memo = overrides.memo;
+        branch.remark = overrides.memo;
+      }
+    }
 
     // MF会計Plusに仕訳登録
     const journalResult = await createJournal(journalRequest);

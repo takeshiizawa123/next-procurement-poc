@@ -145,10 +145,11 @@ function JournalDetail({ r, edits, onEdit, masters }: {
   const deptNames = masters ? masters.departments.map((d) => d.name) : FALLBACK_DEPARTMENTS;
 
   const rawDebit = r.accountTitle?.split("（")[0]?.trim() || "消耗品費";
-  // MFマスタ科目名は「（販）消耗品費」等の場合があるので部分一致で検索
+  // MFマスタ科目から解決: 完全一致→前方一致→部分一致（最短優先）
   const resolvedDebit = accountNames.find((a) => a === rawDebit)
-    || accountNames.find((a) => a.includes(rawDebit) || rawDebit.includes(a))
-    || accountNames.find((a) => a.includes("消耗品費"))
+    || accountNames.find((a) => a.startsWith(rawDebit))
+    || accountNames.filter((a) => a.includes(rawDebit)).sort((x, y) => x.length - y.length)[0]
+    || accountNames.filter((a) => a.includes("消耗品費")).sort((x, y) => x.length - y.length)[0]
     || accountNames[0];
   const debitAccount = edits.debitAccount ?? resolvedDebit;
   const defaultCredit = resolveCreditDefault(r.paymentMethod);
@@ -769,8 +770,9 @@ export default function JournalManagement() {
                     const acctNames = masters ? masters.accounts.map((a) => a.name) : FALLBACK_ACCOUNTS;
                     const rawDebitRow = r.accountTitle?.split("（")[0]?.trim() || "消耗品費";
                     const resolvedDebitRow = acctNames.find((a) => a === rawDebitRow)
-                      || acctNames.find((a) => a.includes(rawDebitRow) || rawDebitRow.includes(a))
-                      || acctNames.find((a) => a.includes("消耗品費"))
+                      || acctNames.find((a) => a.startsWith(rawDebitRow))
+                      || acctNames.filter((a) => a.includes(rawDebitRow)).sort((x, y) => x.length - y.length)[0]
+                      || acctNames.filter((a) => a.includes("消耗品費")).sort((x, y) => x.length - y.length)[0]
                       || acctNames[0];
                     const debit = e.debitAccount ?? resolvedDebitRow;
                     const credit = resolveCreditDefault(r.paymentMethod);
