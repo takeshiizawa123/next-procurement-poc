@@ -144,7 +144,8 @@ function JournalDetail({ r, edits, onEdit, masters }: {
   const taxNames = masters ? masters.taxes.map((t) => t.name) : FALLBACK_TAXES;
   const deptNames = masters ? masters.departments.map((d) => d.name) : FALLBACK_DEPARTMENTS;
 
-  const debitAccount = edits.debitAccount ?? (r.accountTitle?.split("（")[0] || "消耗品費");
+  const rawDebit = r.accountTitle?.split("（")[0]?.trim() || "消耗品費";
+  const debitAccount = edits.debitAccount ?? (accountNames.includes(rawDebit) ? rawDebit : "消耗品費");
   const defaultCredit = resolveCreditDefault(r.paymentMethod);
   const creditAccount = edits.creditAccount ?? defaultCredit.account;
   const creditSubAccount = edits.creditSubAccount ?? defaultCredit.sub;
@@ -152,7 +153,11 @@ function JournalDetail({ r, edits, onEdit, masters }: {
   const dept = edits.department ?? r.department;
   const hubspot = edits.hubspotDealId ?? (r.hubspotInfo || "");
   const baseDate = r.inspectionDate || r.applicationDate || new Date().toISOString().slice(0, 10);
-  const ym = baseDate.slice(0, 7).replace("-", "/");
+  // 日付を安全にYYYY/MM形式に変換（ロケール文字列対応）
+  const parsedDate = new Date(baseDate);
+  const ym = !isNaN(parsedDate.getTime())
+    ? `${parsedDate.getFullYear()}/${String(parsedDate.getMonth() + 1).padStart(2, "0")}`
+    : baseDate.slice(0, 7).replace("-", "/");
   const creditOptions = buildCreditOptions(r.paymentMethod, masters);
   const hasEdits = Object.keys(edits).length > 0;
 
@@ -188,14 +193,21 @@ function JournalDetail({ r, edits, onEdit, masters }: {
   const journalAmount = ocr?.voucherAmount || r.totalAmount;
   const amountSource = ocr?.voucherAmount ? "証憑" : "発注";
   const tax = calcTax(journalAmount, taxCat);
-  // 取引先: 国税API確定名優先 → MFマスタからコード解決
+  // 取引先: T番号一致 → 国税API名一致 → 発注データ名部分一致
   const journalSupplierName = ocr?.verifiedSupplierName || r.supplierName;
-  const matchedCounterparty = masters?.counterparties.find((c) =>
-    c.name === journalSupplierName ||
-    c.name.includes(journalSupplierName) ||
-    journalSupplierName.includes(c.name) ||
-    (ocr?.registrationNumber && c.invoiceRegistrationNumber === ocr.registrationNumber)
-  );
+  const regNum = ocr?.registrationNumber?.replace(/（.*）$/, "").trim(); // 「T...（検証失敗）」除外
+  const matchedCounterparty = masters?.counterparties.find((c) => {
+    // 1. T番号一致（最優先）
+    if (regNum && regNum.startsWith("T") && c.invoiceRegistrationNumber) {
+      if (c.invoiceRegistrationNumber === regNum) return true;
+    }
+    return false;
+  }) || masters?.counterparties.find((c) => {
+    // 2. 名前一致
+    const q = journalSupplierName.trim();
+    if (!q) return false;
+    return c.name === q || c.name.includes(q) || q.includes(c.name);
+  });
   const journalSupplierCode = matchedCounterparty?.code || matchedCounterparty?.name || "";
   // 摘要: 年月 PO番号 [予算番号] [KATANA PO] 品名
   const remarkParts = [ym, r.prNumber];
