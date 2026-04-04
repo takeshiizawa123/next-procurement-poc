@@ -114,6 +114,9 @@ interface OcrData {
   registrationNumber?: string;
   taxCategory?: string;
   driveFileId?: string;
+  verifiedSupplierName?: string;  // 国税API確定の正式法人名
+  katanaPo?: string;
+  budgetNumber?: string;
 }
 
 interface JournalEdits {
@@ -150,8 +153,6 @@ function JournalDetail({ r, edits, onEdit, masters }: {
   const hubspot = edits.hubspotDealId ?? (r.hubspotInfo || "");
   const baseDate = r.inspectionDate || r.applicationDate || new Date().toISOString().slice(0, 10);
   const ym = baseDate.slice(0, 7).replace("-", "/");
-  const memo = edits.memo ?? `${ym} ${r.prNumber} ${r.supplierName}`;
-  const tax = calcTax(r.totalAmount, taxCat);
   const creditOptions = buildCreditOptions(r.paymentMethod, masters);
   const hasEdits = Object.keys(edits).length > 0;
 
@@ -171,6 +172,9 @@ function JournalDetail({ r, edits, onEdit, masters }: {
             registrationNumber: json.data["適格番号"] || undefined,
             taxCategory: json.data["税区分"] || undefined,
             driveFileId: json.data["DriveファイルID"] || undefined,
+            verifiedSupplierName: json.data["MF取引先"] || undefined,
+            katanaPo: json.data["PO番号"] || undefined,
+            budgetNumber: json.data["予算番号"] || undefined,
           });
         }
       })
@@ -180,8 +184,71 @@ function JournalDetail({ r, edits, onEdit, masters }: {
   const amountMatchOk = ocr?.amountMatch?.includes("一致") || ocr?.amountMatch?.includes("承認済");
   const amountMatchNg = ocr?.amountMatch && !amountMatchOk;
 
+  // 仕訳金額: 証憑金額（税込）優先、フォールバック発注データ
+  const journalAmount = ocr?.voucherAmount || r.totalAmount;
+  const amountSource = ocr?.voucherAmount ? "証憑" : "発注";
+  const tax = calcTax(journalAmount, taxCat);
+  // 取引先: 国税API確定名優先
+  const journalSupplier = ocr?.verifiedSupplierName || r.supplierName;
+  // 摘要: 年月 PO番号 [予算番号] [KATANA PO] 品名
+  const remarkParts = [ym, r.prNumber];
+  if (ocr?.budgetNumber) remarkParts.push(ocr.budgetNumber);
+  if (ocr?.katanaPo) remarkParts.push(ocr.katanaPo);
+  remarkParts.push(r.itemName);
+  const defaultMemo = edits.memo ?? remarkParts.join(" ");
+
   return (
     <div className="bg-gray-50 px-4 py-4 border-t text-xs">
+      {/* 発注データ vs 証憑データの比較パネル */}
+      {ocr && (ocr.voucherAmount || ocr.verifiedSupplierName) && (
+        <div className="mb-3 border rounded bg-white p-3">
+          <div className="font-medium text-gray-700 mb-2">発注データ / 証憑データ比較</div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-gray-50">
+                <th className="px-2 py-1 text-left text-gray-500 w-24">項目</th>
+                <th className="px-2 py-1 text-left text-gray-400">発注（参考）</th>
+                <th className="px-2 py-1 text-left font-semibold text-gray-700">証憑（正）</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-t">
+                <td className="px-2 py-1 text-gray-500">金額</td>
+                <td className="px-2 py-1 text-gray-400">¥{r.totalAmount.toLocaleString()}</td>
+                <td className={`px-2 py-1 font-medium ${ocr.voucherAmount && ocr.voucherAmount !== r.totalAmount ? "text-amber-600" : "text-gray-900"}`}>
+                  {ocr.voucherAmount ? `¥${ocr.voucherAmount.toLocaleString()}` : "-"}
+                  {ocr.amountMatch && <span className={`ml-1 text-[10px] ${amountMatchOk ? "text-green-600" : "text-red-500"}`}>({ocr.amountMatch})</span>}
+                </td>
+              </tr>
+              <tr className="border-t">
+                <td className="px-2 py-1 text-gray-500">取引先</td>
+                <td className="px-2 py-1 text-gray-400">{r.supplierName}</td>
+                <td className={`px-2 py-1 font-medium ${ocr.verifiedSupplierName ? "text-gray-900" : "text-gray-300"}`}>
+                  {ocr.verifiedSupplierName || "-"}
+                  {ocr.registrationNumber && !ocr.registrationNumber.includes("検証失敗") && ocr.registrationNumber !== "番号なし" && (
+                    <span className="ml-1 text-[10px] text-green-600">({ocr.registrationNumber})</span>
+                  )}
+                </td>
+              </tr>
+              <tr className="border-t">
+                <td className="px-2 py-1 text-gray-500">税区分</td>
+                <td className="px-2 py-1 text-gray-400">{taxCat}</td>
+                <td className="px-2 py-1 font-medium">{ocr.taxCategory || "-"}</td>
+              </tr>
+              {(ocr.katanaPo || ocr.budgetNumber) && (
+                <tr className="border-t">
+                  <td className="px-2 py-1 text-gray-500">番号</td>
+                  <td className="px-2 py-1 text-gray-400" colSpan={2}>
+                    {ocr.katanaPo && <span className="mr-2">KATANA: {ocr.katanaPo}</span>}
+                    {ocr.budgetNumber && <span>予算: {ocr.budgetNumber}</span>}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* 左: 証憑プレビュー + OCR結果 */}
         <div className="flex flex-col">
@@ -285,14 +352,17 @@ function JournalDetail({ r, edits, onEdit, masters }: {
                   <td className="px-2 py-1.5 text-blue-700 font-medium">借方</td>
                   <td className="px-2 py-1.5">{debitAccount}</td>
                   <td className="px-2 py-1.5 text-gray-400">-</td>
-                  <td className="px-2 py-1.5 text-right">¥{r.totalAmount.toLocaleString()}</td>
+                  <td className="px-2 py-1.5 text-right">
+                    ¥{journalAmount.toLocaleString()}
+                    {amountSource === "証憑" && <span className="ml-1 text-[10px] text-green-600">(証憑)</span>}
+                  </td>
                   <td className="px-2 py-1.5 text-right text-gray-500">¥{tax.toLocaleString()}</td>
                 </tr>
                 <tr className="border-t">
                   <td className="px-2 py-1.5 text-red-700 font-medium">貸方</td>
                   <td className="px-2 py-1.5">{creditAccount}</td>
                   <td className="px-2 py-1.5 text-gray-500">{creditSubAccount || "-"}</td>
-                  <td className="px-2 py-1.5 text-right">¥{r.totalAmount.toLocaleString()}</td>
+                  <td className="px-2 py-1.5 text-right">¥{journalAmount.toLocaleString()}</td>
                   <td className="px-2 py-1.5 text-right text-gray-400">-</td>
                 </tr>
               </tbody>
@@ -371,7 +441,7 @@ function JournalDetail({ r, edits, onEdit, masters }: {
               <label className="block">
                 <span className="text-gray-500 text-xs">取引先</span>
                 {masters && masters.counterparties.length > 0 ? (
-                  <select value={edits.counterpartyCode ?? r.supplierName}
+                  <select value={edits.counterpartyCode ?? journalSupplier}
                     onChange={(e) => onEdit("counterpartyCode", e.target.value)}
                     className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
                     <option value="">（なし）</option>
@@ -390,7 +460,7 @@ function JournalDetail({ r, edits, onEdit, masters }: {
 
             <label className="block">
               <span className="text-gray-500 text-xs">摘要</span>
-              <input type="text" value={memo} onChange={(e) => onEdit("memo", e.target.value)}
+              <input type="text" value={defaultMemo} onChange={(e) => onEdit("memo", e.target.value)}
                 className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
             </label>
 

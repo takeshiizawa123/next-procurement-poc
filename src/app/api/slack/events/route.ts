@@ -790,6 +790,11 @@ async function handlePurchaseSubmission(
         paymentMethod: formData.paymentMethod,
         accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
         isPurchased: isPurchased || isPostReport,
+        budgetNumber: formData.budgetNumber || undefined,
+        katanaPo: formData.katanaPo || undefined,
+        hubspotInfo: formData.hubspotDealId || undefined,
+        remarks: formData.notes || undefined,
+        purpose: formData.assetUsage || undefined,
       });
       if (gasResult.success && gasResult.data?.prNumber) {
         poNumber = gasResult.data.prNumber;
@@ -1073,8 +1078,11 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
       const { getStatus } = await import("@/lib/gas-client");
       const statusResult = await getStatus(prNumber);
 
-      // OCR税率（仕訳作成時に8%軽減税率の判定に使用）
+      // OCR結果（仕訳作成時に使用: 税率・金額・取引先）
       let detectedTaxRate: number | undefined;
+      let ocrAmount: number | undefined;  // OCR読取の税込金額（証憑が正）
+      let pendingReapproval = false;  // 再承認待ちなら仕訳作成を保留
+      let verifiedSupplierName: string | undefined;  // 国税API確定の正式法人名
 
       // OCR金額照合（Gemini APIキーがあり、画像/PDFの場合）
       if (process.env.GEMINI_API_KEY && fileUrls.length > 0 && (fileMimeTypes[0]?.startsWith("image/") || fileMimeTypes[0] === "application/pdf")) {
@@ -1084,6 +1092,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
           const ocrResult = await extractFromImage(base64, mimeType);
           // OCR詳細ログ削除（正常動作確認済み）
           detectedTaxRate = ocrResult.tax_rate ?? undefined;
+          if (ocrResult.amount > 0) ocrAmount = ocrResult.amount;
 
           // GASは税抜金額で保存。OCRは税込金額を返す
           let requestedAmount = 0;
@@ -1097,16 +1106,17 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
               confirmLines.push(`金額照合: ${match.message}`);
               if (!match.isMatched) {
                 if (match.requiresReapproval) {
-                  // 20%超 & ¥1,000超 → 承認者に再承認ボタン送信
+                  // 20%超 & ¥1,000超 → 承認者に再承認ボタン送信、仕訳は保留
+                  pendingReapproval = true;
                   const approver = String(dataObj["approverSlackId"] || "");
-                  confirmLines.push(`🔄 金額差異が大きいため、承認者に再承認を依頼しました`);
+                  confirmLines.push(`🔄 金額差異が大きいため、承認者に再承認を依頼しました（仕訳は承認後に作成）`);
                   const ocrSubtotal = ocrResult.subtotal ?? Math.round(ocrResult.amount / (1 + (ocrResult.tax_rate ?? 10) / 100));
                   await sendAmountDiffApproval(
                     client, channelId, threadTs, prNumber,
                     ocrResult.amount, requestedAmount, match.difference,
                     approver, ocrSubtotal,
                   );
-                  await notifyOps(client, `🔄 *金額差異再承認* ${prNumber} — ${match.message}（承認者: <@${approver}>）`);
+                  await notifyOps(client, `🔄 *金額差異再承認* ${prNumber} — ${match.message}（承認者: <@${approver}>、仕訳保留）`);
                 } else {
                   confirmLines.push(`⚠️ 管理本部に確認を依頼しました`);
                   await notifyOps(client, `⚠️ *金額不一致* ${prNumber} — ${match.message}`);
@@ -1153,6 +1163,8 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
             const verification = await verifyInvoiceRegistration(ocrResult.registration_number);
             ocrUpdates["適格番号"] = ocrResult.registration_number;
             if (verification.valid) {
+              verifiedSupplierName = verification.name;
+              ocrUpdates["MF取引先"] = verification.name || "";
               confirmLines.push(`適格請求書: ${verification.registrationNumber}（${verification.name}）`);
             } else {
               confirmLines.push(`⚠️ 適格請求書: ${verification.registrationNumber} — ${verification.error}`);
@@ -1226,8 +1238,12 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
               const buf = Buffer.from(await fileRes.arrayBuffer());
               const statusData = statusResult?.data as Record<string, unknown> | undefined;
               // 仕訳日 = 検収日（原則）→ 取引日 → 本日のフォールバック
-              const txDate = String(statusData?.["検収日"] || statusData?.["取引日"] || new Date().toISOString().slice(0, 10));
-              const txAmount = Number(statusData?.["金額"] || 0);
+              const txDate = String(statusData?.["検収日"] || statusData?.["申請日"] || new Date().toISOString().slice(0, 10));
+              const txAmountExclTax = Number(statusData?.["合計額（税抜）"] || 0);
+              // 発注データは税抜なので税込に換算（仕訳は税込ベース）
+              const txAmount = txAmountExclTax > 0
+                ? Math.round(txAmountExclTax * (1 + (detectedTaxRate ?? 10) / 100))
+                : 0;
               const supplier = String(statusData?.["購入先"] || "不明");
 
               // Google Driveにアップロード
@@ -1245,26 +1261,41 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
               confirmLines.push(`Google Driveに証憑を保存しました: ${driveResult.fileName}`);
               console.log(`[file-share] Drive uploaded: ${prNumber}`, driveResult);
 
-              // MF会計Plus仕訳を作成（Driveリンクをメモに含める）
-              if (process.env.MF_OAUTH_CLIENT_ID && txAmount > 0) {
+              // MF会計Plus仕訳を作成（証憑金額優先、再承認待ちは保留）
+              // 仕訳金額: OCR証憑金額（税込）があればそちらを正とする。なければ発注データにフォールバック
+              const journalAmount = ocrAmount || txAmount;
+              if (pendingReapproval) {
+                // 再承認待ち → 仕訳は承認後に作成（handleAmountDiffApproveで処理）
+                confirmLines.push(`⏸️ 仕訳登録は金額差異の再承認後に自動作成されます`);
+                console.log(`[file-share] Journal deferred (pending reapproval): ${prNumber}`);
+              } else if (process.env.MF_OAUTH_CLIENT_ID && journalAmount > 0) {
                 try {
                   const { buildJournalFromPurchase, createJournal } = await import("@/lib/mf-accounting");
                   const accountTitle = String(statusData?.["勘定科目"] || "消耗品費");
                   const department = String(statusData?.["部門"] || "");
+                  const itemName = String(statusData?.["品目名"] || "");
+                  const katanaPo = String(statusData?.["PO番号"] || "");
+                  const budgetNum = String(statusData?.["予算番号"] || "");
+                  // 取引先: 国税API確定名 > 発注データの購入先
+                  const journalSupplier = verifiedSupplierName || supplier;
                   const journalReq = await buildJournalFromPurchase({
                     transactionDate: txDate,
                     accountTitle,
-                    amount: txAmount,
+                    amount: journalAmount,
                     paymentMethod,
-                    supplierName: supplier,
+                    supplierName: journalSupplier,
                     department: department || undefined,
                     poNumber: prNumber,
-                    memo: `${prNumber} ${supplier} 証憑: ${driveResult.webViewLink}`,
+                    memo: `証憑: ${driveResult.webViewLink}`,
                     ocrTaxRate: detectedTaxRate,
+                    itemName: itemName || undefined,
+                    katanaPo: katanaPo || undefined,
+                    budgetNumber: budgetNum || undefined,
                   });
                   const journalRes = await createJournal(journalReq);
-                  confirmLines.push(`MF会計Plusに仕訳を登録しました（ID: ${journalRes.id}）`);
-                  console.log(`[file-share] Journal created: ${prNumber}`, journalRes);
+                  const amountSource = ocrAmount ? "証憑" : "発注";
+                  confirmLines.push(`MF会計Plusに仕訳を登録しました（ID: ${journalRes.id}、金額: ${amountSource}ベース ¥${journalAmount.toLocaleString()}）`);
+                  console.log(`[file-share] Journal created: ${prNumber} (amount source: ${amountSource}, ¥${journalAmount})`, journalRes);
 
                   // GASにStage 1仕訳IDを記録
                   await updateStatus(prNumber, {

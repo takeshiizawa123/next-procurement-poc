@@ -175,6 +175,7 @@ export async function registerPurchase(data: {
   purchaseSourceUrl?: string;
   hubspotInfo?: string;
   budgetNumber?: string;
+  katanaPo?: string;
   paymentMethod?: string;
   approver?: string;
   deliveryDate?: string;

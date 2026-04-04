@@ -25,6 +25,9 @@ export interface MfTokens {
 // インメモリキャッシュ（Vercel serverless では関数インスタンスごとに保持）
 let cachedTokens: MfTokens | null = null;
 
+// cookie認証日時（30日有効期限の起算用）
+let cookieAuthTimestamp: number | null = null;
+
 /**
  * OAuth認可URLを生成
  */
@@ -81,6 +84,9 @@ export async function getValidAccessToken(): Promise<string> {
   if (Date.now() > tokens.expires_at - 5 * 60 * 1000) {
     tokens = await refreshAccessToken(tokens.refresh_token);
   }
+
+  // cookie有効期限の監視（残り7日で通知）
+  checkCookieExpiry().catch(() => {});
 
   return tokens.access_token;
 }
@@ -155,7 +161,33 @@ async function saveTokens(tokens: MfTokens): Promise<void> {
   cachedTokens = tokens;
   // プロセス内の環境変数も更新（同一インスタンスでのloadTokens用）
   process.env.MF_REFRESH_TOKEN = tokens.refresh_token;
-  console.log("[mf-oauth] Token cached (expires_at:", new Date(tokens.expires_at).toISOString(), ", refresh rotated:", tokens.refresh_token !== process.env._MF_ORIG_REFRESH, ")");
+
+  // cookieにもrefresh_tokenを保存（コールドスタート後のブートストラップ用）
+  try {
+    const { cookies } = await import("next/headers");
+    const cookieStore = await cookies();
+    cookieStore.set("mf_refresh_token", tokens.refresh_token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      maxAge: 30 * 24 * 60 * 60, // 30日
+      path: "/api/mf",
+    });
+    // 認証日時も記録（期限監視用）
+    const now = Date.now();
+    cookieAuthTimestamp = now;
+    cookieStore.set("mf_auth_timestamp", String(now), {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      maxAge: 30 * 24 * 60 * 60,
+      path: "/api/mf",
+    });
+  } catch {
+    // Route Handler外（Slack webhook等）ではcookie設定不可 — インメモリのみ
+  }
+
+  console.log("[mf-oauth] Token saved (expires_at:", new Date(tokens.expires_at).toISOString(), ")");
 }
 
 async function loadTokens(): Promise<MfTokens | null> {
@@ -176,6 +208,11 @@ async function loadTokens(): Promise<MfTokens | null> {
     const cookieToken = cookieStore.get("mf_refresh_token")?.value;
     if (cookieToken && !candidates.includes(cookieToken)) {
       candidates.push(cookieToken);
+    }
+    // 認証日時を復元（期限監視用）
+    const ts = cookieStore.get("mf_auth_timestamp")?.value;
+    if (ts && !cookieAuthTimestamp) {
+      cookieAuthTimestamp = Number(ts);
     }
   } catch {
     // cookieアクセス不可
@@ -203,4 +240,85 @@ async function loadTokens(): Promise<MfTokens | null> {
  */
 export function isAuthenticated(): boolean {
   return cachedTokens !== null || !!process.env.MF_REFRESH_TOKEN;
+}
+
+/**
+ * 認証状態の詳細情報を返す
+ */
+export async function getAuthStatus(): Promise<{
+  authenticated: boolean;
+  accessTokenExpiresAt: string | null;
+  cookieAuthAt: string | null;
+  cookieExpiresAt: string | null;
+  cookieDaysRemaining: number | null;
+}> {
+  // cookieからtimestampを読み取り
+  let authTs = cookieAuthTimestamp;
+  if (!authTs) {
+    try {
+      const { cookies } = await import("next/headers");
+      const cookieStore = await cookies();
+      const ts = cookieStore.get("mf_auth_timestamp")?.value;
+      if (ts) authTs = Number(ts);
+    } catch { /* cookie不可 */ }
+  }
+
+  const COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  const cookieExpiresAt = authTs ? authTs + COOKIE_MAX_AGE_MS : null;
+  const daysRemaining = cookieExpiresAt
+    ? Math.max(0, Math.round((cookieExpiresAt - Date.now()) / (24 * 60 * 60 * 1000)))
+    : null;
+
+  return {
+    authenticated: isAuthenticated(),
+    accessTokenExpiresAt: cachedTokens ? new Date(cachedTokens.expires_at).toISOString() : null,
+    cookieAuthAt: authTs ? new Date(authTs).toISOString() : null,
+    cookieExpiresAt: cookieExpiresAt ? new Date(cookieExpiresAt).toISOString() : null,
+    cookieDaysRemaining: daysRemaining,
+  };
+}
+
+const COOKIE_WARN_DAYS = 7;
+
+/**
+ * cookie有効期限が残り7日以内ならSlack OPSチャネルに通知
+ * getValidAccessToken内から呼ばれる（1日1回まで）
+ */
+let lastExpiryWarning = 0;
+async function checkCookieExpiry(): Promise<void> {
+  const now = Date.now();
+  // 1日に1回だけチェック
+  if (now - lastExpiryWarning < 24 * 60 * 60 * 1000) return;
+
+  let authTs = cookieAuthTimestamp;
+  if (!authTs) {
+    try {
+      const { cookies } = await import("next/headers");
+      const cookieStore = await cookies();
+      const ts = cookieStore.get("mf_auth_timestamp")?.value;
+      if (ts) authTs = Number(ts);
+    } catch { return; }
+  }
+  if (!authTs) return;
+
+  const COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  const expiresAt = authTs + COOKIE_MAX_AGE_MS;
+  const daysRemaining = (expiresAt - now) / (24 * 60 * 60 * 1000);
+
+  if (daysRemaining <= COOKIE_WARN_DAYS && daysRemaining > 0) {
+    lastExpiryWarning = now;
+    const slackToken = process.env.SLACK_BOT_TOKEN;
+    const opsChannel = process.env.SLACK_OPS_CHANNEL;
+    if (slackToken && opsChannel) {
+      fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${slackToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: opsChannel,
+          text: `⚠️ *MF会計Plus認証の有効期限が残り${Math.ceil(daysRemaining)}日です*\ncookie有効期限: ${new Date(expiresAt).toLocaleDateString("ja-JP")}\n→ /api/mf/auth?force=true から再認証してください。`,
+        }),
+      }).catch(() => {});
+    }
+    console.warn(`[mf-oauth] Cookie expiry warning: ${Math.ceil(daysRemaining)} days remaining`);
+  }
 }

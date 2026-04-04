@@ -1,7 +1,7 @@
 import { WebClient } from "@slack/web-api";
 import { updateStatus, getStatus, getPendingVouchers } from "./gas-client";
 import { generatePrediction, isCardPayment } from "./prediction";
-import { buildAmountDiffJournal, createJournal } from "./mf-accounting";
+import { buildAmountDiffJournal, buildJournalFromPurchase, createJournal } from "./mf-accounting";
 
 /** GAS更新を実行し、失敗時にSlackスレッドに警告を投稿する */
 async function safeUpdateStatus(
@@ -1044,34 +1044,50 @@ const handleAmountDiffApprove: SlackActionHandler = async ({
 
   await notifyOps(client, `✅ *金額差異承認* ${prNumber}（${userName}）— 証憑¥${ocrAmount.toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}→ 合計額を税抜¥${ocrSubtotal.toLocaleString()}に更新`);
 
-  // 差額仕訳の自動生成（MF会計Plus）
-  const difference = ocrAmount - Number(requestedAmountStr);
-  if (difference !== 0) {
+  // 再承認後: 証憑金額で本仕訳��作成（A案: 差額仕訳ではなく証憑ベースで1本仕訳）
+  if (ocrAmount > 0 && process.env.MF_OAUTH_CLIENT_ID) {
     try {
       const statusResult = await getStatus(prNumber);
-      const purchase = (statusResult.success && statusResult.data) ? statusResult.data as Record<string, unknown> : {};
-      const diffJournal = await buildAmountDiffJournal({
+      const p = (statusResult.success && statusResult.data) ? statusResult.data as Record<string, unknown> : {};
+      const txDate = String(p["検収日"] || p["申請日"] || new Date().toISOString().split("T")[0]);
+      const itemName = String(p["品目名"] || "");
+      const katanaPo = String(p["PO番号"] || "");
+      const budgetNum = String(p["予算番号"] || "");
+      // 取引先: 国税API確定名 > 発注データの購入先
+      const verifiedName = String(p["MF取引先"] || "");
+      const supplierName = verifiedName || String(p["購入先"] || "");
+      const journalReq = await buildJournalFromPurchase({
+        transactionDate: txDate,
+        accountTitle: String(p["勘定科目"] || "消耗品費"),
+        amount: ocrAmount,  // 証憑金額（税込）で仕訳
+        paymentMethod: String(p["支払方法"] || ""),
+        supplierName,
+        department: String(p["部門"] || ""),
         poNumber: prNumber,
-        difference,
-        paymentMethod: String(purchase["支払方法"] || ""),
-        supplierName: String(purchase["購入先"] || ""),
-        transactionDate: new Date().toISOString().split("T")[0],
-        department: String(purchase["部門"] || ""),
-        ocrTaxRate: undefined, // OCR税率は actionValue に含まれないためデフォルト10%
+        memo: `金額差異承認済（${userName}）`,
+        itemName: itemName || undefined,
+        katanaPo: katanaPo || undefined,
+        budgetNumber: budgetNum || undefined,
       });
-      const journalResult = await createJournal(diffJournal);
+      const journalResult = await createJournal(journalReq);
       await client.chat.postMessage({
         channel: channelId,
         thread_ts: messageTs,
-        text: `📝 差額仕訳を登録しました（MF仕訳ID: ${journalResult.id} / ${difference > 0 ? "雑損失" : "仕入値引"} ¥${Math.abs(difference).toLocaleString()}）`,
+        text: `✅ 仕訳を登録しました（MF仕訳ID: ${journalResult.id} / 証憑金額 ¥${ocrAmount.toLocaleString()}）`,
       });
-      await notifyOps(client, `📝 *差額仕訳* ${prNumber} — MF仕訳ID: ${journalResult.id} / ${difference > 0 ? "雑損失" : "仕入値引"} ¥${Math.abs(difference).toLocaleString()}`);
+      await notifyOps(client, `✅ *仕訳登録（再承認後）* ${prNumber} — MF仕訳ID: ${journalResult.id} / 証憑¥${ocrAmount.toLocaleString()}`);
+
+      // GASにStage 1仕訳IDを記録
+      await safeUpdateStatus(client, channelId, messageTs, prNumber, {
+        "仕訳ID": String(journalResult.id),
+        "Stage": "1",
+      }, "amount_diff_journal");
     } catch (journalErr) {
       console.error(`[amount_diff] Journal creation failed for ${prNumber}:`, journalErr);
       await client.chat.postMessage({
         channel: channelId,
         thread_ts: messageTs,
-        text: `⚠️ 差額仕訳の自動登録に失敗しました。手動で登録してください。（${journalErr instanceof Error ? journalErr.message : String(journalErr)}）`,
+        text: `⚠️ 仕訳の自動登録に失敗しました。手動で登録してください。（${journalErr instanceof Error ? journalErr.message : String(journalErr)}）`,
       });
     }
   }

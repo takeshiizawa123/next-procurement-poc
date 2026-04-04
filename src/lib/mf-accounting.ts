@@ -381,6 +381,12 @@ export async function buildJournalFromPurchase(params: {
   memo?: string;
   /** OCR読取の税率（8 or 10）。8%の場合は軽減税率の税区分を使用 */
   ocrTaxRate?: number;
+  /** 品名（OCRまたは発注データ） */
+  itemName?: string;
+  /** KATANA PO番号 */
+  katanaPo?: string;
+  /** 実行予算番号 */
+  budgetNumber?: string;
 }): Promise<CreateJournalRequest> {
   const {
     transactionDate,
@@ -392,6 +398,9 @@ export async function buildJournalFromPurchase(params: {
     poNumber,
     memo,
     ocrTaxRate,
+    itemName,
+    katanaPo,
+    budgetNumber,
   } = params;
 
   // 借方: 費用科目を解決
@@ -423,15 +432,28 @@ export async function buildJournalFromPurchase(params: {
   const taxRatePercent = TAX_RATE_MAP[taxTypeName] ?? 10;
   const taxValue = taxRatePercent > 0 ? Math.floor(amount * taxRatePercent / (100 + taxRatePercent)) : 0;
 
+  // 摘要の構築: 年月 PO番号 [予算番号] [KATANA PO] 品名
+  const yearMonth = transactionDate.slice(0, 7).replace("-", "/");
+  const remarkParts = [yearMonth, poNumber];
+  if (budgetNumber) remarkParts.push(budgetNumber);
+  if (katanaPo) remarkParts.push(katanaPo);
+  if (itemName) remarkParts.push(itemName);
+  const remark = remarkParts.join(" ");
+
+  // メモ: 摘要 + 取引先名 + 証憑リンク等（検索用）
+  const memoParts = [yearMonth, poNumber, supplierName];
+  if (memo) memoParts.push(memo);
+  const journalMemo = memoParts.join(" ");
+
   return {
     status: "draft",
     transaction_date: transactionDate,
     journal_type: "journal_entry",
     tags: [poNumber],
-    memo: memo || `${transactionDate.slice(0, 7).replace("-", "/")} ${poNumber} ${supplierName}`,
+    memo: journalMemo,
     branches: [
       {
-        remark: `${poNumber} ${supplierName}${memo ? ` ${memo}` : ""}`,
+        remark,
         debitor: {
           account_code: debitAccountCode || mainAccount,
           tax_code: taxCode,

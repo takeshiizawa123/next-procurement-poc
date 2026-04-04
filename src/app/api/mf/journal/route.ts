@@ -45,27 +45,42 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 仕訳リクエストを構築
-    const amount = Number((purchase as Record<string, unknown>)["金額"] || 0);
+    // 仕訳リクエストを構築（証憑金額優先、フォールバック: 発注データ金額）
+    const voucherAmount = Number((purchase as Record<string, unknown>)["証憑金額"] || 0);
+    // 発注データは税抜なのでフォールバック時は税込換算
+    const orderAmountExclTax = Number((purchase as Record<string, unknown>)["合計額（税抜）"] || 0);
+    const orderAmount = orderAmountExclTax > 0 ? Math.round(orderAmountExclTax * 1.1) : 0;
+    const amount = voucherAmount || orderAmount;
     // 仕訳日 = 検収日（原則）→ 申請日 → 本日のフォールバック
     const transactionDate = String(
       (purchase as Record<string, unknown>)["検収日"] ||
       (purchase as Record<string, unknown>)["申請日"] ||
       new Date().toISOString().split("T")[0]
     );
+    const p = purchase as Record<string, unknown>;
+    const itemName = String(p["品目名"] || "");
+    const katanaPo = String(p["PO番号"] || "");
+    const budgetNum = String(p["予算番号"] || "");
+    // 取引先: 国税API確定名 > 発注データの購入先
+    const verifiedName = String(p["MF取引先"] || "");
+    const supplierName = verifiedName || String(p["購入先"] || "");
     const journalRequest = await buildJournalFromPurchase({
       transactionDate,
-      accountTitle: String((purchase as Record<string, unknown>)["勘定科目"] || "消耗品費"),
+      accountTitle: String(p["勘定科目"] || "消耗品費"),
       amount,
-      paymentMethod: String((purchase as Record<string, unknown>)["支払方法"] || ""),
-      supplierName: String((purchase as Record<string, unknown>)["購入先"] || ""),
-      department: String((purchase as Record<string, unknown>)["部門"] || ""),
+      paymentMethod: String(p["支払方法"] || ""),
+      supplierName,
+      department: String(p["部門"] || ""),
       poNumber: prNumber,
+      itemName: itemName || undefined,
+      katanaPo: katanaPo || undefined,
+      budgetNumber: budgetNum || undefined,
     });
 
     // MF会計Plusに仕訳登録
     const journalResult = await createJournal(journalRequest);
-    console.log("[mf-journal] Created:", { prNumber, journalId: journalResult.id });
+    const amountSource = voucherAmount ? "証憑" : "発注";
+    console.log("[mf-journal] Created:", { prNumber, journalId: journalResult.id, amountSource, amount });
 
     // GASステータスを「計上済」に更新
     await updateStatus(prNumber, {
