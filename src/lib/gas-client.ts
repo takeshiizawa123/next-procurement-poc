@@ -416,3 +416,31 @@ export async function getEmployeeCards(): Promise<
 > {
   return callGasGet<{ employees: EmployeeCard[] }>({ action: "employeeCards" });
 }
+
+// ===========================================
+// MFマスタキャッシュ（GASスプレッドシート永続化）
+// ===========================================
+
+export interface MfMastersCache {
+  accounts: { code: string | null; name: string; taxId?: number }[];
+  taxes: { code: string | null; name: string; abbreviation?: string; taxRate?: number }[];
+  departments: { code: string | null; name: string }[];
+  subAccounts: { id: number; accountId: number; name: string }[];
+  projects: { code: string | null; name: string }[];
+  counterparties: { code: string | null; name: string; invoiceRegistrationNumber?: string | null }[];
+  syncedAt: string; // ISO timestamp
+}
+
+/**
+ * MFマスタデータをGASに保存
+ */
+export async function saveMfMasters(masters: MfMastersCache): Promise<GasResponse<{ saved: boolean }>> {
+  return callGasPost<{ saved: boolean }>("saveMfMasters", { masters });
+}
+
+/**
+ * GASからMFマスタデータを取得
+ */
+export async function getMfMasters(): Promise<GasResponse<{ masters: MfMastersCache }>> {
+  return callGasGet<{ masters: MfMastersCache }>({ action: "getMfMasters" });
+}

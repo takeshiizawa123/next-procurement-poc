@@ -3,25 +3,46 @@ import {
   getAccounts, getTaxes, getDepartments, getProjects,
   getCounterparties, fetchSubAccounts,
 } from "@/lib/mf-accounting";
+import { getMfMasters } from "@/lib/gas-client";
 import { requireApiKey, requireBearerAuth } from "@/lib/api-auth";
 
 /**
  * MF会計Plusマスタデータ一括取得API
  * GET /api/mf/masters
  *
- * OpenAPI仕様: docs/api-specs/openapi.yaml
- * - /masters/accounts → 勘定科目
- * - /masters/taxes → 税区分
- * - /masters/departments → 部門
- * - /masters/sub_accounts → 補助科目
- * - /masters/projects → プロジェクト
- * - /masters/counterparties → 取引先
+ * 1. GASキャッシュから取得（MF認証不要）
+ * 2. GASになければMF APIから直接取得（MF認証必要）
  */
 export async function GET(request: NextRequest) {
   const bearerError = requireBearerAuth(request);
   const apiKeyError = requireApiKey(request);
   if (bearerError && apiKeyError) return apiKeyError;
 
+  // 1. GASキャッシュから取得を試行
+  try {
+    const gasResult = await getMfMasters();
+    if (gasResult.success && gasResult.data?.masters) {
+      const m = gasResult.data.masters;
+      if (m.accounts?.length > 0) {
+        console.log("[mf-masters] Loaded from GAS cache (synced:", m.syncedAt, ")");
+        return NextResponse.json({
+          ok: true,
+          source: "gas",
+          syncedAt: m.syncedAt,
+          accounts: m.accounts,
+          taxes: m.taxes,
+          departments: m.departments,
+          subAccounts: m.subAccounts,
+          projects: m.projects,
+          counterparties: m.counterparties,
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("[mf-masters] GAS cache miss:", e instanceof Error ? e.message : "");
+  }
+
+  // 2. GASになければMF APIから直接取得
   try {
     const [accounts, taxes, departments, subAccounts, projects, counterparties] = await Promise.all([
       getAccounts(),
@@ -34,6 +55,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       ok: true,
+      source: "mf-api",
       accounts: accounts
         .filter((a) => a.available !== false)
         .map((a) => ({
