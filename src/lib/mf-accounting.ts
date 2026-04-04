@@ -42,12 +42,18 @@ export interface JournalResponse {
   url?: string;
 }
 
-interface MasterItem {
+export interface MasterItem {
   id: number;
   code: string | null;
   name: string;
   search_key?: string | null;
   available?: boolean;
+  // Account追加フィールド
+  tax_id?: number;
+  categories?: string[];
+  // Tax追加フィールド
+  abbreviation?: string;
+  tax_rate?: number;
 }
 
 // --- マスタキャッシュ (1時間TTL) ---
@@ -164,7 +170,7 @@ export async function resolveCounterpartyCode(name: string): Promise<string | un
 
 // --- 補助科目マスタ ---
 
-interface SubAccountItem {
+export interface SubAccountItem {
   id: number;
   code: string | null;
   account_id: number;
@@ -175,7 +181,7 @@ interface SubAccountItem {
 
 const subAccountCache: CacheEntry<SubAccountItem[]> | null = null;
 
-async function fetchSubAccounts(): Promise<SubAccountItem[]> {
+export async function fetchSubAccounts(): Promise<SubAccountItem[]> {
   if (subAccountCache && Date.now() - subAccountCache.fetchedAt < CACHE_TTL) {
     return subAccountCache.data;
   }

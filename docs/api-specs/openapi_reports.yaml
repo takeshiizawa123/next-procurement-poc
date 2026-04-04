@@ -1,0 +1,1494 @@
+openapi: 3.0.2
+info:
+  title: マネーフォワード クラウド会計Plus 帳票 API
+  version: 3.0.0
+  termsOfService: "https://biz.moneyforward.com/agreement/api"
+  contact:
+    name: Money Forward
+  description: |
+    マネーフォワード クラウド会計Plusの帳票API <br>
+
+    ## 認証
+
+    全てのAPIは、OAuth 2.0 を 用いて認証と認可を行います。<br>
+    OAuth 2.0に従って、アクセストークンを取得してください。<br>
+    取得したアクセストークンを Bearer Tokenとして Authorization Headerに付与する事で、APIリクエストが可能になります。<br>
+
+    ## リクエストID
+
+    全てのAPIリクエストに一意のリクエストIDが付与され、レスポンスヘッダーに `X-Request-ID`というキーで値が設定されます。<br>
+    お問い合わせいただく際にはリクエストIDをお伝えいただきますとスムーズにご対応できます。
+
+    ## エラーレスポンス
+
+    全てのAPIは3種類のステータスコード（2xx, 4xx, 5xx）を返却します。<br>
+    4xx, 5xx の場合は共通のレスポンスフォーマットでエラー用のレスポンスボディを返却します。<br>
+    エラーレスポンスにはエラーと同じ数の要素を含む配列が用意され、それぞれエラーの種別である `code` とエラー内容の `message` を含みます。<br>
+    エラーコードの種類やフォーマットなどの詳細は <a href="#model-Error">Error スキーマの定義</a> をご参照ください。
+servers:
+  - url: "https://api-enterprise-accounting.moneyforward.com/api/v3"
+    description: Production
+paths:
+  "/reports/trial_balance_bs":
+    get:
+      operationId: getReportsTrialBalanceBs
+      summary: 残高試算表の貸借対照表の取得
+      description: "残高試算表の貸借対照表を取得します。  \n全ての項目の金額が0の勘定科目、補助科目と一部の決算書の項目は返却されません。また、補助科目の `ratio` は `0.0` が固定で返却されます。  \n残高試算表の `columns` は `[opening_balance, debit_amount, credit_amount, closing_balance, ratio]` が固定で返却されます。\n"
+      tags:
+        - Reports
+      parameters:
+        - $ref: "#/components/parameters/fiscal_year"
+        - $ref: "#/components/parameters/start_month"
+        - $ref: "#/components/parameters/end_month"
+        - $ref: "#/components/parameters/start_date"
+        - $ref: "#/components/parameters/end_date"
+        - $ref: "#/components/parameters/approval_statuses"
+        - $ref: "#/components/parameters/department_id"
+        - $ref: "#/components/parameters/department_total"
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/counterparty_id"
+        - $ref: "#/components/parameters/journal_types"
+        - $ref: "#/components/parameters/with_sub_accounts"
+        - $ref: "#/components/parameters/include_tax"
+      responses:
+        "200":
+          description: |
+            残高試算表の貸借対照表を取得します。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+              example:
+                report_type: trial_balance_bs
+                office:
+                  code: 0123-4567
+                  name: 株式会社マネーフォワード
+                start_date: 2021-04-01
+                end_date: 2022-03-31
+                created_at: 2022-01-28T11:22:33.444+09:00
+                columns: [opening_balance, debit_amount, credit_amount, closing_balance, ratio]
+                rows:
+                  - type: assets
+                    name: 資産の部
+                    values: [100, 1000, 500, 500, 0.56]
+                    rows:
+                      - type: financial_statement_item
+                        name: 流動資産
+                        values: [100, 1000, 500, 500, 0.56]
+                        rows:
+                          - type: financial_statement_item
+                            name: 現金及び預金
+                            values: [100, 1000, 500, 500, 0.56]
+                            rows:
+                              type: account
+                              id: 1
+                              code: A0001
+                              name: 現金
+                              values: [100, 1000, 500, 500, 0.56]
+                              rows:
+                                type: sub_account
+                                id: 1
+                                code: A0001A0001
+                                name: 小口現金
+                                values: [100, 1000, 500, 500, 0.56]
+                                rows: null
+                  - type: liabilities
+                    name: 負債の部
+                    values: [100, 1000, 500, 500, 0.56]
+                    rows:
+                      - type: financial_statement_item
+                        name: 流動負債
+                        values: [100, 1000, 500, 500, 0.56]
+                        rows:
+                          - type: financial_statement_item
+                            name: その他流動負債
+                            values: [100, 1000, 500, 500, 0.56]
+                            rows:
+                              - type: account
+                                id: 10
+                                code: B00020010
+                                name: 預り金
+                                values: [100, 1000, 500, 500, 0.56]
+                                rows:
+                                  - type: sub_account
+                                    id: 11
+                                    code: B00020011
+                                    name: 社会保険料
+                                    values: [100, 1000, 500, 500, 0.56]
+                                    rows: null
+                  - type: net_assets
+                    name: 純資産の部
+                    values: [100, 1000, 500, 500, 0.56]
+                    rows:
+                      - type: financial_statement_item
+                        name: 株主資本
+                        values: [100, 1000, 500, 500, 0.56]
+                        rows:
+                          - type: financial_statement_item
+                            name: 資本金
+                            values: [100, 1000, 500, 500, 0.56]
+                            rows:
+                              - type: account
+                                id: 100
+                                code: C0001
+                                name: 資本金
+                                values: [100, 1000, 500, 500, 0.56]
+                                rows: null
+                  - type: liabilities_net_assets
+                    name: 負債・純資産の部合計
+                    values: [100, 1000, 500, 500, 0.56]
+                    rows: null
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+  "/reports/trial_balance_pl":
+    get:
+      operationId: getReportsTrialBalancePl
+      summary: 残高試算表の損益計算書の取得
+      description: "残高試算表の損益計算書を取得します。  \n全ての項目の金額が0の勘定科目、補助科目と一部の決算書の項目は返却されません。また、補助科目の `ratio` は `0.0` が固定で返却されます。  \n残高試算表の `columns` は `[opening_balance, debit_amount, credit_amount, closing_balance, ratio]` が固定で返却されます。\n"
+      tags:
+        - Reports
+      parameters:
+        - $ref: "#/components/parameters/fiscal_year"
+        - $ref: "#/components/parameters/start_month"
+        - $ref: "#/components/parameters/end_month"
+        - $ref: "#/components/parameters/start_date"
+        - $ref: "#/components/parameters/end_date"
+        - $ref: "#/components/parameters/approval_statuses"
+        - $ref: "#/components/parameters/department_id"
+        - $ref: "#/components/parameters/department_total"
+        - $ref: "#/components/parameters/project_id"
+        - $ref: "#/components/parameters/counterparty_id"
+        - $ref: "#/components/parameters/journal_types"
+        - $ref: "#/components/parameters/with_sub_accounts"
+        - $ref: "#/components/parameters/include_tax"
+      responses:
+        "200":
+          description: |
+            残高試算表の損益計算書を取得します。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+              example:
+                report_type: trial_balance_pl
+                office:
+                  code: 0123-4567
+                  name: 株式会社マネーフォワード
+                start_date: 2021-04-01
+                end_date: 2022-03-31
+                created_at: 2022-01-28T11:22:33.444+09:00
+                columns: [opening_balance, debit_amount, credit_amount, closing_balance, ratio]
+                rows:
+                  - type: financial_statement_item
+                    name: 売上高
+                    values: [100, 1000, 500, 500, 0.56]
+                    rows:
+                      - type: account
+                        id: 1
+                        code: P001
+                        name: 売上高
+                        values: [100, 1000, 500, 500, 0.56]
+                        rows:
+                          - type: sub_account
+                            id: 10
+                            code: P001001
+                            name: 売上高1
+                            values: [100, 1000, 500, 500, 0.56]
+                            rows: null
+                  - type: financial_statement_item
+                    name: 売上原価
+                    values: [100, 1000, 500, 500, 0.56]
+                    rows:
+                      - type: account
+                        id: 2
+                        code: P002
+                        name: 仕入高
+                        values: [100, 1000, 500, 500, 0.56]
+                        rows: null
+                      - type: financial_statement_item
+                        name: 当期製品製造原価
+                        values: [100, 1000, 500, 500, 0.56]
+                        rows: null
+                  - type: financial_statement_item
+                    name: 当期純損失
+                    values: [100, 1000, 500, 500, 0.56]
+                    rows:
+                      - type: financial_statement_item
+                        name: 税引前当期純損失
+                        values: [100, 1000, 500, 500, 0.56]
+                        rows: null
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+  "/reports/department_table_bs":
+    get:
+      operationId: getReportsDepartmentTableBs
+      summary: 部門別集計表の貸借対照表の取得
+      description: "部門別集計表の貸借対照表を取得します。  \n全ての項目の金額が0の勘定科目、補助科目と一部の決算書の項目は返却されません。\n"
+      tags:
+        - Reports
+      parameters:
+        - name: fiscal_year
+          in: query
+          description: "会計年度を指定します。\n`fiscal_year`,`start_month`, `end_month`のすべてを指定しない場合は最新の会計年度になります。  \n`start_month`, `end_month`を指定し`fiscal_year`を指定しない場合は、開始日が一番早い会計年度になります。  \n`fiscal_year`, `start_month`, `end_month` と組み合わせて会計年度を指定できます。ただし、一意に特定できない場合は、該当する年度のうち開始日が一番早い年度になります。\n`start_month`, `end_month` と組み合わせて会計年度・会計月を指定できます。  \n`start_date`, `end_date` のいずれか1つでもが同時に指定されている場合はエラーになります。\n"
+          schema:
+            type: integer
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,min=1,max=9999"
+            query: "fiscal_year"
+          example: 2022
+        - name: start_month
+          in: query
+          description: "対象の開始月を指定します。指定しない場合は会計年度の開始月になります。  \n`fiscal_year`, `end_month` と組み合わせて会計年度・会計月を指定できます。\n`start_date`, `end_date` のいずれか1つでも同時に指定されている場合はエラーになります。\n"
+          schema:
+            type: integer
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,min=1,max=12"
+            query: "start_month"
+          example: 4
+        - name: end_month
+          in: query
+          description: "対象の終了月を指定します。指定しない場合は会計年度の終了月になります。  \n`fiscal_year`, `start_month` と組み合わせて会計年度・会計月を指定できます。  \n`start_date`, `end_date` のいずれか1つでも同時に指定されている場合はエラーになります。\n"
+          schema:
+            type: integer
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,min=1,max=12"
+            query: "end_month"
+          example: 3
+        - name: start_date
+          in: query
+          description: "対象の開始年月日を指定します。指定しない場合は会計年度の初日になります。  \n`end_date` と組み合わせて開始・終了年月日を指定できます。  \n`fiscal_year`, `start_month`, `end_month` のいずれか1つでも同時に指定されている場合はエラーになります。\n"
+          schema:
+            type: string
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,datetime=2006-01-02"
+            query: "start_date"
+          example: 2022-04-01
+        - name: end_date
+          in: query
+          description: "対象の終了年月日を指定します。指定しない場合は会計年度の最終日になります。  \n`start_date` と組み合わせて開始・終了年月日を指定できます。  \n`fiscal_year`, `start_month`, `end_month` のいずれか1つでも同時に指定されている場合はエラーになります。\n`end_date` が指定されている場合は、部門履歴に使用されます。\n"
+          schema:
+            type: string
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,datetime=2006-01-02"
+            query: "end_date"
+          example: 2022-04-01
+        - name: approval_statuses
+          in: query
+          description: 仕訳の承認ステータスを指定します。指定しない場合は承認済の仕訳のみ対象になります。
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - draft
+                - rejected
+                - applying
+                - approved
+              description: |
+                仕訳の承認ステータス
+                - `draft`: 申請前
+                - `rejected`: 差戻し
+                - `applying`: 申請中
+                - `approved`: 承認済
+            default: [approved]
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,max=4,unique"
+            query: "approval_statuses"
+          x-go-type-skip-optional-pointer: true
+          example: [applying, approved]
+        - name: department_ids
+          in: query
+          description: 対象の部門のIDsを指定します。指定しない場合は全ての部門が対象になります。
+          schema:
+            type: array
+            format: int64
+            items:
+              type: integer
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,unique"
+            query: "department_ids"
+          x-go-type-skip-optional-pointer: true
+          example: [1, 2]
+        - name: department_total
+          in: query
+          description: "指定した部門の合計を含めるかどうかを指定します。指定しない場合は、対象部門の合計が含まれます。  \n全部門共通の金額のみ取得したい場合は、`false` を指定します。\n"
+          schema:
+            type: boolean
+            default: true
+          required: false
+          x-oapi-codegen-extra-tags:
+            query: "department_total"
+          example: true
+        - name: journal_types
+          in: query
+          description: 対象の仕訳の種別を指定します
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - journal_entry
+                - adjusting_entry
+              description: |
+                仕訳の種別
+                * `journal_entry`: 通常の仕訳
+                * `adjusting_entry`: 決算整理仕訳
+            default: [journal_entry, adjusting_entry]
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,max=2,unique"
+            query: "journal_types"
+          x-go-type-skip-optional-pointer: true
+          example: [journal_entry, adjusting_entry]
+        - name: with_sub_accounts
+          in: query
+          description: 勘定科目に紐づく補助科目の金額を取得するかどうかを指定します
+          schema:
+            type: boolean
+            default: false
+          required: false
+          x-oapi-codegen-extra-tags:
+            query: "with_sub_accounts"
+          example: true
+        - name: include_tax
+          in: query
+          description: "税込で算出するかどうかを指定します。  \n税抜（内税）の経理方式の場合のみ指定可能です。税込および税抜（別記）の経理方式の場合、このパラメーターは無視されます。\n"
+          schema:
+            type: boolean
+            default: false
+          required: false
+          x-oapi-codegen-extra-tags:
+            query: "include_tax"
+          example: true
+      responses:
+        "200":
+          description: |
+            部門別集計表の貸借対照表を取得します。
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - columns
+                  - rows
+                  - office
+                  - report_type
+                  - start_date
+                  - end_date
+                  - created_at
+                properties:
+                  report_type:
+                    type: string
+                    enum:
+                      - department_table_bs
+                      - department_table_pl
+                  office:
+                    description: 事業者の情報
+                    type: object
+                    required:
+                      - name
+                      - code
+                    properties:
+                      code:
+                        description: 事業者コード
+                        type: string
+                      name:
+                        description: 対象の会計年度の事業者名
+                        type: string
+                    example:
+                      code: 0123-4567
+                      name: 株式会社マネーフォワード
+                  start_date:
+                    description: 対象期間開始日
+                    type: string
+                    format: date
+                  end_date:
+                    description: 対象期間終了日
+                    type: string
+                    format: date
+                  created_at:
+                    description: 帳票を作成した日時
+                    type: string
+                    format: date-time
+                  columns:
+                    description: 部門列
+                    type: array
+                    items:
+                      description: 部門別集計表の列情報
+                      type: object
+                      required:
+                        - id
+                        - name
+                        - parent_id
+                      properties:
+                        id:
+                          description: 部門ID
+                          type: integer
+                        name:
+                          description: 部門名
+                          type: string
+                        parent_id:
+                          description: 親部門ID
+                          type: integer
+                        code:
+                          description: 部門コード
+                          type: string
+                  rows:
+                    description: 項目・科目の集まり
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - rows
+                        - name
+                        - values
+                      properties:
+                        type:
+                          type: string
+                          enum:
+                            - assets
+                            - liabilities
+                            - net_assets
+                            - liabilities_net_assets
+                            - financial_statement_item
+                            - account
+                            - sub_account
+                          description: |
+                            行の種別
+                            - `assets`: 資産の部
+                            - `liabilities`: 負債の部
+                            - `net_assets`: 純資産の部
+                            - `liabilities_net_assets`: 負債・純資産の部合計
+                            - `financial_statement_item`: `流動資産`や`現金及び預金`など決算書の項目
+                            - `account`: 勘定科目
+                            - `sub_account`: 補助科目
+                        id:
+                          description: ID (typeが`account`または`sub_account`の場合のみ)
+                          type: integer
+                          format: int64
+                          nullable: true
+                        code:
+                          description: コード (typeが`account`または`sub_account`の場合のみ)
+                          type: string
+                          nullable: true
+                        name:
+                          description: 名称
+                          type: string
+                        values:
+                          description: 各部門列に対応する値の配列
+                          type: array
+                          items:
+                            type: integer
+                            format: int64
+                        rows:
+                          description: 項目・科目の集まり
+                          type: array
+                          items:
+                            type: object
+                            required:
+                              - rows
+                              - name
+                              - values
+                            properties:
+                              type:
+                                type: string
+                                enum:
+                                  - assets
+                                  - liabilities
+                                  - net_assets
+                                  - liabilities_net_assets
+                                  - financial_statement_item
+                                  - account
+                                  - sub_account
+                                description: |
+                                  行の種別
+                                  - `assets`: 資産の部
+                                  - `liabilities`: 負債の部
+                                  - `net_assets`: 純資産の部
+                                  - `liabilities_net_assets`: 負債・純資産の部合計
+                                  - `financial_statement_item`: `流動資産`や`現金及び預金`など決算書の項目
+                                  - `account`: 勘定科目
+                                  - `sub_account`: 補助科目
+                              id:
+                                description: ID (typeが`account`または`sub_account`の場合のみ)
+                                type: integer
+                                format: int64
+                                nullable: true
+                              code:
+                                description: コード (typeが`account`または`sub_account`の場合のみ)
+                                type: string
+                                nullable: true
+                              name:
+                                description: 名称
+                                type: string
+                              values:
+                                description: 各部門列に対応する値の配列
+                                type: array
+                                items:
+                                  type: integer
+                                  format: int64
+                              rows:
+                                description: 項目・科目の集まり。nullの場合もある。
+                                type: array
+                                items:
+                                  type: object
+                                  required:
+                                    - rows
+                                    - name
+                                    - values
+                                  properties:
+                                    type:
+                                      type: string
+                                      enum:
+                                        - assets
+                                        - liabilities
+                                        - net_assets
+                                        - liabilities_net_assets
+                                        - financial_statement_item
+                                        - account
+                                        - sub_account
+                                    id:
+                                      description: ID (typeが`account`または`sub_account`の場合のみ)
+                                      type: integer
+                                      format: int64
+                                      nullable: true
+                                    code:
+                                      description: コード (typeが`account`または`sub_account`の場合のみ)
+                                      type: string
+                                      nullable: true
+                                    name:
+                                      description: 名称 (typeが`financial_statement_item`, `account`, `sub_account`の場合のみ)
+                                      type: string
+                                    values:
+                                      description: 各部門列に対応する値の配列
+                                      type: array
+                                      items:
+                                        type: integer
+                                        format: int64
+              example:
+                report_type: department_table_bs
+                office:
+                  code: 0123-4567
+                  name: 株式会社マネーフォワード
+                start_date: 2021-04-01
+                end_date: 2022-03-31
+                created_at: 2022-01-28T11:22:33.444+09:00
+                columns:
+                  - id: 0
+                    name: 合計
+                    parent_id: 0
+                  - id: 2
+                    name: parent (合計)
+                    code: H1000
+                    parent_id: 0
+                  - id: 3
+                    name: parent
+                    parent_id: 2
+                  - id: 4
+                    name: child1
+                    code: H1100
+                    parent_id: 2
+                  - id: 0
+                    name: 部門なし
+                    parent_id: 0
+                rows:
+                  - type: assets
+                    name: 資産の部
+                    values: [1100, 1000, 500, 500, 100]
+                    rows:
+                      - type: financial_statement_item
+                        name: 流動資産
+                        values: [1100, 1000, 500, 500, 100]
+                        rows:
+                          - type: financial_statement_item
+                            name: 現金及び預金
+                            values: [1100, 1000, 500, 500, 100]
+                            rows:
+                              - type: account
+                                id: 1
+                                code: A0001
+                                name: 現金
+                                values: [1100, 1000, 500, 500, 100]
+                                rows:
+                                  - type: sub_account
+                                    id: 1
+                                    code: A0001A0001
+                                    name: 小口現金
+                                    values: [1100, 1000, 500, 500, 100]
+                                    rows: null
+                  - type: liabilities
+                    name: 負債の部
+                    values: [1100, 1000, 500, 500, 100]
+                    rows:
+                      - type: financial_statement_item
+                        name: 流動負債
+                        values: [1100, 1000, 500, 500, 100]
+                        rows:
+                          - type: financial_statement_item
+                            name: その他流動負債
+                            values: [1100, 1000, 500, 500, 100]
+                            rows:
+                              - type: account
+                                id: 10
+                                code: B00020010
+                                name: 預り金
+                                values: [1100, 1000, 500, 500, 100]
+                                rows:
+                                  - type: sub_account
+                                    id: 11
+                                    code: B00020011
+                                    name: 社会保険料
+                                    values: [1100, 1000, 500, 500, 100]
+                                    rows: null
+                  - type: net_assets
+                    name: 純資産の部
+                    values: [1100, 1000, 500, 500, 100]
+                    rows:
+                      - type: financial_statement_item
+                        name: 株主資本
+                        values: [1100, 1000, 500, 500, 100]
+                        rows:
+                          - type: financial_statement_item
+                            name: 資本金
+                            values: [1100, 1000, 500, 500, 100]
+                            rows:
+                              - type: account
+                                id: 100
+                                code: C0001
+                                name: 資本金
+                                values: [1100, 1000, 500, 500, 100]
+                                rows: null
+                  - type: liabilities_net_assets
+                    name: 負債・純資産の部合計
+                    values: [1100, 1000, 500, 500, 100]
+                    rows: []
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+  "/reports/department_table_pl":
+    get:
+      operationId: getReportsDepartmentTablePl
+      summary: 部門別集計表の損益計算書の取得
+      description: "部門別集計表の損益計算書を取得します。  \n全ての項目の金額が0の勘定科目、補助科目と一部の決算書の項目は返却されません。\n"
+      tags:
+        - Reports
+      parameters:
+        - name: fiscal_year
+          in: query
+          description: "会計年度を指定します。\n`fiscal_year`,`start_month`, `end_month`のすべてを指定しない場合は最新の会計年度になります。  \n`start_month`, `end_month`を指定し`fiscal_year`を指定しない場合は、開始日が一番早い会計年度になります。  \n`fiscal_year`, `start_month`, `end_month` と組み合わせて会計年度を指定できます。ただし、一意に特定できない場合は、該当する年度のうち開始日が一番早い年度になります。\n`start_month`, `end_month` と組み合わせて会計年度・会計月を指定できます。  \n`start_date`, `end_date` のいずれか1つでもが同時に指定されている場合はエラーになります。\n"
+          schema:
+            type: integer
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,min=1,max=9999"
+            query: "fiscal_year"
+          example: 2022
+        - name: start_month
+          in: query
+          description: "対象の開始月を指定します。指定しない場合は会計年度の開始月になります。  \n`fiscal_year`, `end_month` と組み合わせて会計年度・会計月を指定できます。\n`start_date`, `end_date` のいずれか1つでも同時に指定されている場合はエラーになります。\n"
+          schema:
+            type: integer
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,min=1,max=12"
+            query: "start_month"
+          example: 4
+        - name: end_month
+          in: query
+          description: "対象の終了月を指定します。指定しない場合は会計年度の終了月になります。  \n`fiscal_year`, `start_month` と組み合わせて会計年度・会計月を指定できます。  \n`start_date`, `end_date` のいずれか1つでも同時に指定されている場合はエラーになります。\n"
+          schema:
+            type: integer
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,min=1,max=12"
+            query: "end_month"
+          example: 3
+        - name: start_date
+          in: query
+          description: "対象の開始年月日を指定します。指定しない場合は会計年度の初日になります。  \n`end_date` と組み合わせて開始・終了年月日を指定できます。  \n`fiscal_year`, `start_month`, `end_month` のいずれか1つでも同時に指定されている場合はエラーになります。\n"
+          schema:
+            type: string
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,datetime=2006-01-02"
+            query: "start_date"
+          example: 2022-04-01
+        - name: end_date
+          in: query
+          description: "対象の終了年月日を指定します。指定しない場合は会計年度の最終日になります。  \n`start_date` と組み合わせて開始・終了年月日を指定できます。  \n`fiscal_year`, `start_month`, `end_month` のいずれか1つでも同時に指定されている場合はエラーになります。\n`end_date` が指定されている場合は、部門履歴に使用されます。\n"
+          schema:
+            type: string
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,datetime=2006-01-02"
+            query: "end_date"
+          example: 2022-04-01
+        - name: approval_statuses
+          in: query
+          description: 仕訳の承認ステータスを指定します。指定しない場合は承認済の仕訳のみ対象になります。
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - draft
+                - rejected
+                - applying
+                - approved
+              description: |
+                仕訳の承認ステータス
+                - `draft`: 申請前
+                - `rejected`: 差戻し
+                - `applying`: 申請中
+                - `approved`: 承認済
+            default: [approved]
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,max=4,unique"
+            query: "approval_statuses"
+          x-go-type-skip-optional-pointer: true
+          example: [applying, approved]
+        - name: department_ids
+          in: query
+          description: 対象の部門のIDsを指定します。指定しない場合は全ての部門が対象になります。
+          schema:
+            type: array
+            format: int64
+            items:
+              type: integer
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,unique"
+            query: "department_ids"
+          x-go-type-skip-optional-pointer: true
+          example: [1, 2]
+        - name: department_total
+          in: query
+          description: "指定した部門の合計を含めるかどうかを指定します。指定しない場合は、対象部門の合計が含まれます。  \n全部門共通の金額のみ取得したい場合は、`false` を指定します。\n"
+          schema:
+            type: boolean
+            default: true
+          required: false
+          x-oapi-codegen-extra-tags:
+            query: "department_total"
+          example: true
+        - name: journal_types
+          in: query
+          description: 対象の仕訳の種別を指定します
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - journal_entry
+                - adjusting_entry
+              description: |
+                仕訳の種別
+                * `journal_entry`: 通常の仕訳
+                * `adjusting_entry`: 決算整理仕訳
+            default: [journal_entry, adjusting_entry]
+          required: false
+          x-oapi-codegen-extra-tags:
+            validate: "omitempty,max=2,unique"
+            query: "journal_types"
+          x-go-type-skip-optional-pointer: true
+          example: [journal_entry, adjusting_entry]
+        - name: with_sub_accounts
+          in: query
+          description: 勘定科目に紐づく補助科目の金額を取得するかどうかを指定します
+          schema:
+            type: boolean
+            default: false
+          required: false
+          x-oapi-codegen-extra-tags:
+            query: "with_sub_accounts"
+          example: true
+        - name: include_tax
+          in: query
+          description: "税込で算出するかどうかを指定します。  \n税抜（内税）の経理方式の場合のみ指定可能です。税込および税抜（別記）の経理方式の場合、このパラメーターは無視されます。\n"
+          schema:
+            type: boolean
+            default: false
+          required: false
+          x-oapi-codegen-extra-tags:
+            query: "include_tax"
+          example: true
+      responses:
+        "200":
+          description: |
+            部門別集計表の損益計算書を取得します。
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - columns
+                  - rows
+                  - office
+                  - report_type
+                  - start_date
+                  - end_date
+                  - created_at
+                properties:
+                  report_type:
+                    type: string
+                    enum:
+                      - department_table_bs
+                      - department_table_pl
+                  office:
+                    description: 事業者の情報
+                    type: object
+                    required:
+                      - name
+                      - code
+                    properties:
+                      code:
+                        description: 事業者コード
+                        type: string
+                      name:
+                        description: 対象の会計年度の事業者名
+                        type: string
+                    example:
+                      code: 0123-4567
+                      name: 株式会社マネーフォワード
+                  start_date:
+                    description: 対象期間開始日
+                    type: string
+                    format: date
+                  end_date:
+                    description: 対象期間終了日
+                    type: string
+                    format: date
+                  created_at:
+                    description: 帳票を作成した日時
+                    type: string
+                    format: date-time
+                  columns:
+                    description: 部門列
+                    type: array
+                    items:
+                      description: 部門別集計表の列情報
+                      type: object
+                      required:
+                        - id
+                        - name
+                        - parent_id
+                      properties:
+                        id:
+                          description: 部門ID
+                          type: integer
+                        name:
+                          description: 部門名
+                          type: string
+                        parent_id:
+                          description: 親部門ID
+                          type: integer
+                        code:
+                          description: 部門コード
+                          type: string
+                  rows:
+                    description: 項目・科目の集まり
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - rows
+                        - name
+                        - values
+                      properties:
+                        type:
+                          type: string
+                          enum:
+                            - assets
+                            - liabilities
+                            - net_assets
+                            - liabilities_net_assets
+                            - financial_statement_item
+                            - account
+                            - sub_account
+                          description: |
+                            行の種別
+                            - `assets`: 資産の部
+                            - `liabilities`: 負債の部
+                            - `net_assets`: 純資産の部
+                            - `liabilities_net_assets`: 負債・純資産の部合計
+                            - `financial_statement_item`: `流動資産`や`現金及び預金`など決算書の項目
+                            - `account`: 勘定科目
+                            - `sub_account`: 補助科目
+                        id:
+                          description: ID (typeが`account`または`sub_account`の場合のみ)
+                          type: integer
+                          format: int64
+                          nullable: true
+                        code:
+                          description: コード (typeが`account`または`sub_account`の場合のみ)
+                          type: string
+                          nullable: true
+                        name:
+                          description: 名称
+                          type: string
+                        values:
+                          description: 各部門列に対応する値の配列
+                          type: array
+                          items:
+                            type: integer
+                            format: int64
+                        rows:
+                          description: 項目・科目の集まり
+                          type: array
+                          items:
+                            type: object
+                            required:
+                              - rows
+                              - name
+                              - values
+                            properties:
+                              type:
+                                type: string
+                                enum:
+                                  - assets
+                                  - liabilities
+                                  - net_assets
+                                  - liabilities_net_assets
+                                  - financial_statement_item
+                                  - account
+                                  - sub_account
+                                description: |
+                                  行の種別
+                                  - `assets`: 資産の部
+                                  - `liabilities`: 負債の部
+                                  - `net_assets`: 純資産の部
+                                  - `liabilities_net_assets`: 負債・純資産の部合計
+                                  - `financial_statement_item`: `流動資産`や`現金及び預金`など決算書の項目
+                                  - `account`: 勘定科目
+                                  - `sub_account`: 補助科目
+                              id:
+                                description: ID (typeが`account`または`sub_account`の場合のみ)
+                                type: integer
+                                format: int64
+                                nullable: true
+                              code:
+                                description: コード (typeが`account`または`sub_account`の場合のみ)
+                                type: string
+                                nullable: true
+                              name:
+                                description: 名称
+                                type: string
+                              values:
+                                description: 各部門列に対応する値の配列
+                                type: array
+                                items:
+                                  type: integer
+                                  format: int64
+                              rows:
+                                description: 項目・科目の集まり。nullの場合もある。
+                                type: array
+                                items:
+                                  type: object
+                                  required:
+                                    - rows
+                                    - name
+                                    - values
+                                  properties:
+                                    type:
+                                      type: string
+                                      enum:
+                                        - assets
+                                        - liabilities
+                                        - net_assets
+                                        - liabilities_net_assets
+                                        - financial_statement_item
+                                        - account
+                                        - sub_account
+                                    id:
+                                      description: ID (typeが`account`または`sub_account`の場合のみ)
+                                      type: integer
+                                      format: int64
+                                      nullable: true
+                                    code:
+                                      description: コード (typeが`account`または`sub_account`の場合のみ)
+                                      type: string
+                                      nullable: true
+                                    name:
+                                      description: 名称 (typeが`financial_statement_item`, `account`, `sub_account`の場合のみ)
+                                      type: string
+                                    values:
+                                      description: 各部門列に対応する値の配列
+                                      type: array
+                                      items:
+                                        type: integer
+                                        format: int64
+              example:
+                report_type: department_table_pl
+                office:
+                  code: 0123-4567
+                  name: 株式会社マネーフォワード
+                start_date: 2021-04-01
+                end_date: 2022-03-31
+                created_at: 2022-01-28T11:22:33.444+09:00
+                columns:
+                  - id: 0
+                    name: 合計
+                    parent_id: 0
+                  - id: 2
+                    name: parent (合計)
+                    code: H1000
+                    parent_id: 0
+                  - id: 3
+                    name: parent
+                    parent_id: 2
+                  - id: 4
+                    name: child1
+                    code: H1100
+                    parent_id: 2
+                  - id: 0
+                    name: 部門なし
+                    parent_id: 0
+                rows:
+                  - type: financial_statement_item
+                    name: 売上高
+                    values: [1100, 1000, 500, 500, 100]
+                    rows:
+                      - type: account
+                        id: 1
+                        code: P001
+                        name: 売上高
+                        values: [1100, 1000, 500, 500, 100]
+                        rows:
+                          - type: sub_account
+                            id: 10
+                            code: P001001
+                            name: 売上高1
+                            values: [1100, 1000, 500, 500, 100]
+                            rows: null
+                  - type: financial_statement_item
+                    name: 売上原価
+                    values: [1100, 1000, 500, 500, 100]
+                    rows:
+                      - type: account
+                        id: 2
+                        code: P002
+                        name: 仕入高
+                        values: [1100, 1000, 500, 500, 100]
+                        rows: []
+                      - type: financial_statement_item
+                        name: 当期製品製造原価
+                        values: [1100, 1000, 500, 500, 100]
+                        rows: []
+                  - type: financial_statement_item
+                    name: 当期純損失
+                    values: [1100, 1000, 500, 500, 100]
+                    rows:
+                      - type: financial_statement_item
+                        name: 税引前当期純損失
+                        values: [1100, 1000, 500, 500, 100]
+                        rows: []
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+tags:
+  - name: Reports
+    description: 帳票
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: OAuth 2.0により取得したアクセストークンを指定してください
+    oAuth:
+      type: oauth2
+      description: OAuth 2.0を用いて認証と認可を行います
+      flows:
+        authorizationCode:
+          authorizationUrl: https://api.biz.moneyforward.com/authorize
+          tokenUrl: https://api.biz.moneyforward.com/token
+          scopes:
+            mfc/enterprise-accounting/report.read: 帳票の参照権限
+  schemas:
+    Report:
+      type: object
+      properties:
+        report_type:
+          $ref: '#/components/schemas/ReportType'
+        office:
+          $ref: '#/components/schemas/Office'
+        start_date:
+          description: 対象期間開始日
+          type: string
+          format: date
+        end_date:
+          description: 対象期間終了日
+          type: string
+          format: date
+        created_at:
+          description: 帳票を作成した日時
+          type: string
+          format: date-time
+        columns:
+          $ref: '#/components/schemas/Columns'
+        rows:
+          $ref: "#/components/schemas/Rows"
+    Office:
+      description: 事業者の情報
+      type: object
+      properties:
+        code:
+          description: 事業者コード
+          type: string
+        name:
+          description: 対象の会計年度の事業者名
+          type: string
+      example:
+        code: 0123-4567
+        name: 株式会社マネーフォワード
+    ApprovalStatus:
+      type: string
+      enum:
+        - draft
+        - rejected
+        - applying
+        - approved
+      description: |
+        仕訳の承認ステータス
+        - `draft`: 申請前
+        - `rejected`: 差戻し
+        - `applying`: 申請中
+        - `approved`: 承認済み
+    JournalType:
+      type: string
+      enum:
+        - journal_entry
+        - adjusting_entry
+      description: |
+        仕訳の種別
+        * `journal_entry`: 通常の仕訳
+        * `adjusting_entry`: 決算整理仕訳
+    ReportType:
+      type: string
+      enum:
+        - trial_balance_bs
+        - trial_balance_pl
+    Rows:
+      description: 項目・科目の集まり
+      type: array
+      items:
+        $ref: '#/components/schemas/Row'
+      nullable: true
+    Row:
+      type: object
+      properties:
+        type:
+          $ref: '#/components/schemas/RowType'
+        id:
+          description: ID（typeがaccount,sub_accountの場合のみ出力）
+          type: integer
+          format: int64
+          nullable: true
+        code:
+          description: コード（typeがaccount,sub_accountの場合のみ出力）
+          type: string
+          nullable: true
+        name:
+          description: 名称
+          type: string
+        values:
+          description: 行に対応する値
+          type: number
+          format: float
+        rows:
+          $ref: '#/components/schemas/Rows'
+      example:
+        type: account
+        id: 1
+        code: A0001
+        name: 現金
+        values: [100, 1000, 500, 500, 0.56]
+    RowType:
+      type: string
+      enum:
+        - assets
+        - liabilities
+        - net_assets
+        - liabilities_net_assets
+        - financial_statement_item
+        - account
+        - sub_account
+      description: |
+        行の種別
+        - `assets`: 資産の部
+        - `liabilities`: 負債の部
+        - `net_assets`: 純資産の部
+        - `liabilities_net_assets`: 負債・純資産の部合計
+        - `financial_statement_item`: `流動資産`や`現金及び預金`など決算書の項目
+        - `account`: 勘定科目
+        - `sub_account`: 補助科目
+    Column:
+      type: string
+      enum:
+        - opening_balance
+        - debit_amount
+        - credit_amount
+        - closing_balance
+        - ratio
+      description: |
+        列の種別
+        - `opening_balance`: 前期残高
+        - `debit_amount`: 借方金額
+        - `credit_amount`: 貸方金額
+        - `closing_balance`: 期末残高
+        - `ratio`: 構成比
+    Columns:
+      type: array
+      items:
+        $ref: '#/components/schemas/Column'
+    Error:
+      description: 4xx, 5xx の場合のエラー
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            - validation_failed
+            - authentication_header_required
+            - invalid_authentication
+            - has_no_contract
+            - internal_server_error
+            - api_rate_limit_exceeded
+          description: |
+            エラーコード
+            - `validation_failed`: リクエストのパラメータが不正
+            - `authentication_header_required`: トークンが設定されていない
+            - `invalid_authentication`: トークンが不正か失効している
+            - `has_no_contract`: 契約がない
+            - `internal_server_error`: 内部エラー
+            - `api_rate_limit_exceeded`: API rate limit exceeded
+        message:
+          type: string
+          description: エラー内容
+      required:
+        - code
+        - message
+      example:
+        code: validation_failed
+        message: 指定された会計年度が存在しません
+    ErrorResponse:
+      description: エラーレスポンス
+      type: object
+      properties:
+        errors:
+          type: array
+          description: エラー一覧
+          items:
+            $ref: "#/components/schemas/Error"
+      required:
+        - errors
+  responses:
+    BadRequest:
+      description: リクエストのパラメータが不正な場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: validation_failed
+                message: 指定された会計年度が存在しません
+    Unauthorized:
+      description: アクセストークンが設定されていない、不正、または失効済の場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: invalid_authentication
+                message: 認証情報が間違っています。access tokenが正しいか確認してください。
+    Forbidden:
+      description: 会計Plusの契約情報がない場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: has_no_contract
+                message: 会計Plusのご契約が無いため、使用できる機能に制限が発生しています。
+    TooManyRequest:
+      description: リクエスト回数の上限を超えた場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: api_rate_limit_exceeded
+                message: API rate limit exceeded
+    InternalServerError:
+      description: 予期していないエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: internal_server_error
+                message: internal server error
+  parameters:
+    fiscal_year:
+      name: fiscal_year
+      in: query
+      description: "会計年度を指定します。\n`fiscal_year`,`start_month`, `end_month`のすべてを指定しない場合は最新の会計年度になります。  \n`start_month`, `end_month`を指定し`fiscal_year`を指定しない場合は、開始日が一番早い会計年度になります。  \n`fiscal_year`, `start_month`, `end_month` と組み合わせて会計年度を指定できます。ただし、一意に特定できない場合は、該当する年度のうち開始日が一番早い年度になります。\n`start_month`, `end_month` と組み合わせて会計年度・会計月を指定できます。  \n`start_date`, `end_date` のいずれか1つでもが同時に指定されている場合はエラーになります。\n"
+      schema:
+        type: integer
+      required: false
+      example: 2022
+    start_month:
+      name: start_month
+      in: query
+      description: "対象の開始月を指定します。指定しない場合は会計年度の開始月になります。  \n`fiscal_year`, `end_month` と組み合わせて会計年度・会計月を指定できます。\n`start_date`, `end_date` のいずれか1つでも同時に指定されている場合はエラーになります。\n"
+      schema:
+        type: integer
+      required: false
+      example: 4
+    end_month:
+      name: end_month
+      in: query
+      description: "対象の終了月を指定します。指定しない場合は会計年度の終了月になります。  \n`fiscal_year`, `start_month` と組み合わせて会計年度・会計月を指定できます。  \n`start_date`, `end_date` のいずれか1つでも同時に指定されている場合はエラーになります。\n"
+      schema:
+        type: integer
+      required: false
+      example: 3
+    start_date:
+      name: start_date
+      in: query
+      description: "対象の開始年月日を指定します。指定しない場合は会計年度の初日になります。  \n`end_date` と組み合わせて開始・終了年月日を指定できます。  \n`fiscal_year`, `start_month`, `end_month` のいずれか1つでも同時に指定されている場合はエラーになります。\n"
+      schema:
+        type: string
+        format: date
+      required: false
+      example: 2022-04-01
+    end_date:
+      name: end_date
+      in: query
+      description: "対象の終了年月日を指定します。指定しない場合は会計年度の最終日になります。  \n`start_date` と組み合わせて開始・終了年月日を指定できます。  \n`fiscal_year`, `start_month`, `end_month` のいずれか1つでも同時に指定されている場合はエラーになります。\n"
+      schema:
+        type: string
+        format: date
+      required: false
+      example: 2022-04-01
+    approval_statuses:
+      name: approval_statuses
+      in: query
+      description: 仕訳の承認ステータスを指定します。指定しない場合は承認済みの仕訳のみ対象になります。
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/ApprovalStatus'
+        default: [approved]
+      required: false
+      example: [applying, approved]
+    department_id:
+      name: department_id
+      in: query
+      description: 対象の部門のIDを指定します。指定しない場合は全ての部門が対象になります。
+      schema:
+        type: integer
+        format: int64
+      required: false
+      example: 100
+    department_total:
+      name: department_total
+      in: query
+      description: "指定した部門を合計して算出するかを指定します。指定しない場合は、対象の部門の合計を算出します。  \n部門共通の金額を取得する場合は `false` を指定してください。\n"
+      schema:
+        type: boolean
+        default: true
+      required: false
+      example: true
+    project_id:
+      name: project_id
+      in: query
+      description: 対象のプロジェクトのIDを指定します。プロジェクトを設定していない仕訳のみを対象にする場合は「0」を指定してください。指定しない場合は全てのプロジェクトが対象になります。
+      schema:
+        type: string
+      required: false
+      example: 01ABCDEFGHIJKLMNOPQRSTUVWX
+    counterparty_id:
+      name: counterparty_id
+      in: query
+      description: 対象の取引先のIDを指定します。取引先を設定していない仕訳のみを対象にする場合は「0」を指定してください。指定しない場合は全ての取引先が対象になります。
+      schema:
+        type: integer
+        format: int64
+      required: false
+      example: 100
+    journal_types:
+      name: journal_types
+      in: query
+      description: 対象の仕訳の種別を指定します
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/JournalType'
+        default: [journal_entry, adjusting_entry]
+      required: false
+      example: [journal_entry, adjusting_entry]
+    with_sub_accounts:
+      name: with_sub_accounts
+      in: query
+      description: 勘定科目に紐づく補助科目の金額を取得するかどうかを指定します
+      schema:
+        type: boolean
+        default: false
+      required: false
+      example: true
+    include_tax:
+      name: include_tax
+      in: query
+      description: "税込で算出するかどうかを指定します。  \n税抜（内税）の経理方式の場合のみ指定可能です。税込および税抜（別記）の経理方式の場合、このパラメーターは無視されます。\n"
+      schema:
+        type: boolean
+        default: false
+      required: false
+      example: true
+security:
+  - bearerAuth: []
+  - oAuth:
+      - mfc/enterprise-accounting/report.read

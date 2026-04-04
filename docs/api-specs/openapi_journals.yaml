@@ -1,0 +1,1037 @@
+
+openapi: 3.0.2
+info:
+  title: マネーフォワード クラウド会計Plus 仕訳 API
+  version: 2.0.0
+  termsOfService: "https://biz.moneyforward.com/agreement/api"
+  contact:
+    name: Money Forward
+  description: |
+    マネーフォワード クラウド会計Plusの仕訳API
+
+    ## 認証
+
+    全てのAPIは、OAuth 2.0 を 用いて認証と認可を行います。<br>
+    OAuth 2.0に従って、アクセストークンを取得してください。<br>
+    取得したアクセストークンを Bearer Tokenとして Authorization Headerに付与する事で、APIリクエストが可能になります。<br>
+
+    ## リクエストID
+
+    全てのAPIリクエストに一意のリクエストIDが付与され、レスポンスヘッダーに `X-Request-ID`というキーで値が設定されます。<br>
+    お問い合わせいただく際にはリクエストIDをお伝えいただきますとスムーズにご対応できます。
+
+    ## エラーレスポンス
+
+    全てのAPIは3種類のステータスコード（2xx, 4xx, 5xx）を返却します。<br>
+    4xx, 5xx の場合は共通のレスポンスフォーマットでエラー用のレスポンスボディを返却します。<br>
+    エラーレスポンスにはエラーと同じ数の要素を含む配列が用意され、それぞれエラーの種別である `code` とエラー内容の `message` を含みます。<br>
+    エラーコードの種類やフォーマットなどの詳細は <a href="#model-Error">Error スキーマの定義</a> をご参照ください。
+
+servers:
+  - url: "https://api-enterprise-accounting.moneyforward.com/api/v3"
+    description: Production
+paths:
+  "/journals":
+    get:
+      operationId: getJournals
+      summary: 仕訳一覧の取得
+      description: |
+        仕訳の一覧を取得します。
+      tags:
+        - Journals
+      parameters:
+        - $ref: '#/components/parameters/start_date'
+        - $ref: '#/components/parameters/end_date'
+        - $ref: '#/components/parameters/approval_statuses'
+        - $ref: '#/components/parameters/debit_account_id'
+        - $ref: '#/components/parameters/debit_sub_account_id'
+        - $ref: '#/components/parameters/debit_department_id'
+        - $ref: '#/components/parameters/debit_tax_id'
+        - $ref: '#/components/parameters/debit_project_id'
+        - $ref: '#/components/parameters/debit_counterparty_id'
+        - $ref: '#/components/parameters/debit_invoice_transitional_measures'
+        - $ref: '#/components/parameters/credit_account_id'
+        - $ref: '#/components/parameters/credit_sub_account_id'
+        - $ref: '#/components/parameters/credit_department_id'
+        - $ref: '#/components/parameters/credit_tax_id'
+        - $ref: '#/components/parameters/credit_project_id'
+        - $ref: '#/components/parameters/credit_counterparty_id'
+        - $ref: '#/components/parameters/credit_invoice_transitional_measures'
+        - $ref: '#/components/parameters/entered_by'
+        - $ref: '#/components/parameters/journal_type'
+        - $ref: '#/components/parameters/tag'
+        - $ref: '#/components/parameters/except_opening_journal'
+        - $ref: "#/components/parameters/sort_key"
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: |
+            仕訳の一覧の取得します。
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - journals
+                  - next_cursor
+                properties:
+                  journals:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Journal"
+                  next_cursor:
+                    $ref: "#/components/schemas/NextCursor"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+    post:
+      operationId: postJournals
+      summary: 新しい仕訳を一つ作成する
+      description: |
+        新しい仕訳を一つ作成する
+      tags:
+        - Journals
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostJournalRequestParameter'
+      responses:
+        '200':
+          description: 仕訳の作成に成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - id
+                  - url
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Id'
+                  url:
+                    description: URL
+                    type: string
+                    format: uri
+                    example: 'https://enterprise-accounting.moneyforward.com/journals/XXXXXXXXXXXXXX'
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+  "/journals/{id}":
+    get:
+      operationId: getJournal
+      summary: 仕訳参照
+      description: |
+        仕訳情報を取得します。
+      tags:
+        - Journals
+      parameters:
+        - in: path
+          name: id
+          schema:
+            type: integer
+          required: true
+          description: 参照する仕訳のID
+      responses:
+        "200":
+          description: |
+            仕訳の情報を取得します
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - journal
+                properties:
+                  journal:
+                      $ref: "#/components/schemas/Journal"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+    delete:
+      operationId: deleteJournals
+      summary: 仕訳削除
+      description: |
+        仕訳を削除します。
+      tags:
+        - Journals
+      parameters:
+        - in: path
+          name: id
+          schema:
+            type: integer
+          required: true
+          description: 削除する仕訳のID
+      responses:
+        "200":
+          description: 削除成功時
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - id
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Id'
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+  "/journals/{id}/reverse":
+    post:
+      operationId: postJournalReverse
+      summary: 逆仕訳作成
+      description: 逆仕訳を作成します。
+      tags:
+        - Journals
+      parameters:
+        - in: path
+          name: id
+          schema:
+            type: integer
+            format: int64
+          required: true
+          description: 逆仕訳の元となる仕訳のID
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostJournalReverseRequestParameter'
+      responses:
+        "200":
+          description: 逆仕訳作成成功時
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - id
+                  - url
+                properties:
+                  id:
+                    $ref: "#/components/schemas/Id"
+                  url:
+                    description: URL
+                    type: string
+                    format: uri
+                    example: 'https://enterprise-accounting.moneyforward.com/journals/XXXXXXXXXXXXXX'
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+  "/vouchers/{id}/file":
+    get:
+      operationId: getVoucherFile
+      summary: 証憑ファイルを取得する
+      description: 証憑ファイルを取得する
+      tags:
+        - Vouchers
+      parameters:
+        - in: path
+          name: id
+          schema:
+            type: integer
+          required: true
+          description: 証憑ID
+      responses:
+        "200":
+          description: ダウンロード可能な証憑ファイル
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            application/csv:
+              schema:
+                type: string
+                format: binary
+            image/*:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: 証憑が存在しません。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                errors:
+                  - code: not_found
+                    message: 証憑が存在しません。
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+
+tags:
+  - name: Journals
+    description: 仕訳
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: OAuth 2.0により取得したアクセストークンを指定してください
+    oAuth:
+      type: oauth2
+      description: OAuth 2.0を用いて認証と認可を行います
+      flows:
+        authorizationCode:
+          authorizationUrl: https://api.biz.moneyforward.com/authorize
+          tokenUrl: https://api.biz.moneyforward.com/token
+          scopes:
+            mfc/enterprise-accounting/journal.read: 仕訳の参照権限
+            mfc/enterprise-accounting/journal.write: 仕訳の更新権限
+  schemas:
+    PostJournalRequestParameter:
+      type: object
+      required:
+        - journal
+      properties:
+        journal:
+          description: 仕訳
+          required:
+            - status
+            - transaction_date
+            - journal_type
+            - branches
+          type: object
+          properties:
+            status:
+              $ref: '#/components/schemas/ApprovalStatusForRequestParameter'
+            transaction_date:
+              $ref: '#/components/schemas/TransactionDate'
+            journal_type:
+              $ref: '#/components/schemas/JournalType'
+            tags:
+              $ref: '#/components/schemas/Tags'
+            memo:
+              $ref: '#/components/schemas/Memo'
+            branches:
+              description: 仕訳行
+              type: array
+              items:
+                $ref: '#/components/schemas/BranchRequestParameter'
+    PostJournalReverseRequestParameter:
+      type: object
+      required:
+        - status
+        - transaction_date
+      properties:
+        status:
+          $ref: '#/components/schemas/ApprovalStatusForRequestParameter'
+        transaction_date:
+          $ref: '#/components/schemas/TransactionDate'
+    Journal:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        number:
+          $ref: '#/components/schemas/Number'
+        transaction_date:
+          $ref: '#/components/schemas/TransactionDate'
+        journal_type:
+          $ref: '#/components/schemas/JournalType'
+        entered_by:
+          $ref: '#/components/schemas/EnteredBy'
+        approval_status:
+          $ref: '#/components/schemas/ApprovalStatus'
+        memo:
+          $ref: '#/components/schemas/Memo'
+        tags:
+          $ref: '#/components/schemas/Tags'
+        created_at:
+          $ref: '#/components/schemas/CreatedAt'
+        creator:
+          $ref: '#/components/schemas/Creator'
+        updated_at:
+          $ref: '#/components/schemas/UpdatedAt'
+        latest_updater:
+          $ref: '#/components/schemas/LatestUpdater'
+        vouchers:
+          description: 証憑
+          type: object
+          properties:
+            urls:
+              description: 証憑URL
+              type: array
+              items:
+                $ref: '#/components/schemas/VoucherUrl'
+            file_names:
+              description: 証憑ファイル
+              type: array
+              items:
+                type: string
+                maxLength: 255
+            files:
+              description: 証憑ファイル
+              type: array
+              items:
+                $ref: '#/components/schemas/VoucherFile'
+        applicant:
+          description: 申請者
+          type: string
+        applied_at:
+          description: 申請日時
+          type: string
+          format: date-time
+        approver:
+          description: 承認者
+          type: string
+        approved_at:
+          description: 承認日時
+          type: string
+          format: date-time
+        branches:
+          description: 仕訳行
+          type: array
+          items:
+            $ref: '#/components/schemas/Branch'
+    Branch:
+      description: 仕訳行
+      type: object
+      properties:
+        remark:
+          $ref: '#/components/schemas/Remark'
+        debitor:
+          $ref: '#/components/schemas/BranchSide'
+        creditor:
+          $ref: '#/components/schemas/BranchSide'
+    BranchRequestParameter:
+      description: 仕訳行
+      type: object
+      properties:
+        remark:
+          $ref: '#/components/schemas/Remark'
+        debitor:
+          $ref: '#/components/schemas/BranchSideRequestParameter'
+        creditor:
+          $ref: '#/components/schemas/BranchSideRequestParameter'
+    BranchSide:
+      description: 仕訳行貸借
+      type: object
+      properties:
+        account_id:
+          $ref: '#/components/schemas/AccountId'
+        sub_account_id:
+          $ref: '#/components/schemas/SubAccountId'
+        department_id:
+          $ref: '#/components/schemas/DepartmentId'
+        project_id:
+          $ref: '#/components/schemas/ProjectId'
+        counterparty_id:
+          $ref: '#/components/schemas/CounterpartyId'
+        invoice_transitional_measures:
+          $ref: '#/components/schemas/InvoiceTransitionalMeasures'
+        tax_id:
+          $ref: '#/components/schemas/TaxId'
+        value:
+          $ref: '#/components/schemas/Value'
+        tax_value:
+          description: 税額
+          type: integer
+          example: 50
+          format: int64
+        tax_included_value:
+          $ref: '#/components/schemas/TaxIncludedValue'
+    BranchSideRequestParameter:
+      description: |
+        仕訳行貸借
+
+        以下のID/コードペアについて、それぞれどちらか一方のみ指定可能です（同時指定は不可）：
+        - account_id / account_code（いずれか必須）
+        - tax_id / tax_code（いずれか必須）
+        - sub_account_id / sub_account_code
+        - department_id / department_code
+        - project_id / project_code
+        - counterparty_id / counterparty_code
+
+        例：account_idを指定する場合はaccount_codeは指定できません
+      type: object
+      required:
+        - value
+      properties:
+        account_id:
+          $ref: '#/components/schemas/AccountId'
+        account_code:
+          $ref: '#/components/schemas/AccountCode'
+        tax_id:
+          $ref: '#/components/schemas/TaxId'
+        tax_code:
+          $ref: '#/components/schemas/TaxCode'
+        sub_account_id:
+          $ref: '#/components/schemas/SubAccountId'
+        sub_account_code:
+          $ref: '#/components/schemas/SubAccountCode'
+        department_id:
+          $ref: '#/components/schemas/DepartmentId'
+        department_code:
+          $ref: '#/components/schemas/DepartmentCode'
+        project_id:
+          $ref: '#/components/schemas/ProjectId'
+        project_code:
+          $ref: '#/components/schemas/ProjectCode'
+        counterparty_id:
+          $ref: '#/components/schemas/CounterpartyId'
+        counterparty_code:
+          $ref: '#/components/schemas/CounterpartyCode'
+        invoice_transitional_measures:
+          $ref: '#/components/schemas/InvoiceTransitionalMeasures'
+        value:
+          $ref: '#/components/schemas/Value'
+        tax_value:
+          $ref: '#/components/schemas/TaxValue'
+    VoucherUrl:
+      description: 証憑URL
+      type: object
+      required:
+        - url
+      properties:
+        id:
+          description: 証憑ID
+          type: integer
+          example: 1
+          format: int64
+        url:
+          description: |-
+            URL<br>
+            <ul><li>https, httpを含むフルパスで記載</li></ul>
+          type: string
+          maxLength: 2000
+        title:
+          description: タイトル
+          type: string
+          maxLength: 100
+          nullable: true
+    VoucherFile:
+      description: 証憑ファイル
+      type: object
+      properties:
+        id:
+          description: 証憑ID
+          type: integer
+          example: 1
+          format: int64
+        name:
+          description: 証憑ファイルの名前
+          type: string
+          maxLength: 100
+    EnteredBy:
+      type: string
+      enum:
+        - invoice
+        - payroll
+        - expense
+        - payable
+        - asset_accounting
+        - pjc
+        - api
+        - none
+      description: |
+        仕訳の連携元
+        - `invoice`: クラウド請求書
+        - `payroll`: クラウド給与
+        - `expense`: クラウド経費
+        - `payable`: クラウド債務支払
+        - `asset_accounting`: クラウド固定資産
+        - `pjc`: クラウド個別原価
+        - `api`: API
+        - `none`: 連携元なし
+    ApprovalStatus:
+      type: string
+      enum:
+        - draft
+        - rejected
+        - applying
+        - approved
+      description: |
+        仕訳の承認ステータス
+        - `draft`: 申請前
+        - `rejected`: 差戻し
+        - `applying`: 申請中
+        - `approved`: 承認済み
+    ApprovalStatusForRequestParameter:
+      type: string
+      enum:
+        - draft
+        - approved
+      description: |
+        仕訳作成時に仕様可能な承認ステータス
+        - `draft`: 申請前
+        - `approved`: 承認済み
+    JournalType:
+      type: string
+      enum:
+        - journal_entry
+        - adjusting_entry
+      description: |
+        仕訳の種別
+        * `journal_entry`: 通常の仕訳
+        * `adjusting_entry`: 決算整理仕訳
+    Id:
+      description: 仕訳ID
+      type: integer
+      example: 1
+      format: int64
+    Number:
+      description: 仕訳番号
+      type: integer
+      example: 123
+      format: int64
+    TransactionDate:
+      description: 取引日（ISO8601形式）
+      type: string
+      example: '2020-01-31'
+      format: date
+    Tags:
+      description: タグ
+      type: array
+      items:
+        $ref: '#/components/schemas/Tag'
+    Tag:
+      description: タグ
+      type: string
+      example: 'タグA'
+      maxLength: 20
+    Memo:
+      description: メモ
+      type: string
+      example: 'メモ'
+      maxLength: 200
+    Remark:
+      description: 摘要
+      type: string
+      example: '摘要'
+      maxLength: 200
+    CreatedAt:
+      description: 作成日時
+      type: string
+      format: date-time
+    Creator:
+      description: 作成者
+      type: string
+      example: '作成者名'
+    UpdatedAt:
+      description: 最終更新日時
+      type: string
+      format: date-time
+    LatestUpdater:
+      description: 最終更新者
+      example: '最終更新者名'
+      type: string
+    AccountId:
+      description: 勘定科目ID
+      type: integer
+      example: 1
+      format: int64
+    SubAccountId:
+      description: 補助科目ID
+      type: integer
+      example: 1
+      format: int64
+    DepartmentId:
+      description: 部門ID
+      type: integer
+      example: 1
+      format: int64
+    ProjectId:
+      description: プロジェクトID
+      type: string
+      example: 01ABCDEFGHIJKLMNOPQRSTUVWX
+    CounterpartyId:
+      description: 取引先ID
+      type: integer
+      example: 1
+      format: int64
+    InvoiceTransitionalMeasures:
+      description: インボイス経過措置の種類
+      type: string
+      enum:
+        - deductible_80
+        - none
+    TaxId:
+      description: 税区分ID
+      type: integer
+      example: 1
+      format: int64
+    Value:
+      description: 金額
+      type: integer
+      example: 1000
+      format: int64
+    TaxValue:
+      description: |
+        税額
+
+        仕訳が登録される会計年度の経理方式が税抜（内税）の場合のみ指定できます。
+
+        値が未指定または null の場合、経理方式が税抜(内税)もしくは税込であれば税額が自動計算されます。
+
+        0以上の値を指定した時に下記のいずれかに当てはまる場合はエラーとなります。
+        * 経理方式が税抜（内税）以外の時
+        * 税区分に以下の区分が使用されている時
+          * 課税対象外の税区分
+          * 税率０％の税区分
+        * 勘定科目に仮受消費税もしくは仮払消費税が使用されている時
+        * 金額以上の税額を指定した時
+      type: integer
+      nullable: true
+      example: 100
+      format: int64
+    TaxIncludedValue:
+      description: 税込金額
+      type: integer
+      example: 1050
+      format: int64
+    Error:
+      description: 4xx, 5xx の場合のエラー
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            - validation_failed
+            - authentication_header_required
+            - invalid_authentication
+            - has_no_contract
+            - not_found
+            - internal_server_error
+            - api_rate_limit_exceeded
+          description: |
+            エラーコード
+            - `validation_failed`: リクエストのパラメータが不正
+            - `authentication_header_required`: APIキーが設定されていない
+            - `invalid_authentication`: APIキーが不正か失効している
+            - `has_no_contract`: 契約がない
+            - `not_found`: 指定されたIDの仕訳が存在しない
+            - `internal_server_error`: 内部エラー
+            - `api_rate_limit_exceeded`: API rate limit exceeded
+        message:
+          type: string
+          description: エラー内容
+      required:
+        - code
+        - message
+    ErrorResponse:
+      description: エラーレスポンス
+      type: object
+      properties:
+        errors:
+          type: array
+          description: エラー一覧
+          items:
+            $ref: "#/components/schemas/Error"
+      required:
+        - errors
+    NextCursor:
+      description: 次のページを取得するための値です。値が存在する場合はこのAPIのカーソルに値を設定して再度実行してください。最終ページは値が空になります。
+      type: string
+    AccountCode:
+      description: 勘定科目コード
+      type: string
+      example: "101"
+      maxLength: 20
+    SubAccountCode:
+      description: 補助科目コード
+      type: string
+      example: "1001"
+      maxLength: 20
+    DepartmentCode:
+      description: 部門コード
+      type: string
+      example: "DEPT001"
+      maxLength: 20
+    ProjectCode:
+      description: プロジェクトコード
+      type: string
+      example: "PRJ001"
+      maxLength: 20
+    CounterpartyCode:
+      description: 取引先コード
+      type: string
+      example: "CUSTOMER001"
+      maxLength: 20
+    TaxCode:
+      description: 税区分コード
+      type: string
+      example: "TAX001"
+      maxLength: 20
+  responses:
+    BadRequest:
+      description: リクエストのパラメータが不正な場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: validation_failed
+                message: 指定された会計年度が存在しません
+    Unauthorized:
+      description: APIキーが設定されていない、不正、または失効済の場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: invalid_authentication
+                message: 認証情報が間違っています。APIキーが正しいか確認してください。
+    Forbidden:
+      description: 会計Plusの契約情報がない場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: has_no_contract
+                message: 会計Plusのご契約が無いため、使用できる機能に制限が発生しています。
+    NotFound:
+      description: 指定したIDの仕訳が存在しない
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: not_found
+                message: 指定された仕訳は存在しません。
+    TooManyRequest:
+      description: リクエスト回数の上限を超えた場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: api_rate_limit_exceeded
+                message: API rate limit exceeded
+    InternalServerError:
+      description: 予期していないエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: internal_server_error
+                message: internal server error
+  parameters:
+    start_date:
+      name: start_date
+      in: query
+      description: |
+        対象の開始年月日を指定します。指定しない場合は会計年度の開始日になります。
+        `end_date` と組み合わせて開始・終了年月日を指定できます。
+      schema:
+        type: string
+        format: date
+      required: false
+      example: 2022-04-01
+    end_date:
+      name: end_date
+      in: query
+      description: |
+        対象の終了年月日を指定します。指定しない場合は会計年度の最終日になります。
+        `start_date` と組み合わせて開始・終了年月日を指定できます。
+      schema:
+        type: string
+        format: date
+      required: false
+      example: 2022-04-01
+    approval_statuses:
+      name: approval_statuses
+      in: query
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/ApprovalStatus'
+      required: false
+    debit_account_id:
+      name: debit_account_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/AccountId'
+      required: false
+    debit_sub_account_id:
+      name: debit_sub_account_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/SubAccountId'
+      required: false
+    debit_department_id:
+      name: debit_department_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/DepartmentId'
+      required: false
+    debit_tax_id:
+      name: debit_tax_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/TaxId'
+      required: false
+    debit_project_id:
+      name: debit_project_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/ProjectId'
+      required: false
+    debit_counterparty_id:
+      name: debit_counterparty_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/CounterpartyId'
+      required: false
+    debit_invoice_transitional_measures:
+      name: debit_invoice_transitional_measures
+      in: query
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/InvoiceTransitionalMeasures'
+    credit_account_id:
+      name: credit_account_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/AccountId'
+      required: false
+    credit_sub_account_id:
+      name: credit_sub_account_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/SubAccountId'
+      required: false
+    credit_department_id:
+      name: credit_department_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/DepartmentId'
+      required: false
+    credit_tax_id:
+      name: credit_tax_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/TaxId'
+      required: false
+    credit_project_id:
+      name: credit_project_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/ProjectId'
+      required: false
+    credit_counterparty_id:
+      name: credit_counterparty_id
+      in: query
+      schema:
+        $ref: '#/components/schemas/CounterpartyId'
+      required: false
+    credit_invoice_transitional_measures:
+      name: credit_invoice_transitional_measures
+      in: query
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/InvoiceTransitionalMeasures'
+    entered_by:
+      name: entered_by
+      in: query
+      schema:
+        $ref: '#/components/schemas/EnteredBy'
+      required: false
+    journal_type:
+      name: journal_type
+      in: query
+      schema:
+        $ref: '#/components/schemas/JournalType'
+      required: false
+    tag:
+      name: tag
+      in: query
+      schema:
+        $ref: '#/components/schemas/Tag'
+      required: false
+    except_opening_journal:
+      name: except_opening_journal
+      in: query
+      schema:
+        type: boolean
+        default: false
+      required: false
+    sort_key:
+      name: sort_key
+      in: query
+      description: |
+        仕訳一覧のソート方法を指定します。
+        - `id`: 仕訳IDでソート（デフォルト）
+        - `number`: 仕訳番号でソート
+      schema:
+        type: string
+        enum:
+          - id
+          - number
+        default: id
+      required: false
+    limit:
+      name: limit
+      in: query
+      description: 1度のリクエストで取得するデータの件数を1~1000の範囲で指定することができます。
+      schema:
+        type: integer
+        format: int64
+        default: 1000
+      required: false
+    cursor:
+      name: cursor
+      in: query
+      description: |
+       - ページングのための値です。1ページ目を取得するには、この項目を指定しないでください。2ページ目以降は、前回のレスポンスの `next_cursor` の値をそのまま設定してください。
+       - `sort_key`を`number`に設定した場合は`next_cursor`が仕訳番号になります。
+      schema:
+        type: string
+      required: false
+security:
+  - bearerAuth: []
+  - oAuth:
+    - mfc/enterprise-accounting/journal.read
+    - mfc/enterprise-accounting/journal.write

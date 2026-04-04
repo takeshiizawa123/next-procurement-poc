@@ -1,0 +1,998 @@
+openapi: 3.0.2
+info:
+  title: マネーフォワード クラウド会計Plus マスタ API
+  version: 3.0.0
+  termsOfService: "https://biz.moneyforward.com/agreement/api"
+  contact:
+    name: Money Forward
+  description: |
+    マネーフォワード クラウド会計PlusのマスタAPI
+
+    ## 認証
+
+    全てのAPIは、OAuth 2.0 を 用いて認証と認可を行います。<br>
+    OAuth 2.0に従って、アクセストークンを取得してください。<br>
+    取得したアクセストークンを Bearer Tokenとして Authorization Headerに付与する事で、APIリクエストが可能になります。<br>
+
+    ## ページネーション
+
+    全ての一覧APIはページネーションをサポートします。<br>
+    これらのAPIは、リクエストに`cursor`、`limit`、レスポンスに`next_cursor`を含みます。<br>
+    <br>
+    `cursor`はデータを一意に特定できるIDです。<br>
+    一覧APIでは、ID昇順でオブジェクトが返却されます。<br>
+    次のページが無い場合は、レスポンスの`next_cursor`に空文字が入ります。<br>
+    `next_cursor`の値を、リクエスト内の`cursor`に含める事で、前回のリクエストの続きからデータが取得できます。<br>
+    <br>
+    `limit`には1度のリクエストで取得するデータの件数を指定します。<br>
+    1 ~ 1000の範囲で指定してください。<br>
+    それ以外の範囲の値または指定しない場合は1000になります。<br>
+
+    ## リクエストID
+
+    全てのAPIリクエストに一意のリクエストIDが付与され、レスポンスヘッダーに `X-Request-ID`というキーで値が設定されます。<br>
+    お問い合わせいただく際にはリクエストIDをお伝えいただきますとスムーズにご対応できます。
+
+    ## エラーレスポンス
+
+    全てのAPIは3種類のステータスコード（2xx, 4xx, 5xx）を返却します。<br>
+    4xx, 5xx の場合は共通のレスポンスフォーマットでエラー用のレスポンスボディを返却します。<br>
+    エラーレスポンスにはエラーと同じ数の要素を含む配列が用意され、それぞれエラーの種別である `code` とエラー内容の `message` を含みます。<br>
+    エラーコードの種類やフォーマットなどの詳細は <a href="#model-Error">Error スキーマの定義</a> をご参照ください。
+
+servers:
+  - url: "https://api-enterprise-accounting.moneyforward.com/api/v3"
+    description: Production
+paths:
+  "/masters/accounts":
+    get:
+      operationId: getMastersAccounts
+      summary: 勘定科目マスターの一覧取得
+      description: 勘定科目マスターを取得します。ページングが可能です。
+      security:
+        - bearerAuth: [ ]
+        - oAuth:
+            - mfc/enterprise-accounting/master.read
+      tags:
+        - Masters
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: 勘定科目一覧の取得が成功した場合
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - accounts
+                  - next_cursor
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Account"
+                  next_cursor:
+                    $ref: "#/components/schemas/NextCursor"
+              example:
+                accounts:
+                  - id: 1
+                    code: "0001"
+                    name: 普通預金
+                    tax_id: 2
+                    search_key: ふつうよきん
+                    available: true
+                    categories: ["資産の部","流動資産","現金及び預金"]
+                  - id: 2
+                    code: null
+                    name: ソフトウェア
+                    tax_id: 5
+                    search_key: null
+                    available: true
+                    categories: ["資産の部","固定資産","無形固定資産"]
+                next_cursor: "2"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+  "/masters/sub_accounts":
+    get:
+      operationId: getMastersSubAccounts
+      summary: 補助科目マスターの一覧取得
+      description: 補助科目マスターを取得します。ページングが可能です。
+      security:
+        - bearerAuth: [ ]
+        - oAuth:
+            - mfc/enterprise-accounting/master.read
+      tags:
+        - Masters
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: 補助科目一覧の取得が成功した場合
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - sub_accounts
+                  - next_cursor
+                properties:
+                  sub_accounts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SubAccount"
+                  next_cursor:
+                    $ref: "#/components/schemas/NextCursor"
+              example:
+                sub_accounts:
+                  - id: 1
+                    code: "0001"
+                    account_id: 1
+                    name: マネフォ銀行
+                    tax_id: 2
+                    search_key: まねふぉ
+                    available: true
+                  - id: 2
+                    code: null
+                    account_id: 2
+                    name: マネーフォワード クラウド
+                    tax_id: 5
+                    search_key: null
+                    available: false
+                next_cursor: "2"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+  "/masters/taxes":
+    get:
+      operationId: getMastersTaxes
+      summary: 税区分マスターの一覧取得
+      description: 税区分マスターを取得します。ページングが可能です。
+      security:
+        - bearerAuth: [ ]
+        - oAuth:
+            - mfc/enterprise-accounting/master.read
+      tags:
+        - Masters
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: 税区分一覧の取得が成功した場合
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - taxes
+                  - next_cursor
+                properties:
+                  taxes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Tax"
+                  next_cursor:
+                    $ref: "#/components/schemas/NextCursor"
+              example:
+                taxes:
+                  - id: 1
+                    code: "0001"
+                    name: 課税売上 10%
+                    abbreviation: 課売 10%
+                    tax_rate: 0.1
+                    search_key: かばい
+                    available: true
+                  - id: 2
+                    code: null
+                    name: 課税売上 8%
+                    abbreviation: 課売 8%
+                    tax_rate: 0.08
+                    search_key: null
+                    available: false
+                next_cursor: "2"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+  "/masters/departments":
+    get:
+      operationId: getMastersDepartments
+      summary: 部門マスターの一覧取得
+      description: 部門マスターを取得します。ページングが可能です。
+      security:
+        - bearerAuth: [ ]
+        - oAuth:
+            - mfc/enterprise-accounting/master.read
+      tags:
+        - Masters
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+        - $ref: "#/components/parameters/valid_at"
+      responses:
+        "200":
+          description: 部門一覧の取得が成功した場合
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - departments
+                  - next_cursor
+                properties:
+                  departments:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Department"
+                  next_cursor:
+                    $ref: "#/components/schemas/NextCursor"
+              example:
+                departments:
+                  - id: 1
+                    code: "A012"
+                    name: 開発部
+                    search_key: null
+                    parent_id: null
+                    available: true
+                    valid_at_status: 0
+                  - id: 2
+                    code: "B001"
+                    name: 会計Plusグループ
+                    search_key: "plus"
+                    parent_id: 1
+                    available: false
+                    valid_at_status: 2
+                next_cursor: "2"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+  "/masters/projects":
+    get:
+      operationId: getMastersProjects
+      summary: プロジェクトの一覧取得
+      description: プロジェクトを取得します。
+      security:
+        - bearerAuth: [ ]
+        - oAuth:
+            - mfc/enterprise-accounting/master.read
+      tags:
+        - Masters
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: プロジェクト一覧の取得が成功した場合
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - projects
+                  - next_cursor
+                properties:
+                  projects:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Project"
+                  next_cursor:
+                    $ref: "#/components/schemas/NextCursor"
+              example:
+                projects:
+                  - id: 01GFDY5TY7NNQF19Z2Q8FW7VAY
+                    code: A0001
+                    name: プロジェクトA
+                    disp_order: 100
+                    start_date: '2020-11-30'
+                    end_date: '2021-10-31'
+                    available: true
+                  - id: 01GFDY5V1BMF6CPFN85JC7H1KZ
+                    code: A0002
+                    name: プロジェクトB
+                    disp_order: 101
+                    start_date: '2020-11-30'
+                    end_date: '2021-10-31'
+                    available: false
+                next_cursor: "2"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/UnexpectedError"
+  "/masters/counterparties":
+    get:
+      operationId: getMastersCounterparties
+      summary: 取引先マスターの一覧取得
+      description: 取引先マスターを取得します。ページングが可能です。
+      security:
+        - bearerAuth: [ ]
+        - oAuth:
+            - mfc/enterprise-accounting/master.read
+      tags:
+        - Masters
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: 取引先一覧の取得が成功した場合
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - counterparties
+                  - next_cursor
+                properties:
+                  counterparties:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/GetMastersCounterpartyParameters"
+                  next_cursor:
+                    $ref: "#/components/schemas/NextCursor"
+              example:
+                counterparties:
+                  - id: 1
+                    code: "001"
+                    name: 株式会社マネーフォワード
+                    search_key: moneyforward
+                    available: true
+                    invoice_registration_number: "T1367057604692"
+                  - id: 2
+                    code: "002"
+                    name: 株式会社マネーフォワード２
+                    search_key: null
+                    available: false
+                    invoice_registration_number: null
+                next_cursor: "2"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+    post:
+      operationId: postMastersCounterparties
+      summary: 新規取引先の作成
+      description: 取引先を新規作成します。
+      security:
+        - bearerAuth: [ ]
+        - oAuth:
+            - mfc/enterprise-accounting/master.write
+      tags:
+        - Masters
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostMastersCounterpartyParameters'
+      responses:
+        "200":
+          description: 取引先の作成に成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Id'
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+  "/masters/counterparties/{id}":
+    patch:
+      operationId: patchMastersCounterparties
+      summary: 取引先の更新
+      description: 取引先を更新します。
+      security:
+        - bearerAuth: [ ]
+        - oAuth:
+            - mfc/enterprise-accounting/master.write
+      tags:
+        - Masters
+      parameters:
+        - in: path
+          name: id
+          schema:
+            type: integer
+          required: true
+          description: 更新対象の取引先ID
+      requestBody:
+        content:
+          application/json:
+            schema:
+              description: 取引先
+              type: object
+              properties:
+                code:
+                  description: コード
+                  type: string
+                  example: "001"
+                name:
+                  description: 名称
+                  type: string
+                  example: 株式会社マネーフォワード
+                search_key:
+                  description: 検索キー
+                  type: string
+                  nullable: true
+                  example: moneyforward
+                available:
+                  description: 利用状態
+                  type: boolean
+                  example: true
+                invoice_registration_number:
+                  description: 適格請求書発行事業者登録番号
+                  type: string
+                  nullable: true
+                  example: "T1367057604692"
+      responses:
+        "200":
+          description: 取引先の更新に成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Id'
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+    delete:
+      operationId: deleteMastersCounterparties
+      summary: 取引先の削除
+      description: 取引先を削除します。
+      security:
+        - bearerAuth: [ ]
+        - oAuth:
+            - mfc/enterprise-accounting/master.write
+      tags:
+        - Masters
+      parameters:
+        - in: path
+          name: id
+          schema:
+            type: integer
+          required: true
+          description: 削除対象の取引先ID
+      responses:
+        "200":
+          description: 取引先の削除に成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Id'
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+tags:
+  - name: Masters
+    description: マスター
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: OAuth 2.0により取得したアクセストークンを指定してください
+    oAuth:
+      type: oauth2
+      description: OAuth 2.0を用いて認証と認可を行います
+      flows:
+        authorizationCode:
+          authorizationUrl: https://suzaku-auth-server.herokuapp.com/authorize
+          tokenUrl: https://suzaku-auth-server.herokuapp.com/token
+          scopes:
+            mfc/enterprise-accounting/master.read: マスタの参照権限
+            mfc/enterprise-accounting/master.write: マスタの更新
+  schemas:
+    Account:
+      description: 勘定科目
+      type: object
+      properties:
+        id:
+          description: ID
+          type: integer
+          format: int64
+        code:
+          description: コード
+          type: string
+          nullable: true
+        name:
+          description: 名称
+          type: string
+        tax_id:
+          description: 税区分ID
+          type: integer
+          format: int64
+        search_key:
+          description: 検索キー
+          type: string
+          nullable: true
+        available:
+          description: 利用状態
+          type: boolean
+        categories:
+          description: 分類
+          type: array
+          items:
+            type: string
+      required:
+        - id
+        - code
+        - name
+        - tax_id
+        - available
+        - search_key
+        - categories
+      example:
+        id: 1
+        code: "0001"
+        name: 当座預金
+        tax_id: 400
+        search_key: とうざよきん
+        available: true
+        categories: ["資産の部","流動資産","現金及び預金"]
+    SubAccount:
+      description: 補助科目
+      type: object
+      properties:
+        id:
+          description: ID
+          type: integer
+          format: int64
+        code:
+          description: コード
+          type: string
+          nullable: true
+        account_id:
+          description: 勘定科目ID
+          type: integer
+          format: int64
+        name:
+          description: 名称
+          type: string
+        tax_id:
+          description: 税区分ID
+          type: integer
+          format: int64
+        search_key:
+          description: 検索キー
+          type: string
+          nullable: true
+        available:
+          description: 利用状態
+          type: boolean
+      required:
+        - id
+        - code
+        - account_id
+        - name
+        - tax_id
+        - search_key
+        - available
+      example:
+        id: 1
+        code: "0001"
+        account_id: 1
+        name: マネフォ銀行
+        tax_id: 400
+        search_key: まねーふぉわーど
+        available: true
+    Tax:
+      description: 税区分
+      type: object
+      properties:
+        id:
+          description: ID
+          type: integer
+          format: int64
+        code:
+          description: コード
+          type: string
+          nullable: true
+        name:
+          description: 名称
+          type: string
+        abbreviation:
+          description: 省略名
+          type: string
+        tax_rate:
+          description: 税率
+          type: number
+          format: float
+          nullable: true
+        search_key:
+          description: 検索キー
+          type: string
+          nullable: true
+        available:
+          description: 利用状態
+          type: boolean
+      required:
+        - id
+        - code
+        - name
+        - abbreviation
+        - tax_rate
+        - search_key
+        - available
+      example:
+        id: 1
+        code: "0001"
+        name: 課税売上 10%
+        abbreviation: 課売 10%
+        tax_rate: 0.1
+        search_key: かばい
+        available: true
+    Department:
+      description: 部門
+      type: object
+      properties:
+        id:
+          description: ID
+          type: integer
+          format: int64
+        code:
+          description: コード
+          type: string
+        name:
+          description: 名称
+          type: string
+        search_key:
+          description: 検索キー
+          type: string
+          nullable: true
+        parent_id:
+          description: 親部門ID
+          type: integer
+          format: int64
+          nullable: true
+        available:
+          description: 利用状態
+          type: boolean
+        valid_at_status:
+          description: |
+            valid_at時点での部門の有効/無効:
+              * 0: valid_at時点で有効
+              * 1: valid_at時点で廃止済み（過去部門）
+              * 2: valid_at時点で適用開始前（未来部門）
+          type: integer
+          format: int64
+          enum:
+            - 0
+            - 1
+            - 2
+      required:
+        - id
+        - code
+        - name
+        - search_key
+        - parent_id
+        - available
+      example:
+        id: 2
+        code: A123
+        name: 開発部
+        search_key: かいはつぶ
+        parent_id: 1
+        available: true
+    Project:
+      description: プロジェクト
+      type: object
+      properties:
+        id:
+          description: ID
+          type: string
+          example: 01GFDY5TY7NNQF19Z2Q8FW7VAY
+        code:
+          description: プロジェクトコード
+          type: string
+          example: A00001
+        name:
+          description: プロジェクト名
+          type: string
+          example: プロジェクトA
+        disp_order:
+          description: 表示する順番
+          type: integer
+          example: 100
+        start_date:
+          description: プロジェクト開始日
+          type: string
+          format: date
+          example: '2020-11-30'
+        end_date:
+          description: プロジェクト終了日
+          type: string
+          format: date
+          example: '2021-01-12'
+        available:
+          description: プロジェクトの利用状態
+          type: boolean
+          example: true
+      required:
+        - id
+        - code
+        - name
+        - disp_order
+        - start_date
+        - available
+      example:
+        id: 01GFDY5TY7NNQF19Z2Q8FW7VAY
+        code: A0001
+        name: プロジェクトA
+        disp_order: 100
+        start_date: '2020-11-30'
+        end_date: '2021-10-31'
+        available: true
+    Counterparty:
+      description: 取引先
+      type: object
+      properties:
+        id:
+          description: ID
+          type: integer
+          format: int64
+          readOnly: true
+        code:
+          description: コード
+          type: string
+          example: "001"
+        name:
+          description: 名称
+          type: string
+          example: 株式会社マネーフォワード
+        search_key:
+          description: 検索キー
+          type: string
+          nullable: true
+          example: moneyforward
+        available:
+          description: 利用状態
+          type: boolean
+          example: true
+        invoice_registration_number:
+          description: 適格請求書発行事業者登録番号
+          type: string
+          nullable: true
+          example: "T1367057604692"
+      required:
+        - id
+        - code
+        - name
+    GetMastersCounterpartyParameters:
+      allOf:
+        - type: object
+          properties:
+            id:
+              description: ID
+              type: integer
+              format: int64
+              readOnly: true
+              example: 1
+        - $ref: '#/components/schemas/Counterparty'
+        - required:
+          - id
+          - code
+          - name
+          - search_key
+          - available
+    PostMastersCounterpartyParameters:
+      allOf:
+        - $ref: '#/components/schemas/Counterparty'
+        - required:
+          - code
+          - name
+    NextCursor:
+      description: 次のページを取得するための値です。値が存在する場合はこのAPIのカーソルに値を設定して再度実行してください。最終ページは値が空になります。
+      type: string
+    Id:
+      description: 仕訳ID
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+      required:
+        - id
+    Error:
+      description: 4xx, 5xx の場合のエラー
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            - validation_failed
+            - authentication_header_required
+            - invalid_authentication
+            - has_no_contract
+            - not_found
+            - api_rate_limit_exceeded
+            - internal_server_error
+          description: |
+            エラーコード
+            - `validation_failed`: リクエストのパラメータが不正
+            - `authentication_header_required`: トークンが設定されていない
+            - `invalid_authentication`: トークンが不正か失効している
+            - `not_found`: リソースが見つからない
+            - `has_no_contract`: 契約がない
+            - `api_rate_limit_exceeded`: API rate limit exceeded
+            - `internal_server_error`: 内部エラー
+        message:
+          type: string
+          description: エラー内容
+      required:
+        - code
+        - message
+      example:
+        code: validation_failed
+        message: 不正なCursorです。
+    ErrorResponse:
+      description: エラーレスポンス
+      type: object
+      properties:
+        errors:
+          type: array
+          description: エラー一覧
+          items:
+            $ref: "#/components/schemas/Error"
+      required:
+        - errors
+
+  responses:
+    BadRequest:
+      description: リクエストのパラメータが不正な場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: validation_failed
+                message: 不正なCursorです。
+    Unauthorized:
+      description: アクセストークンが設定されていない、不正、または失効済の場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: invalid_authentication
+                message: 認証情報が間違っています。access tokenが正しいか確認してください。
+    Forbidden:
+      description: 会計Plusの契約情報がない場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: has_no_contract
+                message: 会計Plusのご契約が無いため、使用できる機能に制限が発生しています。
+    NotFound:
+      description: リソースが見つからない場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: not_found
+                message: リソースが見つかりません
+    TooManyRequest:
+      description: リクエスト回数の上限を超えた場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: api_rate_limit_exceeded
+                message: API rate limit exceeded
+    InternalServerError:
+      description: 予期していないエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: internal_server_error
+                message: internal server error
+    UnexpectedError:
+      description: 予期していないエラー
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: internal_server_error
+            message: the server encountered an internal server error
+  parameters:
+    limit:
+      name: limit
+      in: query
+      description: 1度のリクエストで取得するデータの件数を1~1000の範囲で指定することができます。
+      schema:
+        type: integer
+        format: int64
+        default: 1000
+      required: false
+    cursor:
+      name: cursor
+      in: query
+      description: ページングのための値です。1ページ目を取得するには、この項目を指定しないでください。2ページ目以降は、前回のレスポンスの next_cursor の値をそのまま設定してください。
+      schema:
+        type: string
+      required: false
+    valid_at:
+      name: valid_at
+      in: query
+      description: |
+        YYYY-MM-DD 形式で指定した日付時点での部門情報を返します。指定しない場合はリクエスト時点の情報を返します。
+        指定日時点で有効でない部門は直近の有効な部門情報を返します。
+      schema:
+        type: string
+        example: '2024-02-15'
+      required: false

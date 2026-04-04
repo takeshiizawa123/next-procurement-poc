@@ -1,0 +1,278 @@
+openapi: 3.0.2
+info:
+  title: マネーフォワード クラウド会計Plus 事業者情報 API
+  version: 3.0.0
+  termsOfService: "https://biz.moneyforward.com/agreement/api"
+  contact:
+    name: Money Forward
+  description: |
+    マネーフォワード クラウド会計Plusの事業者情報API <br>
+
+    ## 認証
+
+    全てのAPIは、OAuth 2.0 を 用いて認証と認可を行います。<br>
+    OAuth 2.0に従って、アクセストークンを取得してください。<br>
+    取得したアクセストークンを Bearer Tokenとして Authorization Headerに付与する事で、APIリクエストが可能になります。<br>
+
+    ## リクエストID
+
+    全てのAPIリクエストに一意のリクエストIDが付与され、レスポンスヘッダーに `X-Request-ID`というキーで値が設定されます。<br>
+    お問い合わせいただく際にはリクエストIDをお伝えいただきますとスムーズにご対応できます。
+
+    ## エラーレスポンス
+
+    全てのAPIは3種類のステータスコード（2xx, 4xx, 5xx）を返却します。<br>
+    4xx, 5xx の場合は共通のレスポンスフォーマットでエラー用のレスポンスボディを返却します。<br>
+    エラーレスポンスにはエラーと同じ数の要素を含む配列が用意され、それぞれエラーの種別である `code` とエラー内容の `message` を含みます。<br>
+    エラーコードの種類やフォーマットなどの詳細は <a href="#model-Error">Error スキーマの定義</a> をご参照ください。
+
+servers:
+  - url: "https://api-enterprise-accounting.moneyforward.com/api/v3"
+    description: Production
+paths:
+  "/offices/accounting_periods":
+    get:
+      operationId: getAccountingPeriods
+      summary: 会計期間の取得
+      description: |
+        会計期間を取得します。
+      tags:
+        - AccountingPeriods
+      responses:
+        "200":
+          description: |
+            会計期間を取得します。
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - accounting_periods
+                properties:
+                  accounting_periods:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AccountingPeriod"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequest"
+        default:
+          $ref: "#/components/responses/InternalServerError"
+tags:
+  - name: Offices
+    description: 事業者情報
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: OAuth 2.0により取得したアクセストークンを指定してください
+    oAuth:
+      type: oauth2
+      description: OAuth 2.0を用いて認証と認可を行います
+      flows:
+        authorizationCode:
+          authorizationUrl: https://api.biz.moneyforward.com/authorize
+          tokenUrl: https://api.biz.moneyforward.com/token
+          scopes:
+            mfc/enterprise-accounting/office.read: 事業者情報の参照
+  schemas:
+    AccountingPeriod:
+      type: object
+      properties:
+        office_name:
+          description: 事業者名
+          type: string
+        fiscal_year:
+          description: 会計年度
+          type: integer
+        start_date:
+          description: 会計期間開始日
+          type: string
+          format: date
+        end_date:
+          description: 会計期間終了日
+          type: string
+          format: date
+        office_excise:
+          type: integer
+          enum:
+            - 1
+            - 2
+            - 3
+            - 4
+          default: 4  # '原則課税（個別対応方式）' is the default value
+          description: |
+            課税形式
+            - 1: 免税
+            - 2: 簡易課税
+            - 3: 原則課税（一括比例配分方式）
+            - 4: 原則課税（個別対応方式）
+        calculation_method_for_consumption_tax:
+          type: integer
+          enum:
+            - 1
+            - 2
+            - 3
+          default: 3  # '税抜内税' is the default value
+          description: |
+            経理方式
+            - 1: 税込
+            - 2: 税抜別記
+            - 3: 税抜内税
+        sales_tax_fraction:
+          type: integer
+          enum:
+            - 1
+            - 2
+            - 3
+          default: 1  # '切り捨て' is the default value
+          description: |
+            売上消費税端数処理
+            - 1: 切り捨て
+            - 2: 切り上げ
+            - 3: 四捨五入
+        purchases_tax_fraction:
+          type: integer
+          enum:
+            - 1
+            - 2
+            - 3
+          default: 1  # '切り捨て' is the default value
+          description: |
+            仕入消費税端数処理
+            - 1: 切り捨て
+            - 2: 切り上げ
+            - 3: 四捨五入
+        sales_tax_sum_method:
+          type: integer
+          enum:
+            - 1
+            - 2
+          default: 1  # '割戻し' is the default value
+          description: |
+            売上消費税計算方法
+            - 1: 割戻し
+            - 2: 積上げ
+        purchases_tax_sum_method:
+          type: integer
+          enum:
+            - 1
+            - 2
+          default: 1  # '割戻し' is the default value
+          description: |
+            仕入消費税計算方法
+            - 1: 割戻し
+            - 2: 積上げ
+      example:
+        office_name: 株式会社マネーフォワード
+        fiscal_year: 2023
+        start_date: 2023-04-01
+        end_date: 2024-03-31
+        office_excise: 3
+        calculation_method_for_consumption_tax: 2
+        sales_tax_fraction: 1
+        purchases_tax_fraction: 3
+        sales_tax_sum_method: 2
+        purchases_tax_sum_method: 1
+    Error:
+      description: 4xx, 5xx の場合のエラー
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            - validation_failed
+            - authentication_header_required
+            - invalid_authentication
+            - has_no_contract
+            - internal_server_error
+            - api_rate_limit_exceeded
+          description: |
+            エラーコード
+            - `validation_failed`: リクエストのパラメータが不正
+            - `authentication_header_required`: トークンが設定されていない
+            - `invalid_authentication`: トークンが不正か失効している
+            - `has_no_contract`: 契約がない
+            - `internal_server_error`: 内部エラー
+            - `api_rate_limit_exceeded`: API rate limit exceeded
+        message:
+          type: string
+          description: エラー内容
+      required:
+        - code
+        - message
+      example:
+        code: validation_failed
+        message: 指定された会計年度が存在しません
+    ErrorResponse:
+      description: エラーレスポンス
+      type: object
+      properties:
+        errors:
+          type: array
+          description: エラー一覧
+          items:
+            $ref: "#/components/schemas/Error"
+      required:
+        - errors
+  responses:
+    BadRequest:
+      description: リクエストのパラメータが不正な場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: validation_failed
+                message: 指定された会計年度が存在しません
+    Unauthorized:
+      description: アクセストークンが設定されていない、不正、または失効済の場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: invalid_authentication
+                message: 認証情報が間違っています。access tokenが正しいか確認してください。
+    Forbidden:
+      description: 会計Plusの契約情報がない場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: has_no_contract
+                message: 会計Plusのご契約が無いため、使用できる機能に制限が発生しています。
+    TooManyRequest:
+      description: リクエスト回数の上限を超えた場合のエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: api_rate_limit_exceeded
+                message: API rate limit exceeded
+    InternalServerError:
+      description: 予期していないエラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            errors:
+              - code: internal_server_error
+                message: internal server error
+security:
+  - bearerAuth: []
+  - oAuth:
+    - mfc/enterprise-accounting/office.read

@@ -3,20 +3,20 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { apiFetch } from "@/lib/api-client";
 
-// --- 定数 ---
+// --- フォールバック定数（MF APIが使えない場合に使用） ---
 
-const DEBIT_ACCOUNTS = [
+const FALLBACK_ACCOUNTS = [
   "消耗品費", "備品消耗品費", "事務用消耗品費", "工具器具備品", "ソフトウェア",
   "外注費", "業務委託費", "広告宣伝費", "旅費交通費", "通信費",
   "地代家賃", "雑費", "研究開発費", "管理諸費", "会議費",
   "接待交際費", "修繕費", "材料費", "材料仕入",
 ];
 
-const TAX_CATEGORIES = [
+const FALLBACK_TAXES = [
   "共-課仕 10%", "共-課仕 8%", "課仕 10%", "課仕 8%", "非課税", "不課税", "対象外",
 ];
 
-const DEPARTMENTS = ["営業部", "開発部", "管理本部", "製造部", "ロジスティクス"];
+const FALLBACK_DEPARTMENTS = ["営業部", "開発部", "管理本部", "製造部", "ロジスティクス"];
 
 const CREDIT_MAP: Record<string, { account: string; sub: string }[]> = {
   "MFカード": [{ account: "未払金", sub: "MFカード:未請求" }, { account: "未払金", sub: "MFカード:請求" }],
@@ -24,14 +24,42 @@ const CREDIT_MAP: Record<string, { account: string; sub: string }[]> = {
   "請求書払い（前払い）": [{ account: "前払金", sub: "" }, { account: "買掛金", sub: "" }],
 };
 
-const ACCOUNT_TAX_MAP: Record<string, string> = {
-  消耗品費: "共-課仕 10%", 備品消耗品費: "共-課仕 10%", 事務用消耗品費: "共-課仕 10%",
-  工具器具備品: "共-課仕 10%", ソフトウェア: "共-課仕 10%", 外注費: "共-課仕 10%",
-  業務委託費: "共-課仕 10%", 広告宣伝費: "共-課仕 10%", 旅費交通費: "共-課仕 10%",
-  通信費: "共-課仕 10%", 地代家賃: "共-課仕 10%", 雑費: "共-課仕 10%",
-  研究開発費: "課仕 10%", 管理諸費: "共-課仕 10%", 会議費: "共-課仕 10%",
-  接待交際費: "共-課仕 10%", 修繕費: "共-課仕 10%", 材料費: "共-課仕 10%", 材料仕入: "共-課仕 10%",
-};
+// --- MF会計マスタデータ型 ---
+
+interface MfMasters {
+  accounts: { code: string | null; name: string; taxId?: number; categories?: string[] }[];
+  taxes: { code: string | null; name: string; abbreviation?: string; taxRate?: number }[];
+  departments: { code: string | null; name: string }[];
+  subAccounts: { id: number; accountId: number; name: string }[];
+}
+
+/** マスタから勘定科目のデフォルト税区分を解決 */
+function resolveAccountTax(accountName: string, masters: MfMasters | null): string {
+  if (!masters) return "共-課仕 10%";
+  const account = masters.accounts.find((a) => a.name === accountName);
+  if (!account?.taxId) return "共-課仕 10%";
+  const tax = masters.taxes.find((t) => Number(t.code) === account.taxId || t.name.includes(String(account.taxId)));
+  return tax?.name || "共-課仕 10%";
+}
+
+/** マスタから支払方法に応じた貸方の補助科目候補を構築 */
+function buildCreditOptions(paymentMethod: string, masters: MfMasters | null): { account: string; sub: string }[] {
+  // マスタから補助科目を使えるが、支払方法→貸方のマッピングはビジネスロジック
+  const base = CREDIT_MAP[paymentMethod] || CREDIT_MAP["請求書払い"];
+  if (!masters) return base;
+
+  // マスタの補助科目で「未払金」系を動的に補完
+  if (paymentMethod.includes("カード")) {
+    const unpaidAcct = masters.accounts.find((a) => a.name === "未払金");
+    if (unpaidAcct) {
+      const subs = masters.subAccounts
+        .filter((s) => s.accountId === Number(unpaidAcct.code) || s.name.includes("カード"))
+        .map((s) => ({ account: "未払金", sub: s.name }));
+      if (subs.length > 0) return subs;
+    }
+  }
+  return base;
+}
 
 function taxRate(cat: string): number {
   if (cat.includes("10%")) return 10;
@@ -101,23 +129,28 @@ type Tab = "pending" | "registered";
 
 // --- 仕訳明細コンポーネント ---
 
-function JournalDetail({ r, edits, onEdit }: {
+function JournalDetail({ r, edits, onEdit, masters }: {
   r: PurchaseRequest;
   edits: Partial<JournalEdits>;
   onEdit: (field: keyof JournalEdits, value: string) => void;
+  masters: MfMasters | null;
 }) {
+  const accountNames = masters ? masters.accounts.map((a) => a.name) : FALLBACK_ACCOUNTS;
+  const taxNames = masters ? masters.taxes.map((t) => t.name) : FALLBACK_TAXES;
+  const deptNames = masters ? masters.departments.map((d) => d.name) : FALLBACK_DEPARTMENTS;
+
   const debitAccount = edits.debitAccount ?? (r.accountTitle?.split("（")[0] || "消耗品費");
   const defaultCredit = resolveCreditDefault(r.paymentMethod);
   const creditAccount = edits.creditAccount ?? defaultCredit.account;
   const creditSubAccount = edits.creditSubAccount ?? defaultCredit.sub;
-  const taxCat = edits.taxCategory ?? (ACCOUNT_TAX_MAP[debitAccount] || "共-課仕 10%");
+  const taxCat = edits.taxCategory ?? resolveAccountTax(debitAccount, masters);
   const dept = edits.department ?? r.department;
   const hubspot = edits.hubspotDealId ?? (r.hubspotInfo || "");
   const baseDate = r.inspectionDate || r.applicationDate || new Date().toISOString().slice(0, 10);
   const ym = baseDate.slice(0, 7).replace("-", "/");
   const memo = edits.memo ?? `${ym} ${r.prNumber} ${r.supplierName}`;
   const tax = calcTax(r.totalAmount, taxCat);
-  const creditOptions = CREDIT_MAP[r.paymentMethod] || CREDIT_MAP["請求書払い"];
+  const creditOptions = buildCreditOptions(r.paymentMethod, masters);
   const hasEdits = Object.keys(edits).length > 0;
 
   // OCRデータを非同期取得
@@ -273,11 +306,11 @@ function JournalDetail({ r, edits, onEdit }: {
                 <select value={debitAccount}
                   onChange={(e) => {
                     onEdit("debitAccount", e.target.value);
-                    const newTax = ACCOUNT_TAX_MAP[e.target.value];
-                    if (newTax) onEdit("taxCategory", newTax);
+                    const newTax = resolveAccountTax(e.target.value, masters);
+                    onEdit("taxCategory", newTax);
                   }}
                   className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                  {DEBIT_ACCOUNTS.map((a) => <option key={a} value={a}>{a}</option>)}
+                  {accountNames.map((a) => <option key={a} value={a}>{a}</option>)}
                 </select>
               </label>
               <label className="block">
@@ -303,14 +336,14 @@ function JournalDetail({ r, edits, onEdit }: {
                 <span className="text-gray-500 text-xs">税区分</span>
                 <select value={taxCat} onChange={(e) => onEdit("taxCategory", e.target.value)}
                   className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                  {TAX_CATEGORIES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  {taxNames.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
               </label>
               <label className="block">
                 <span className="text-gray-500 text-xs">部門</span>
                 <select value={dept} onChange={(e) => onEdit("department", e.target.value)}
                   className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                  {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+                  {deptNames.map((d) => <option key={d} value={d}>{d}</option>)}
                 </select>
               </label>
             </div>
@@ -349,6 +382,27 @@ export default function JournalManagement() {
   const [bulkRegistering, setBulkRegistering] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [edits, setEdits] = useState<Record<string, Partial<JournalEdits>>>({});
+  const [masters, setMasters] = useState<MfMasters | null>(null);
+  const [mastersError, setMastersError] = useState("");
+
+  // MF会計マスタデータ取得
+  useEffect(() => {
+    apiFetch("/api/mf/masters")
+      .then((r) => r.json())
+      .then((d: { ok?: boolean; error?: string } & Partial<MfMasters>) => {
+        if (d.ok && d.accounts) {
+          setMasters({
+            accounts: d.accounts || [],
+            taxes: d.taxes || [],
+            departments: d.departments || [],
+            subAccounts: d.subAccounts || [],
+          });
+        } else {
+          setMastersError(d.error || "マスタ取得失敗");
+        }
+      })
+      .catch(() => setMastersError("MF会計マスタの取得に失敗しました"));
+  }, []);
 
   const fetchData = useCallback(() => {
     setLoading(true);
@@ -430,6 +484,16 @@ export default function JournalManagement() {
             <button onClick={fetchData} className="text-sm text-red-600 underline">再読み込み</button>
           </div>
         )}
+        {mastersError && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 text-sm text-amber-800">
+            MF会計マスタ: {mastersError}（フォールバック値を使用中）
+          </div>
+        )}
+        {masters && !mastersError && (
+          <div className="text-xs text-green-600 mb-2">
+            MF会計マスタ読込済（科目{masters.accounts.length} / 税区分{masters.taxes.length} / 部門{masters.departments.length}）
+          </div>
+        )}
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
           <div className="bg-white border rounded-lg p-3 text-center">
@@ -504,7 +568,7 @@ export default function JournalManagement() {
                     const credit = resolveCreditDefault(r.paymentMethod);
                     const creditAcc = e.creditAccount ?? credit.account;
                     const creditSub = e.creditSubAccount ?? credit.sub;
-                    const taxCat = e.taxCategory ?? (ACCOUNT_TAX_MAP[debit] || "共-課仕 10%");
+                    const taxCat = e.taxCategory ?? resolveAccountTax(debit, masters);
                     const dept = e.department ?? r.department;
                     const hubspot = e.hubspotDealId ?? (r.hubspotInfo || "");
                     const edited = Object.keys(e).length > 0;
@@ -568,7 +632,7 @@ export default function JournalManagement() {
                       {isExpanded && (
                         <tr key={`${r.prNumber}-detail`}>
                           <td colSpan={12}>
-                            <JournalDetail r={r} edits={e} onEdit={(field, value) => handleEdit(r.prNumber, field, value)} />
+                            <JournalDetail r={r} edits={e} onEdit={(field, value) => handleEdit(r.prNumber, field, value)} masters={masters} />
                           </td>
                         </tr>
                       )}
