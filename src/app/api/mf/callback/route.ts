@@ -40,14 +40,19 @@ export async function GET(request: NextRequest) {
     const tokens = await exchangeCodeForTokens(code);
     console.log("[mf-callback] Token acquired, expires:", new Date(tokens.expires_at).toISOString());
 
-    const response = NextResponse.json({
-      ok: true,
-      message: "MF会計Plus認証完了。下記のrefresh_tokenをVercel環境変数 MF_REFRESH_TOKEN に設定してください。",
-      refresh_token: tokens.refresh_token,
-      expires_at: new Date(tokens.expires_at).toISOString(),
-    });
-    // state cookieを削除
+    // 認証成功 → 仕訳管理ページにリダイレクト（同一インスタンスでキャッシュ利用）
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || "";
+    const baseUrl = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
+    const response = NextResponse.redirect(`${baseUrl}/admin/journals?mf_auth=ok`);
+    // state cookieを削除、refresh_tokenをhttpOnly cookieに保存（次回ブートストラップ用）
     response.cookies.delete("mf_oauth_state");
+    response.cookies.set("mf_refresh_token", tokens.refresh_token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      maxAge: 30 * 24 * 60 * 60, // 30日
+      path: "/api/mf",
+    });
     return response;
   } catch (err) {
     console.error("[mf-callback] Token exchange error:", err);

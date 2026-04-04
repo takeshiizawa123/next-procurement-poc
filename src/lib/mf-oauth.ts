@@ -153,25 +153,36 @@ function normalizeTokenResponse(data: Record<string, unknown>): MfTokens {
 
 async function saveTokens(tokens: MfTokens): Promise<void> {
   cachedTokens = tokens;
-  console.log("[mf-oauth] Token cached in memory (expires_at:", new Date(tokens.expires_at).toISOString(), ")");
-  // リフレッシュトークンがローテーションされた場合に警告
-  if (process.env.MF_REFRESH_TOKEN && tokens.refresh_token !== process.env.MF_REFRESH_TOKEN) {
-    console.warn("[mf-oauth] Refresh token rotated! Update MF_REFRESH_TOKEN env var.");
-  }
+  // プロセス内の環境変数も更新（同一インスタンスでのloadTokens用）
+  process.env.MF_REFRESH_TOKEN = tokens.refresh_token;
+  console.log("[mf-oauth] Token cached (expires_at:", new Date(tokens.expires_at).toISOString(), ", refresh rotated:", tokens.refresh_token !== process.env._MF_ORIG_REFRESH, ")");
 }
 
 async function loadTokens(): Promise<MfTokens | null> {
   if (cachedTokens) return cachedTokens;
 
-  // コールドスタート: MF_REFRESH_TOKEN 環境変数からブートストラップ
-  const envRefreshToken = process.env.MF_REFRESH_TOKEN;
-  if (envRefreshToken) {
-    console.log("[mf-oauth] Cold start — bootstrapping from MF_REFRESH_TOKEN env var");
+  // リフレッシュトークンの取得優先順位:
+  // 1. process.env.MF_REFRESH_TOKEN（saveTokensで更新された値 or 環境変数）
+  // 2. cookieのmf_refresh_token（コールバック時に保存）
+  let refreshToken = process.env.MF_REFRESH_TOKEN || "";
+
+  if (!refreshToken) {
     try {
-      const tokens = await refreshAccessToken(envRefreshToken);
+      const { cookies } = await import("next/headers");
+      const cookieStore = await cookies();
+      refreshToken = cookieStore.get("mf_refresh_token")?.value || "";
+    } catch {
+      // cookieアクセス不可（非リクエストコンテキスト）
+    }
+  }
+
+  if (refreshToken) {
+    console.log("[mf-oauth] Cold start — bootstrapping from refresh token");
+    try {
+      const tokens = await refreshAccessToken(refreshToken);
       return tokens;
     } catch (e) {
-      console.error("[mf-oauth] Failed to bootstrap from MF_REFRESH_TOKEN:", e);
+      console.error("[mf-oauth] Failed to bootstrap:", e);
       return null;
     }
   }
