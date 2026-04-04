@@ -488,6 +488,32 @@ export default function JournalManagement() {
   const [edits, setEdits] = useState<Record<string, Partial<JournalEdits>>>({});
   const [masters, setMasters] = useState<MfMasters | null>(null);
   const [mastersError, setMastersError] = useState("");
+  const [mfAuth, setMfAuth] = useState<{
+    authenticated: boolean;
+    cookieDaysRemaining: number | null;
+    cookieExpiresAt: string | null;
+  } | null>(null);
+
+  // MF認証ステータス取得
+  const fetchAuthStatus = useCallback(() => {
+    apiFetch("/api/mf/auth/status")
+      .then((r) => r.json())
+      .then((d: { authenticated: boolean; cookieDaysRemaining: number | null; cookieExpiresAt: string | null }) => {
+        setMfAuth(d);
+      })
+      .catch(() => setMfAuth({ authenticated: false, cookieDaysRemaining: null, cookieExpiresAt: null }));
+  }, []);
+
+  useEffect(() => { fetchAuthStatus(); }, [fetchAuthStatus]);
+
+  // URLパラメータでmf_auth=okなら認証完了→ステータス再取得
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.search.includes("mf_auth=ok")) {
+      fetchAuthStatus();
+      // URLからパラメータを消す
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [fetchAuthStatus]);
 
   // MF会計マスタデータ取得
   useEffect(() => {
@@ -590,6 +616,43 @@ export default function JournalManagement() {
             <button onClick={fetchData} className="text-sm text-red-600 underline">再読み込み</button>
           </div>
         )}
+        {/* MF会計Plus認証ステータス */}
+        {mfAuth && !mfAuth.authenticated && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center justify-between">
+            <div>
+              <span className="text-sm font-medium text-red-800">MF会計Plus: 未認証</span>
+              <span className="text-xs text-red-600 ml-2">仕訳登録・マスタ取得にはMF会計Plusの認証が必要です</span>
+            </div>
+            <a href="/api/mf/auth?force=true"
+              className="px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700">
+              MF会計に認証
+            </a>
+          </div>
+        )}
+        {mfAuth && mfAuth.authenticated && mfAuth.cookieDaysRemaining != null && mfAuth.cookieDaysRemaining <= 7 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 flex items-center justify-between">
+            <div>
+              <span className="text-sm font-medium text-amber-800">MF会計Plus: 認証期限が近づいています</span>
+              <span className="text-xs text-amber-600 ml-2">
+                残り{mfAuth.cookieDaysRemaining}日（{mfAuth.cookieExpiresAt ? new Date(mfAuth.cookieExpiresAt).toLocaleDateString("ja-JP") : ""}まで）
+              </span>
+            </div>
+            <a href="/api/mf/auth?force=true"
+              className="px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded hover:bg-amber-700">
+              再認証
+            </a>
+          </div>
+        )}
+        {mfAuth && mfAuth.authenticated && (mfAuth.cookieDaysRemaining == null || mfAuth.cookieDaysRemaining > 7) && (
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs text-green-600">
+              MF会計Plus認証済
+              {mfAuth.cookieDaysRemaining != null && `（残り${mfAuth.cookieDaysRemaining}日）`}
+            </span>
+            <a href="/api/mf/auth?force=true" className="text-[10px] text-gray-400 hover:text-gray-600 underline">再認証</a>
+          </div>
+        )}
+
         {mastersError && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 text-sm text-amber-800">
             MF会計マスタ: {mastersError}（フォールバック値を使用中）
