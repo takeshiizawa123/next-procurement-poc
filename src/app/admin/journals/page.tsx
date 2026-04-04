@@ -618,44 +618,51 @@ export default function JournalManagement() {
             <button onClick={fetchData} className="text-sm text-red-600 underline">再読み込み</button>
           </div>
         )}
-        {/* MF会計Plus認証ステータス */}
-        {mfAuthLoaded && (!mfAuth || !mfAuth.authenticated) && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center justify-between">
-            <div>
-              <span className="text-sm font-medium text-red-800">MF会計Plus: 未認証</span>
-              <span className="text-xs text-red-600 ml-2">仕訳登録・マスタ取得にはMF会計Plusの認証が必要です</span>
-            </div>
-            <a href="/api/mf/auth?force=true"
-              className="px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700 whitespace-nowrap">
-              MF会計に認証
-            </a>
-          </div>
-        )}
-        {mfAuth && mfAuth.authenticated && mfAuth.cookieDaysRemaining != null && mfAuth.cookieDaysRemaining <= 7 && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 flex items-center justify-between">
-            <div>
-              <span className="text-sm font-medium text-amber-800">MF会計Plus: 認証期限が近づいています</span>
-              <span className="text-xs text-amber-600 ml-2">
-                残り{mfAuth.cookieDaysRemaining}日（{mfAuth.cookieExpiresAt ? new Date(mfAuth.cookieExpiresAt).toLocaleDateString("ja-JP") : ""}まで）
-              </span>
-            </div>
-            <a href="/api/mf/auth?force=true"
-              className="px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded hover:bg-amber-700">
-              再認証
-            </a>
-          </div>
-        )}
-        {mfAuth && mfAuth.authenticated && (mfAuth.cookieDaysRemaining == null || mfAuth.cookieDaysRemaining > 7) && (
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-xs text-green-600">
-              MF会計Plus認証済
-              {mfAuth.cookieDaysRemaining != null && `（残り${mfAuth.cookieDaysRemaining}日）`}
-            </span>
-            <a href="/api/mf/auth?force=true" className="text-[10px] text-gray-400 hover:text-gray-600 underline">再認証</a>
-          </div>
-        )}
+        {/* MF会計Plus認証ステータス — mastersErrorまたはauth/statusから判定 */}
+        {(() => {
+          const needsAuth = mastersError?.includes("未認証") || (mfAuthLoaded && (!mfAuth || !mfAuth.authenticated));
+          const nearExpiry = mfAuth?.authenticated && mfAuth.cookieDaysRemaining != null && mfAuth.cookieDaysRemaining <= 7;
+          const isOk = mfAuth?.authenticated && !nearExpiry;
 
-        {mastersError && !(mfAuthLoaded && (!mfAuth || !mfAuth.authenticated)) && (
+          if (needsAuth) return (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center justify-between">
+              <div>
+                <span className="text-sm font-medium text-red-800">MF会計Plus: 未認証</span>
+                <span className="text-xs text-red-600 ml-2">仕訳登録・マスタ取得にはMF会計Plusの認証が必要です</span>
+              </div>
+              <a href="/api/mf/auth?force=true"
+                className="px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700 whitespace-nowrap">
+                MF会計に認証
+              </a>
+            </div>
+          );
+          if (nearExpiry) return (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 flex items-center justify-between">
+              <div>
+                <span className="text-sm font-medium text-amber-800">MF会計Plus: 認証期限が近づいています</span>
+                <span className="text-xs text-amber-600 ml-2">
+                  残り{mfAuth.cookieDaysRemaining}日（{mfAuth.cookieExpiresAt ? new Date(mfAuth.cookieExpiresAt).toLocaleDateString("ja-JP") : ""}まで）
+                </span>
+              </div>
+              <a href="/api/mf/auth?force=true"
+                className="px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded hover:bg-amber-700">
+                再認証
+              </a>
+            </div>
+          );
+          if (isOk) return (
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs text-green-600">
+                MF会計Plus認証済
+                {mfAuth.cookieDaysRemaining != null && `（残り${mfAuth.cookieDaysRemaining}日）`}
+              </span>
+              <a href="/api/mf/auth?force=true" className="text-[10px] text-gray-400 hover:text-gray-600 underline">再認証</a>
+            </div>
+          );
+          return null;
+        })()}
+
+        {mastersError && !mastersError.includes("未認証") && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 text-sm text-amber-800">
             MF会計マスタ: {mastersError}（フォールバック値を使用中）
           </div>
