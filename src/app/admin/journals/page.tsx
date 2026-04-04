@@ -37,11 +37,14 @@ interface MfMasters {
 
 /** マスタから勘定科目のデフォルト税区分を解決 */
 function resolveAccountTax(accountName: string, masters: MfMasters | null): string {
-  if (!masters) return "共-課仕 10%";
+  const DEFAULT = "共-課仕 10%";
+  if (!masters) return DEFAULT;
   const account = masters.accounts.find((a) => a.name === accountName);
-  if (!account?.taxId) return "共-課仕 10%";
+  if (!account?.taxId) return DEFAULT;
   const tax = masters.taxes.find((t) => Number(t.code) === account.taxId || t.name.includes(String(account.taxId)));
-  return tax?.name || "共-課仕 10%";
+  // 「不明」「対象外」等の非課税系はデフォルトにフォールバック
+  if (!tax?.name || tax.name === "不明" || tax.name === "対象外") return DEFAULT;
+  return tax.name;
 }
 
 /** マスタから支払方法に応じた貸方の補助科目候補を構築 */
