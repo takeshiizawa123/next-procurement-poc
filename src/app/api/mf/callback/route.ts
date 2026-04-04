@@ -42,7 +42,8 @@ export async function GET(request: NextRequest) {
 
     const response = NextResponse.json({
       ok: true,
-      message: "MF会計Plus認証完了。仕訳登録が利用可能です。",
+      message: "MF会計Plus認証完了。下記のrefresh_tokenをVercel環境変数 MF_REFRESH_TOKEN に設定してください。",
+      refresh_token: tokens.refresh_token,
       expires_at: new Date(tokens.expires_at).toISOString(),
     });
     // state cookieを削除
