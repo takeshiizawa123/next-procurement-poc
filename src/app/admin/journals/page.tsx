@@ -493,6 +493,7 @@ export default function JournalManagement() {
     cookieDaysRemaining: number | null;
     cookieExpiresAt: string | null;
   } | null>(null);
+  const [mfAuthLoaded, setMfAuthLoaded] = useState(false);
 
   // MF認証ステータス取得
   const fetchAuthStatus = useCallback(() => {
@@ -501,7 +502,8 @@ export default function JournalManagement() {
       .then((d: { authenticated: boolean; cookieDaysRemaining: number | null; cookieExpiresAt: string | null }) => {
         setMfAuth(d);
       })
-      .catch(() => setMfAuth({ authenticated: false, cookieDaysRemaining: null, cookieExpiresAt: null }));
+      .catch(() => setMfAuth({ authenticated: false, cookieDaysRemaining: null, cookieExpiresAt: null }))
+      .finally(() => setMfAuthLoaded(true));
   }, []);
 
   useEffect(() => { fetchAuthStatus(); }, [fetchAuthStatus]);
@@ -617,14 +619,14 @@ export default function JournalManagement() {
           </div>
         )}
         {/* MF会計Plus認証ステータス */}
-        {mfAuth && !mfAuth.authenticated && (
+        {mfAuthLoaded && (!mfAuth || !mfAuth.authenticated) && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center justify-between">
             <div>
               <span className="text-sm font-medium text-red-800">MF会計Plus: 未認証</span>
               <span className="text-xs text-red-600 ml-2">仕訳登録・マスタ取得にはMF会計Plusの認証が必要です</span>
             </div>
             <a href="/api/mf/auth?force=true"
-              className="px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700">
+              className="px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700 whitespace-nowrap">
               MF会計に認証
             </a>
           </div>
