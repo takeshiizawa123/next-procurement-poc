@@ -3,21 +3,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { apiFetch } from "@/lib/api-client";
 
-// --- フォールバック定数（MF APIが使えない場合に使用） ---
-
-const FALLBACK_ACCOUNTS = [
-  "消耗品費", "備品消耗品費", "事務用消耗品費", "工具器具備品", "ソフトウェア",
-  "外注費", "業務委託費", "広告宣伝費", "旅費交通費", "通信費",
-  "地代家賃", "雑費", "研究開発費", "管理諸費", "会議費",
-  "接待交際費", "修繕費", "材料費", "材料仕入",
-];
-
-const FALLBACK_TAXES = [
-  "共-課仕 10%", "共-課仕 8%", "課仕 10%", "課仕 8%", "非課税", "不課税", "対象外",
-];
-
-const FALLBACK_DEPARTMENTS = ["営業部", "開発部", "管理本部", "製造部", "ロジスティクス"];
-
 const CREDIT_MAP: Record<string, { account: string; sub: string }[]> = {
   "MFカード": [{ account: "未払金", sub: "MFカード:未請求" }, { account: "未払金", sub: "MFカード:請求" }],
   "請求書払い": [{ account: "買掛金", sub: "" }, { account: "未払金", sub: "" }],
@@ -149,17 +134,18 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
   isRegistering: boolean;
   result?: { ok: boolean; message: string } | null;
 }) {
-  const accountNames = masters ? masters.accounts.map((a) => a.name) : FALLBACK_ACCOUNTS;
-  const taxNames = masters ? masters.taxes.map((t) => t.name) : FALLBACK_TAXES;
-  const deptNames = masters ? masters.departments.map((d) => d.name) : FALLBACK_DEPARTMENTS;
+  const accountNames = masters ? masters.accounts.map((a) => a.name) : null;
+  const taxNames = masters ? masters.taxes.map((t) => t.name) : null;
+  const deptNames = masters ? masters.departments.map((d) => d.name) : null;
 
-  const rawDebit = r.accountTitle?.split("（")[0]?.trim() || "消耗品費";
-  // MFマスタ科目から解決: 完全一致→前方一致→部分一致（最短優先）
-  const resolvedDebit = accountNames.find((a) => a === rawDebit)
-    || accountNames.find((a) => a.startsWith(rawDebit))
-    || accountNames.filter((a) => a.includes(rawDebit)).sort((x, y) => x.length - y.length)[0]
-    || accountNames.filter((a) => a.includes("消耗品費")).sort((x, y) => x.length - y.length)[0]
-    || accountNames[0];
+  const rawDebit = r.accountTitle?.split("（")[0]?.trim() || "";
+  // MFマスタがある場合のみ科目解決
+  const resolvedDebit = accountNames
+    ? (accountNames.find((a) => a === rawDebit)
+      || accountNames.find((a) => a.startsWith(rawDebit))
+      || accountNames.filter((a) => rawDebit && a.includes(rawDebit)).sort((x, y) => x.length - y.length)[0]
+      || "")
+    : rawDebit;
   const debitAccount = edits.debitAccount ?? resolvedDebit;
   const defaultCredit = resolveCreditDefault(r.paymentMethod);
   const creditAccount = edits.creditAccount ?? defaultCredit.account;
@@ -406,18 +392,29 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
           <div className="space-y-2">
             <div className="font-medium text-gray-700">仕訳内容の編集</div>
 
+            {!masters && (
+              <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-700 mb-2">
+                MF会計マスタ未読込 — 先にMF会計認証を完了してください
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-2">
               <label className="block">
                 <span className="text-gray-500 text-xs">借方科目</span>
-                <select value={debitAccount}
-                  onChange={(e) => {
-                    onEdit("debitAccount", e.target.value);
-                    const newTax = resolveAccountTax(e.target.value, masters);
-                    onEdit("taxCategory", newTax);
-                  }}
-                  className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                  {accountNames.map((a) => <option key={a} value={a}>{a}</option>)}
-                </select>
+                {accountNames ? (
+                  <select value={debitAccount}
+                    onChange={(e) => {
+                      onEdit("debitAccount", e.target.value);
+                      const newTax = resolveAccountTax(e.target.value, masters);
+                      onEdit("taxCategory", newTax);
+                    }}
+                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
+                    {accountNames.map((a) => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                ) : (
+                  <input type="text" value={edits.debitAccount ?? rawDebit} onChange={(e) => onEdit("debitAccount", e.target.value)}
+                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
+                )}
               </label>
               <label className="block">
                 <span className="text-gray-500 text-xs">貸方科目</span>
@@ -440,17 +437,27 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
             <div className="grid grid-cols-2 gap-2">
               <label className="block">
                 <span className="text-gray-500 text-xs">税区分</span>
-                <select value={taxCat} onChange={(e) => onEdit("taxCategory", e.target.value)}
-                  className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                  {taxNames.map((t) => <option key={t} value={t}>{t}</option>)}
-                </select>
+                {taxNames ? (
+                  <select value={taxCat} onChange={(e) => onEdit("taxCategory", e.target.value)}
+                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
+                    {taxNames.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                ) : (
+                  <input type="text" value={edits.taxCategory ?? taxCat} onChange={(e) => onEdit("taxCategory", e.target.value)}
+                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
+                )}
               </label>
               <label className="block">
                 <span className="text-gray-500 text-xs">部門</span>
-                <select value={dept} onChange={(e) => onEdit("department", e.target.value)}
-                  className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                  {deptNames.map((d) => <option key={d} value={d}>{d}</option>)}
-                </select>
+                {deptNames ? (
+                  <select value={dept} onChange={(e) => onEdit("department", e.target.value)}
+                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
+                    {deptNames.map((d) => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                ) : (
+                  <input type="text" value={edits.department ?? r.department} onChange={(e) => onEdit("department", e.target.value)}
+                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
+                )}
               </label>
             </div>
 
@@ -469,7 +476,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                   </select>
                 ) : (
                   <input type="text" value={hubspot} onChange={(e) => onEdit("hubspotDealId", e.target.value)}
-                    placeholder="例: HS-2026-042" className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
+                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
                 )}
               </label>
               <label className="block">
@@ -486,8 +493,9 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                     ))}
                   </select>
                 ) : (
-                  <input type="text" value={r.supplierName} disabled
-                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-gray-100" />
+                  <input type="text" value={edits.counterpartyCode ?? journalSupplierName}
+                    onChange={(e) => onEdit("counterpartyCode", e.target.value)}
+                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
                 )}
               </label>
             </div>
@@ -837,13 +845,14 @@ export default function JournalManagement() {
                     const isReg = registering[r.prNumber];
                     const isExpanded = expanded[r.prNumber];
                     const e = edits[r.prNumber] || {};
-                    const acctNames = masters ? masters.accounts.map((a) => a.name) : FALLBACK_ACCOUNTS;
-                    const rawDebitRow = r.accountTitle?.split("（")[0]?.trim() || "消耗品費";
-                    const resolvedDebitRow = acctNames.find((a) => a === rawDebitRow)
-                      || acctNames.find((a) => a.startsWith(rawDebitRow))
-                      || acctNames.filter((a) => a.includes(rawDebitRow)).sort((x, y) => x.length - y.length)[0]
-                      || acctNames.filter((a) => a.includes("消耗品費")).sort((x, y) => x.length - y.length)[0]
-                      || acctNames[0];
+                    const acctNames = masters ? masters.accounts.map((a) => a.name) : null;
+                    const rawDebitRow = r.accountTitle?.split("（")[0]?.trim() || "";
+                    const resolvedDebitRow = acctNames
+                      ? (acctNames.find((a) => a === rawDebitRow)
+                        || acctNames.find((a) => a.startsWith(rawDebitRow))
+                        || acctNames.filter((a) => rawDebitRow && a.includes(rawDebitRow)).sort((x, y) => x.length - y.length)[0]
+                        || "")
+                      : rawDebitRow;
                     const debit = e.debitAccount ?? resolvedDebitRow;
                     const credit = resolveCreditDefault(r.paymentMethod);
                     const creditAcc = e.creditAccount ?? credit.account;
