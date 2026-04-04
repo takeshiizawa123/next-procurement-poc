@@ -64,6 +64,56 @@ export async function POST(
 }
 
 /**
+ * 仕訳編集内容をGASに保存
+ * PUT /api/purchase/[prNumber]/status
+ * Body: { updates: Record<string, string> }
+ */
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ prNumber: string }> },
+) {
+  const { prNumber } = await params;
+  if (!prNumber) {
+    return NextResponse.json({ error: "prNumber is required" }, { status: 400 });
+  }
+
+  let body: { updates: Record<string, string> };
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  if (!body.updates || Object.keys(body.updates).length === 0) {
+    return NextResponse.json({ error: "No updates provided" }, { status: 400 });
+  }
+
+  // 更新可能なフィールドを制限
+  const allowed = ["勘定科目", "税区分", "部門", "MF取引先", "MF摘要", "HubSpot/案件名"];
+  const filtered: Record<string, string> = {};
+  for (const [k, v] of Object.entries(body.updates)) {
+    if (allowed.includes(k)) filtered[k] = v;
+  }
+
+  if (Object.keys(filtered).length === 0) {
+    return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
+  }
+
+  try {
+    const result = await updateStatus(prNumber, filtered);
+    if (!result.success) {
+      return NextResponse.json({ error: result.error }, { status: result.statusCode || 500 });
+    }
+    cacheDelete(`${CACHE_PREFIX}${prNumber}`);
+    return NextResponse.json({ success: true, updated: Object.keys(filtered) });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[purchase-status] PUT error ${prNumber}:`, msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
+
+/**
  * 購買申請の詳細データを取得（60秒キャッシュ付き）
  */
 export async function GET(

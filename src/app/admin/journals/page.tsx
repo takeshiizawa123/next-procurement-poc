@@ -137,11 +137,14 @@ type Tab = "pending" | "registered";
 
 // --- 仕訳明細コンポーネント ---
 
-function JournalDetail({ r, edits, onEdit, masters, onRegister, isRegistering, result }: {
+function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onRegister, isRegistering, result }: {
   r: PurchaseRequest;
   edits: Partial<JournalEdits>;
   onEdit: (field: keyof JournalEdits, value: string) => void;
   masters: MfMasters | null;
+  onSave: () => void;
+  isSaving: boolean;
+  saved: boolean;
   onRegister: () => void;
   isRegistering: boolean;
   result?: { ok: boolean; message: string } | null;
@@ -495,12 +498,20 @@ function JournalDetail({ r, edits, onEdit, masters, onRegister, isRegistering, r
                 className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
             </label>
 
-            {hasEdits && (
-              <p className="text-amber-600 text-xs mt-1">* 変更あり — 仕訳登録時に反映されます</p>
-            )}
+            {/* 保存・登録ボタン */}
+            <div className="mt-3 pt-3 border-t space-y-2">
+              {/* 編集内容を保存 */}
+              {hasEdits && (
+                <button onClick={onSave} disabled={isSaving}
+                  className="w-full px-4 py-2 bg-gray-700 text-white text-sm font-medium rounded-lg hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed">
+                  {isSaving ? "保存中..." : "編集内容を保存"}
+                </button>
+              )}
+              {saved && !hasEdits && (
+                <p className="text-green-600 text-xs">保存済み</p>
+              )}
 
-            {/* 仕訳登録ボタン */}
-            <div className="mt-3 pt-3 border-t">
+              {/* MF会計に仕訳登録 */}
               {result?.ok ? (
                 <div className="text-sm text-green-700 bg-green-50 rounded px-3 py-2">{result.message}</div>
               ) : result && !result.ok ? (
@@ -509,10 +520,14 @@ function JournalDetail({ r, edits, onEdit, masters, onRegister, isRegistering, r
                   <button onClick={onRegister} className="text-xs px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700">再試行</button>
                 </div>
               ) : (
-                <button onClick={onRegister} disabled={isRegistering}
-                  className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed">
-                  {isRegistering ? "登録中..." : `仕訳登録（¥${journalAmount.toLocaleString()} / ${amountSource}ベース）`}
+                <button onClick={onRegister} disabled={isRegistering || hasEdits}
+                  className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                  title={hasEdits ? "先に編集内容を保存してください" : ""}>
+                  {isRegistering ? "登録中..." : `MF会計に仕訳登録（¥${journalAmount.toLocaleString()} / ${amountSource}ベース）`}
                 </button>
+              )}
+              {hasEdits && !result?.ok && (
+                <p className="text-amber-600 text-xs">* 未保存の変更があります — 先に保存してから仕訳登録してください</p>
               )}
             </div>
           </div>
@@ -531,6 +546,8 @@ export default function JournalManagement() {
   const [tab, setTab] = useState<Tab>("pending");
   const [registering, setRegistering] = useState<Record<string, boolean>>({});
   const [results, setResults] = useState<Record<string, { ok: boolean; message: string }>>({});
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
+  const [savedEdits, setSavedEdits] = useState<Record<string, boolean>>({});
   const [bulkRegistering, setBulkRegistering] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [edits, setEdits] = useState<Record<string, Partial<JournalEdits>>>({});
@@ -613,8 +630,37 @@ export default function JournalManagement() {
   const totalPendingAmount = pending.reduce((s, r) => s + r.totalAmount, 0);
 
   const toggleExpand = (pr: string) => setExpanded((p) => ({ ...p, [pr]: !p[pr] }));
-  const handleEdit = (pr: string, field: keyof JournalEdits, value: string) =>
+  const handleEdit = (pr: string, field: keyof JournalEdits, value: string) => {
+    setSavedEdits((p) => ({ ...p, [pr]: false }));
     setEdits((p) => ({ ...p, [pr]: { ...p[pr], [field]: value } }));
+  };
+
+  const saveEdits = async (prNumber: string) => {
+    const e = edits[prNumber];
+    if (!e || Object.keys(e).length === 0) return;
+    setSaving((prev) => ({ ...prev, [prNumber]: true }));
+    try {
+      const updates: Record<string, string> = {};
+      if (e.debitAccount) updates["勘定科目"] = e.debitAccount;
+      if (e.taxCategory) updates["税区分"] = e.taxCategory;
+      if (e.department) updates["部門"] = e.department;
+      if (e.counterpartyCode) updates["MF取引先"] = e.counterpartyCode;
+      if (e.memo) updates["MF摘要"] = e.memo;
+      if (e.hubspotDealId !== undefined) updates["HubSpot/案件名"] = e.hubspotDealId;
+
+      await apiFetch(`/api/purchase/${encodeURIComponent(prNumber)}/status`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updates }),
+      });
+      setSavedEdits((prev) => ({ ...prev, [prNumber]: true }));
+      setEdits((prev) => ({ ...prev, [prNumber]: {} }));
+    } catch {
+      // 保存失敗はeditsを維持
+    } finally {
+      setSaving((prev) => ({ ...prev, [prNumber]: false }));
+    }
+  };
 
   const registerJournal = async (prNumber: string) => {
     setRegistering((prev) => ({ ...prev, [prNumber]: true }));
@@ -860,6 +906,7 @@ export default function JournalManagement() {
                         <tr key={`${r.prNumber}-detail`}>
                           <td colSpan={12}>
                             <JournalDetail r={r} edits={e} onEdit={(field, value) => handleEdit(r.prNumber, field, value)} masters={masters}
+                              onSave={() => saveEdits(r.prNumber)} isSaving={saving[r.prNumber] || false} saved={savedEdits[r.prNumber] || false}
                               onRegister={() => registerJournal(r.prNumber)} isRegistering={isReg} result={result} />
                           </td>
                         </tr>
