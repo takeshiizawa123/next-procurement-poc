@@ -137,11 +137,14 @@ type Tab = "pending" | "registered";
 
 // --- 仕訳明細コンポーネント ---
 
-function JournalDetail({ r, edits, onEdit, masters }: {
+function JournalDetail({ r, edits, onEdit, masters, onRegister, isRegistering, result }: {
   r: PurchaseRequest;
   edits: Partial<JournalEdits>;
   onEdit: (field: keyof JournalEdits, value: string) => void;
   masters: MfMasters | null;
+  onRegister: () => void;
+  isRegistering: boolean;
+  result?: { ok: boolean; message: string } | null;
 }) {
   const accountNames = masters ? masters.accounts.map((a) => a.name) : FALLBACK_ACCOUNTS;
   const taxNames = masters ? masters.taxes.map((t) => t.name) : FALLBACK_TAXES;
@@ -495,6 +498,23 @@ function JournalDetail({ r, edits, onEdit, masters }: {
             {hasEdits && (
               <p className="text-amber-600 text-xs mt-1">* 変更あり — 仕訳登録時に反映されます</p>
             )}
+
+            {/* 仕訳登録ボタン */}
+            <div className="mt-3 pt-3 border-t">
+              {result?.ok ? (
+                <div className="text-sm text-green-700 bg-green-50 rounded px-3 py-2">{result.message}</div>
+              ) : result && !result.ok ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-red-600">{result.message}</span>
+                  <button onClick={onRegister} className="text-xs px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700">再試行</button>
+                </div>
+              ) : (
+                <button onClick={onRegister} disabled={isRegistering}
+                  className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed">
+                  {isRegistering ? "登録中..." : `仕訳登録（¥${journalAmount.toLocaleString()} / ${amountSource}ベース）`}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -826,15 +846,9 @@ export default function JournalManagement() {
                           {result?.ok ? (
                             <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded">{result.message}</span>
                           ) : result && !result.ok ? (
-                            <div className="flex items-center gap-1 justify-center">
-                              <span className="text-xs text-red-600 max-w-[120px] truncate">{result.message}</span>
-                              <button onClick={() => registerJournal(r.prNumber)} className="text-xs text-red-600 underline shrink-0">再試行</button>
-                            </div>
+                            <span className="text-xs text-red-600 max-w-[120px] truncate" title={result.message}>{result.message}</span>
                           ) : tab === "pending" ? (
-                            <button onClick={() => registerJournal(r.prNumber)} disabled={isReg}
-                              className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300">
-                              {isReg ? "登録中..." : "仕訳登録"}
-                            </button>
+                            <span className="text-xs text-gray-400">展開して登録</span>
                           ) : (
                             <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded">
                               {r.journalId ? `MF仕訳ID: ${r.journalId}` : "登録済み"}
@@ -845,7 +859,8 @@ export default function JournalManagement() {
                       {isExpanded && (
                         <tr key={`${r.prNumber}-detail`}>
                           <td colSpan={12}>
-                            <JournalDetail r={r} edits={e} onEdit={(field, value) => handleEdit(r.prNumber, field, value)} masters={masters} />
+                            <JournalDetail r={r} edits={e} onEdit={(field, value) => handleEdit(r.prNumber, field, value)} masters={masters}
+                              onRegister={() => registerJournal(r.prNumber)} isRegistering={isReg} result={result} />
                           </td>
                         </tr>
                       )}
