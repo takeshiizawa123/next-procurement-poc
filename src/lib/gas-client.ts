@@ -418,28 +418,62 @@ export async function getEmployeeCards(): Promise<
 }
 
 // ===========================================
-// MFマスタキャッシュ（GASスプレッドシート永続化）
+// MFマスタ（GASスプレッドシート）
 // ===========================================
+
+/** 取引先マスタ_MFシートの1行 */
+export interface GasCounterparty {
+  mfId: string;
+  code: string;
+  name: string;
+  searchKey: string;
+  invoiceRegistrationNumber: string;
+  available: boolean;
+  alias: string;
+}
+
+/** 部門マスタ_MFシートの1行 */
+export interface GasDepartment {
+  mfId: string;
+  code: string;
+  name: string;
+  searchKey: string;
+  available: boolean;
+}
+
+/**
+ * 取引先マスタをGASシートから取得
+ */
+export async function getGasCounterparties(): Promise<GasResponse<{ counterparties: GasCounterparty[] }>> {
+  return callGasGet<{ counterparties: GasCounterparty[] }>({ action: "getMfCounterparties" });
+}
+
+/**
+ * 部門マスタをGASシートから取得
+ */
+export async function getGasDepartments(): Promise<GasResponse<{ departments: GasDepartment[] }>> {
+  return callGasGet<{ departments: GasDepartment[] }>({ action: "getMfDepartments" });
+}
+
+// --- MF APIマスタのJSONキャッシュ（勘定科目・税区分・PJ・補助科目） ---
 
 export interface MfMastersCache {
   accounts: { code: string | null; name: string; taxId?: number }[];
   taxes: { code: string | null; name: string; abbreviation?: string; taxRate?: number }[];
-  departments: { code: string | null; name: string }[];
   subAccounts: { id: number; accountId: number; name: string }[];
   projects: { code: string | null; name: string }[];
-  counterparties: { code: string | null; name: string; invoiceRegistrationNumber?: string | null }[];
-  syncedAt: string; // ISO timestamp
+  syncedAt: string;
 }
 
 /**
- * MFマスタデータをGASに保存
+ * MF APIマスタ（科目・税区分・PJ・補助科目）をGASに保存
  */
 export async function saveMfMasters(masters: MfMastersCache): Promise<GasResponse<{ saved: boolean }>> {
   return callGasPost<{ saved: boolean }>("saveMfMasters", { masters });
 }
 
 /**
- * GASからMFマスタデータを取得
+ * GASからMF APIマスタキャッシュを取得
  */
 export async function getMfMasters(): Promise<GasResponse<{ masters: MfMastersCache }>> {
   return callGasGet<{ masters: MfMastersCache }>({ action: "getMfMasters" });
