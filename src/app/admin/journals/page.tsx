@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { apiFetch } from "@/lib/api-client";
 
 // --- 定数 ---
@@ -78,6 +78,14 @@ interface PurchaseRequest {
   isQualifiedInvoice?: string;
 }
 
+interface OcrData {
+  voucherAmount?: number;
+  amountMatch?: string;
+  registrationNumber?: string;
+  taxCategory?: string;
+  driveFileId?: string;
+}
+
 interface JournalEdits {
   debitAccount: string;
   creditAccount: string;
@@ -105,7 +113,6 @@ function JournalDetail({ r, edits, onEdit }: {
   const taxCat = edits.taxCategory ?? (ACCOUNT_TAX_MAP[debitAccount] || "共-課仕 10%");
   const dept = edits.department ?? r.department;
   const hubspot = edits.hubspotDealId ?? (r.hubspotInfo || "");
-  // 摘要の年月 = 検収日（原則）→ 申請日 → 本日
   const baseDate = r.inspectionDate || r.applicationDate || new Date().toISOString().slice(0, 10);
   const ym = baseDate.slice(0, 7).replace("-", "/");
   const memo = edits.memo ?? `${ym} ${r.prNumber} ${r.supplierName}`;
@@ -113,118 +120,217 @@ function JournalDetail({ r, edits, onEdit }: {
   const creditOptions = CREDIT_MAP[r.paymentMethod] || CREDIT_MAP["請求書払い"];
   const hasEdits = Object.keys(edits).length > 0;
 
+  // OCRデータを非同期取得
+  const [ocr, setOcr] = useState<OcrData | null>(null);
+  const fetchedRef = useRef(false);
+  useEffect(() => {
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
+    apiFetch(`/api/purchase/${encodeURIComponent(r.prNumber)}/status`)
+      .then((res) => res.json())
+      .then((json: { success?: boolean; data?: Record<string, string> }) => {
+        if (json.success && json.data) {
+          setOcr({
+            voucherAmount: json.data["証憑金額"] ? Number(json.data["証憑金額"]) : undefined,
+            amountMatch: json.data["金額照合"] || undefined,
+            registrationNumber: json.data["適格番号"] || undefined,
+            taxCategory: json.data["税区分"] || undefined,
+            driveFileId: json.data["DriveファイルID"] || undefined,
+          });
+        }
+      })
+      .catch(() => {});
+  }, [r.prNumber]);
+
+  const amountMatchOk = ocr?.amountMatch?.includes("一致") || ocr?.amountMatch?.includes("承認済");
+  const amountMatchNg = ocr?.amountMatch && !amountMatchOk;
+
   return (
     <div className="bg-gray-50 px-4 py-4 border-t text-xs">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* 左: 仕訳プレビュー + 証憑確認 */}
-        <div>
-          <div className="font-medium text-gray-700 mb-2">仕訳プレビュー</div>
-          <table className="w-full border text-xs">
-            <thead><tr className="bg-gray-100"><th className="px-2 py-1.5 text-left">区分</th><th className="px-2 py-1.5 text-left">勘定科目</th><th className="px-2 py-1.5 text-left">補助</th><th className="px-2 py-1.5 text-right">金額</th><th className="px-2 py-1.5 text-right">消費税</th></tr></thead>
-            <tbody>
-              <tr className="border-t">
-                <td className="px-2 py-1.5 text-blue-700 font-medium">借方</td>
-                <td className="px-2 py-1.5">{debitAccount}</td>
-                <td className="px-2 py-1.5 text-gray-400">-</td>
-                <td className="px-2 py-1.5 text-right">¥{r.totalAmount.toLocaleString()}</td>
-                <td className="px-2 py-1.5 text-right text-gray-500">¥{tax.toLocaleString()}</td>
-              </tr>
-              <tr className="border-t">
-                <td className="px-2 py-1.5 text-red-700 font-medium">貸方</td>
-                <td className="px-2 py-1.5">{creditAccount}</td>
-                <td className="px-2 py-1.5 text-gray-500">{creditSubAccount || "-"}</td>
-                <td className="px-2 py-1.5 text-right">¥{r.totalAmount.toLocaleString()}</td>
-                <td className="px-2 py-1.5 text-right text-gray-400">-</td>
-              </tr>
-            </tbody>
-          </table>
-
-          {/* 証憑確認リンク */}
-          <div className="mt-3 p-2 bg-white border rounded">
-            <div className="font-medium text-gray-700 mb-1">証憑確認</div>
-            <div className="flex flex-wrap gap-2">
+        {/* 左: 証憑プレビュー + OCR結果 */}
+        <div className="flex flex-col">
+          <div className="font-medium text-gray-700 mb-2 flex items-center justify-between">
+            <span>証憑プレビュー</span>
+            <div className="flex gap-2">
               {r.slackLink && (
                 <a href={r.slackLink} target="_blank" rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-purple-50 text-purple-700 rounded hover:bg-purple-100">
+                  className="text-xs px-2 py-1 bg-purple-50 text-purple-700 rounded hover:bg-purple-100"
+                  onClick={(e) => e.stopPropagation()}>
                   Slackスレッド
                 </a>
               )}
-              <span className="text-xs text-gray-500">
-                {r.voucherType ? `種別: ${r.voucherType}` : "種別: —"}
-              </span>
+              {ocr?.driveFileId && (
+                <a href={`https://drive.google.com/file/d/${ocr.driveFileId}/view`} target="_blank" rel="noopener noreferrer"
+                  className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded hover:bg-green-100"
+                  onClick={(e) => e.stopPropagation()}>
+                  Google Driveで開く
+                </a>
+              )}
             </div>
-            <p className="text-[10px] text-gray-400 mt-1">Slackスレッドで添付された証憑ファイルを確認できます</p>
+          </div>
+
+          {/* ドキュメントビューア */}
+          <div className="bg-white border rounded flex-1 min-h-[300px] flex flex-col">
+            <div className="flex-1 bg-gray-100 rounded-t flex items-center justify-center relative overflow-hidden">
+              {ocr?.driveFileId ? (
+                <iframe
+                  src={`https://drive.google.com/file/d/${ocr.driveFileId}/preview`}
+                  className="w-full h-full min-h-[280px] rounded-t"
+                  allow="autoplay"
+                  title="証憑プレビュー"
+                />
+              ) : (
+                <div className="text-center text-gray-400 p-8">
+                  <div className="text-5xl mb-3">
+                    {r.voucherType === "領収書" ? "\uD83E\uDDFE" : r.voucherType === "請求書" ? "\uD83D\uDCC4" : "\uD83D\uDCE6"}
+                  </div>
+                  <div className="text-sm font-medium text-gray-500 mb-1">{r.voucherType || "証憑"}</div>
+                  <div className="text-[10px] text-gray-300 mt-2">Slackスレッドで��憑ファイルを確認できます</div>
+                </div>
+              )}
+            </div>
+
+            {/* OCR読取結果バー */}
+            <div className="p-3 border-t bg-white rounded-b">
+              <div className="font-medium text-gray-600 mb-1.5">OCR読取結果</div>
+              {ocr ? (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {ocr.taxCategory && (
+                    <div className="bg-gray-50 rounded p-1.5">
+                      <div className="text-gray-400 text-[10px]">税区分</div>
+                      <div className="font-medium">{ocr.taxCategory}</div>
+                    </div>
+                  )}
+                  {ocr.voucherAmount != null && (
+                    <div className={`rounded p-1.5 ${amountMatchOk ? "bg-green-50" : amountMatchNg ? "bg-red-50" : "bg-gray-50"}`}>
+                      <div className="text-gray-400 text-[10px]">証憑金額</div>
+                      <div className={`font-medium ${amountMatchOk ? "text-green-700" : amountMatchNg ? "text-red-600" : ""}`}>
+                        ¥{ocr.voucherAmount.toLocaleString()}
+                      </div>
+                    </div>
+                  )}
+                  {ocr.amountMatch && (
+                    <div className={`rounded p-1.5 ${amountMatchOk ? "bg-green-50" : "bg-red-50"}`}>
+                      <div className="text-gray-400 text-[10px]">金額照合</div>
+                      <div className={`font-medium text-xs ${amountMatchOk ? "text-green-700" : "text-red-600"}`}>
+                        {ocr.amountMatch}
+                      </div>
+                    </div>
+                  )}
+                  {ocr.registrationNumber ? (
+                    <div className={`rounded p-1.5 ${ocr.registrationNumber.includes("検証���敗") || ocr.registrationNumber === "番号なし" ? "bg-amber-50" : "bg-green-50"}`}>
+                      <div className="text-gray-400 text-[10px]">適格請求書</div>
+                      <div className={`font-medium text-xs truncate ${ocr.registrationNumber.includes("検証失敗") || ocr.registrationNumber === "番号なし" ? "text-amber-600" : "text-green-700"}`}>
+                        {ocr.registrationNumber}
+                      </div>
+                    </div>
+                  ) : r.voucherType === "請求書" ? (
+                    <div className="bg-amber-50 rounded p-1.5">
+                      <div className="text-gray-400 text-[10px]">適格請求書</div>
+                      <div className="font-medium text-amber-600 text-xs">番号未検出</div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="text-gray-400 text-xs">読み込み中...</div>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* 右: 編集フォーム */}
-        <div className="space-y-2">
-          <div className="font-medium text-gray-700 mb-2">仕訳内容の編集</div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <label className="block">
-              <span className="text-gray-500 text-xs">借方科目</span>
-              <select value={debitAccount}
-                onChange={(e) => {
-                  onEdit("debitAccount", e.target.value);
-                  // 科目変更時に税区分も自動更新
-                  const newTax = ACCOUNT_TAX_MAP[e.target.value];
-                  if (newTax) onEdit("taxCategory", newTax);
-                }}
-                className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                {DEBIT_ACCOUNTS.map((a) => <option key={a} value={a}>{a}</option>)}
-              </select>
-            </label>
-            <label className="block">
-              <span className="text-gray-500 text-xs">貸方科目</span>
-              <select value={`${creditAccount}|${creditSubAccount}`}
-                onChange={(e) => {
-                  const [acc, sub] = e.target.value.split("|");
-                  onEdit("creditAccount", acc);
-                  onEdit("creditSubAccount", sub || "");
-                }}
-                className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                {creditOptions.map((o) => (
-                  <option key={`${o.account}|${o.sub}`} value={`${o.account}|${o.sub}`}>
-                    {o.account}{o.sub ? ` / ${o.sub}` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
+        {/* 右: 仕訳プレビュー + 編集フォーム */}
+        <div className="flex flex-col gap-3">
+          <div>
+            <div className="font-medium text-gray-700 mb-2">仕訳プレビュー</div>
+            <table className="w-full border text-xs">
+              <thead><tr className="bg-gray-100"><th className="px-2 py-1.5 text-left">区分</th><th className="px-2 py-1.5 text-left">勘定科目</th><th className="px-2 py-1.5 text-left">補助</th><th className="px-2 py-1.5 text-right">金額</th><th className="px-2 py-1.5 text-right">消費税</th></tr></thead>
+              <tbody>
+                <tr className="border-t">
+                  <td className="px-2 py-1.5 text-blue-700 font-medium">借方</td>
+                  <td className="px-2 py-1.5">{debitAccount}</td>
+                  <td className="px-2 py-1.5 text-gray-400">-</td>
+                  <td className="px-2 py-1.5 text-right">¥{r.totalAmount.toLocaleString()}</td>
+                  <td className="px-2 py-1.5 text-right text-gray-500">¥{tax.toLocaleString()}</td>
+                </tr>
+                <tr className="border-t">
+                  <td className="px-2 py-1.5 text-red-700 font-medium">貸方</td>
+                  <td className="px-2 py-1.5">{creditAccount}</td>
+                  <td className="px-2 py-1.5 text-gray-500">{creditSubAccount || "-"}</td>
+                  <td className="px-2 py-1.5 text-right">¥{r.totalAmount.toLocaleString()}</td>
+                  <td className="px-2 py-1.5 text-right text-gray-400">-</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-2">
+            <div className="font-medium text-gray-700">仕訳内容の編集</div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="text-gray-500 text-xs">借方科目</span>
+                <select value={debitAccount}
+                  onChange={(e) => {
+                    onEdit("debitAccount", e.target.value);
+                    const newTax = ACCOUNT_TAX_MAP[e.target.value];
+                    if (newTax) onEdit("taxCategory", newTax);
+                  }}
+                  className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
+                  {DEBIT_ACCOUNTS.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-gray-500 text-xs">貸方科目</span>
+                <select value={`${creditAccount}|${creditSubAccount}`}
+                  onChange={(e) => {
+                    const [acc, sub] = e.target.value.split("|");
+                    onEdit("creditAccount", acc);
+                    onEdit("creditSubAccount", sub || "");
+                  }}
+                  className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
+                  {creditOptions.map((o) => (
+                    <option key={`${o.account}|${o.sub}`} value={`${o.account}|${o.sub}`}>
+                      {o.account}{o.sub ? ` / ${o.sub}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="text-gray-500 text-xs">税区分</span>
+                <select value={taxCat} onChange={(e) => onEdit("taxCategory", e.target.value)}
+                  className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
+                  {TAX_CATEGORIES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-gray-500 text-xs">部門</span>
+                <select value={dept} onChange={(e) => onEdit("department", e.target.value)}
+                  className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
+                  {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </label>
+            </div>
+
             <label className="block">
-              <span className="text-gray-500 text-xs">税区分</span>
-              <select value={taxCat} onChange={(e) => onEdit("taxCategory", e.target.value)}
-                className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                {TAX_CATEGORIES.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
+              <span className="text-gray-500 text-xs">プロジェクトコード（HubSpot案件番号）</span>
+              <input type="text" value={hubspot} onChange={(e) => onEdit("hubspotDealId", e.target.value)}
+                placeholder="例: HS-2026-042" className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
             </label>
+
             <label className="block">
-              <span className="text-gray-500 text-xs">部門</span>
-              <select value={dept} onChange={(e) => onEdit("department", e.target.value)}
-                className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
-              </select>
+              <span className="text-gray-500 text-xs">摘要</span>
+              <input type="text" value={memo} onChange={(e) => onEdit("memo", e.target.value)}
+                className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
             </label>
+
+            {hasEdits && (
+              <p className="text-amber-600 text-xs mt-1">* 変更あり — 仕訳登録時に反映されます</p>
+            )}
           </div>
-
-          <label className="block">
-            <span className="text-gray-500 text-xs">プロジェクトコード（HubSpot案件番号）</span>
-            <input type="text" value={hubspot} onChange={(e) => onEdit("hubspotDealId", e.target.value)}
-              placeholder="例: HS-2026-042" className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
-          </label>
-
-          <label className="block">
-            <span className="text-gray-500 text-xs">摘要</span>
-            <input type="text" value={memo} onChange={(e) => onEdit("memo", e.target.value)}
-              className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
-          </label>
-
-          {hasEdits && (
-            <p className="text-amber-600 text-xs mt-1">* 変更あり — 仕訳登録時に反映されます</p>
-          )}
         </div>
       </div>
     </div>
@@ -310,7 +416,7 @@ export default function JournalManagement() {
       <header className="bg-white border-b px-4 py-3">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <a href="/dashboard" className="text-blue-600 hover:text-blue-800 text-sm">← ダッシュボード</a>
+            <a href="/dashboard" className="text-blue-600 hover:text-blue-800 text-sm">&larr; ダッシュボード</a>
             <h1 className="text-lg font-bold">仕訳管理</h1>
           </div>
           <button onClick={fetchData} className="text-sm text-gray-500 hover:text-gray-700">更新</button>
