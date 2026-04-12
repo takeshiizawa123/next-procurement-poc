@@ -137,6 +137,10 @@ function MyPageInner() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "completed">("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<PurchaseRequest[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchRequests = useCallback(() => {
     if (!user.loaded) return;
@@ -269,6 +273,47 @@ function MyPageInner() {
         );
       })()}
 
+      {/* 検索バー */}
+      <div className="mb-4">
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => {
+            const q = e.target.value;
+            setSearchQuery(q);
+            if (searchTimer.current) clearTimeout(searchTimer.current);
+            if (!q.trim()) { setSearchResults(null); return; }
+            searchTimer.current = setTimeout(async () => {
+              setSearching(true);
+              try {
+                const res = await apiFetch(`/api/purchase/search?q=${encodeURIComponent(q.trim())}&limit=30`);
+                const data = await res.json();
+                if (data.ok) {
+                  setSearchResults(data.results.map((r: Record<string, unknown>) => ({
+                    prNumber: r.poNumber,
+                    itemName: r.itemName,
+                    totalAmount: r.totalAmount,
+                    supplierName: r.supplierName,
+                    applicant: r.applicantName,
+                    department: r.department,
+                    approvalStatus: r.status,
+                    orderStatus: "",
+                    inspectionStatus: "",
+                    voucherStatus: "",
+                    type: "",
+                    applicationDate: r.applicationDate,
+                  })));
+                }
+              } catch { /* ignore */ }
+              setSearching(false);
+            }, 300);
+          }}
+          placeholder="品目名・購入先・申請者で検索..."
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        />
+        {searching && <p className="text-xs text-gray-400 mt-1">検索中...</p>}
+      </div>
+
       {/* フィルター */}
       <div className="flex gap-2 mb-4">
         {(["all", "active", "completed"] as const).map((f) => (
@@ -287,15 +332,19 @@ function MyPageInner() {
       </div>
 
       {/* 申請一覧 */}
-      {loading ? (
+      {(() => {
+        const displayList = searchResults !== null ? searchResults : filtered;
+        const isSearch = searchResults !== null;
+        return loading && !isSearch ? (
         <div className="text-center text-gray-500 py-10 animate-pulse">読み込み中...</div>
-      ) : filtered.length === 0 ? (
+      ) : displayList.length === 0 ? (
         <div className="text-center text-gray-400 py-10">
-          {filter === "all" ? "申請がありません" : `${filter === "active" ? "進行中" : "完了済み"}の申請がありません`}
+          {isSearch ? `「${searchQuery}」に一致する申請がありません` : filter === "all" ? "申請がありません" : `${filter === "active" ? "進行中" : "完了済み"}の申請がありません`}
         </div>
       ) : (
         <div className="space-y-3">
-          {filtered.map((req) => {
+          {isSearch && <p className="text-xs text-gray-500 mb-2">検索結果: {displayList.length}件</p>}
+          {displayList.map((req) => {
             const overall = overallStatus(req);
             return (
               <a key={req.prNumber} href={`/purchase/${encodeURIComponent(req.prNumber)}`} className="block bg-white border rounded-lg p-4 hover:shadow-md hover:border-blue-300 transition-all cursor-pointer">
@@ -350,7 +399,8 @@ function MyPageInner() {
             );
           })}
         </div>
-      )}
+      );
+      })()}
     </div>
   );
 }
