@@ -975,6 +975,8 @@ function WithdrawalTab({ month }: { month: string }) {
   const [csvText, setCsvText] = useState("");
   const [parsedItems, setParsedItems] = useState<ParsedWithdrawalItem[] | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [confirmingWithdrawal, setConfirmingWithdrawal] = useState(false);
+  const [withdrawalResult, setWithdrawalResult] = useState<{ ok: boolean; journalId?: number; message?: string } | null>(null);
 
   // API から取得した未払金データ
   const [unpaidData, setUnpaidData] = useState<UnpaidData | null>(null);
@@ -1014,6 +1016,37 @@ function WithdrawalTab({ month }: { month: string }) {
   const withdrawalTotal = parsedItems ? parsedItems.reduce((s, i) => s + i.amount, 0) : 0;
   const difference = parsedItems ? unpaidTotal - withdrawalTotal : 0;
   const isMatched = parsedItems ? difference === 0 : false;
+
+  async function handleConfirmWithdrawal() {
+    if (confirmingWithdrawal) return;
+    setConfirmingWithdrawal(true);
+    setWithdrawalResult(null);
+    try {
+      // 引落日: CSVの最初の日付、またはデフォルトで翌月27日
+      const withdrawalDate = parsedItems?.[0]?.date || (() => {
+        const [y, m] = month.split("-").map(Number);
+        const nextMonth = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+        return `${nextMonth}-27`;
+      })();
+      const res = await apiFetch("/api/admin/card-matching/withdrawal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          month,
+          action: "confirm",
+          withdrawalDate,
+          withdrawalAmount: withdrawalTotal || unpaidTotal,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `API error ${res.status}`);
+      setWithdrawalResult({ ok: true, journalId: data.stage3JournalId, message: `Stage 3 仕訳を作成しました（ID: ${data.stage3JournalId}）` });
+    } catch (e) {
+      setWithdrawalResult({ ok: false, message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setConfirmingWithdrawal(false);
+    }
+  }
 
   function handleParse() {
     if (!csvText.trim()) return;
@@ -1254,14 +1287,26 @@ function WithdrawalTab({ month }: { month: string }) {
 
       {/* アクション */}
       <div className="flex gap-3">
-        {isMatched ? (
-          <button className="px-5 py-2 text-sm font-medium bg-green-600 text-white rounded-md hover:bg-green-700">
-            消込を確定する
+        {withdrawalResult ? (
+          <div className={`px-4 py-2 rounded-md text-sm ${withdrawalResult.ok ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+            {withdrawalResult.message}
+          </div>
+        ) : isMatched ? (
+          <button
+            onClick={handleConfirmWithdrawal}
+            disabled={confirmingWithdrawal}
+            className="px-5 py-2 text-sm font-medium bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-400"
+          >
+            {confirmingWithdrawal ? "処理中..." : "消込を確定する"}
           </button>
         ) : (
           <>
-            <button className="px-5 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700">
-              差額を承認して消込する
+            <button
+              onClick={handleConfirmWithdrawal}
+              disabled={confirmingWithdrawal}
+              className="px-5 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400"
+            >
+              {confirmingWithdrawal ? "処理中..." : "差額を承認して消込する"}
             </button>
             <button className="px-5 py-2 text-sm font-medium bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 border border-gray-200">
               来月に再照合する

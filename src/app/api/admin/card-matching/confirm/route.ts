@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updatePredictionStatus } from "@/lib/gas-client";
-import { createJournal, resolveAccountCode, resolveTaxCode } from "@/lib/mf-accounting";
+import {
+  createJournal,
+  resolveAccountCode,
+  resolveSubAccountCode,
+  resolveTaxCode,
+} from "@/lib/mf-accounting";
 import { requireBearerAuth } from "@/lib/api-auth";
 
 /**
@@ -10,7 +15,7 @@ import { requireBearerAuth } from "@/lib/api-auth";
  * Body: {
  *   predictionId: string;     // 予測レコードID
  *   poNumber: string;         // 購買番号
- *   journalId: number;        // Stage 2 仕訳ID
+ *   journalId?: number;       // 既存の Stage 2 仕訳ID（未指定なら自動作成）
  *   predictedAmount: number;  // 予測金額
  *   actualAmount: number;     // 実際のカード金額
  *   accountTitle?: string;    // 勘定科目名（差額調整用）
@@ -18,8 +23,9 @@ import { requireBearerAuth } from "@/lib/api-auth";
  *   supplier: string;         // 購入先
  * }
  *
- * 予測テーブルを「matched」に更新し、
- * 差額がある場合は調整仕訳を自動作成する。
+ * Stage 2仕訳を自動作成（未払金:未請求 → 未払金:請求）し、
+ * 予測テーブルを「matched」に更新する。
+ * 差額がある場合は調整仕訳も自動作成する。
  */
 export async function POST(request: NextRequest) {
   const authError = requireBearerAuth(request);
@@ -29,7 +35,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as {
       predictionId: string;
       poNumber: string;
-      journalId: number;
+      journalId?: number;
       predictedAmount: number;
       actualAmount: number;
       accountTitle?: string;
@@ -40,7 +46,6 @@ export async function POST(request: NextRequest) {
     const {
       predictionId,
       poNumber,
-      journalId,
       predictedAmount,
       actualAmount,
       accountTitle,
@@ -48,9 +53,9 @@ export async function POST(request: NextRequest) {
       supplier,
     } = body;
 
-    if (!predictionId || !poNumber || !journalId) {
+    if (!predictionId || !poNumber) {
       return NextResponse.json(
-        { error: "predictionId, poNumber, journalId は必須です" },
+        { error: "predictionId, poNumber は必須です" },
         { status: 400 },
       );
     }
@@ -58,10 +63,50 @@ export async function POST(request: NextRequest) {
     const diff = actualAmount - predictedAmount;
     const now = new Date().toISOString();
 
-    // GAS予測テーブルのステータスを「matched」に更新
+    // --- Stage 2 仕訳: 未払金:MFカード:未請求 → 未払金:MFカード:請求 ---
+    let stage2JournalId = body.journalId || 0;
+
+    if (!body.journalId) {
+      const unpaidCode = await resolveAccountCode("未払金") || "未払金";
+      const [subUnrequestedCode, subBilledCode] = await Promise.all([
+        resolveSubAccountCode("未払金", "MFカード:未請求"),
+        resolveSubAccountCode("未払金", "MFカード:請求"),
+      ]);
+
+      const stage2Journal = await createJournal({
+        status: "draft",
+        transaction_date: transactionDate,
+        journal_type: "journal_entry",
+        tags: [poNumber, "Stage2"],
+        memo: `${poNumber} Stage2 請求確定 ${supplier}`,
+        branches: [
+          {
+            remark: `${poNumber} ${supplier} カード明細マッチ（未請求→請求）`,
+            debitor: {
+              account_code: unpaidCode,
+              ...(subUnrequestedCode ? { sub_account_code: subUnrequestedCode } : {}),
+              value: actualAmount,
+            },
+            creditor: {
+              account_code: unpaidCode,
+              ...(subBilledCode ? { sub_account_code: subBilledCode } : {}),
+              value: actualAmount,
+            },
+          },
+        ],
+      });
+
+      stage2JournalId = stage2Journal.id;
+      console.log(
+        `[card-matching] Stage 2 journal created: ${stage2Journal.id} — ` +
+        `${poNumber} ¥${actualAmount.toLocaleString()} ${supplier}`,
+      );
+    }
+
+    // 予測テーブルのステータスを「matched」に更新
     await updatePredictionStatus(predictionId, {
       status: "matched",
-      matched_journal_id: journalId,
+      matched_journal_id: stage2JournalId,
       matched_at: now,
       amount_diff: diff,
     });
@@ -72,7 +117,6 @@ export async function POST(request: NextRequest) {
     if (diff !== 0) {
       const absDiff = Math.abs(diff);
 
-      // 勘定科目を解決（費用科目）
       const mainAccount = accountTitle?.split("（")[0].trim() || "消耗品費";
       const debitAccountCode = await resolveAccountCode(mainAccount) || mainAccount;
       const creditAccountCode = await resolveAccountCode("未払金") || "未払金";
@@ -118,6 +162,7 @@ export async function POST(request: NextRequest) {
       predictionId,
       poNumber,
       status: "matched",
+      stage2JournalId,
       diff,
       adjustmentJournalId,
     });

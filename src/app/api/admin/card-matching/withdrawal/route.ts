@@ -1,23 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getJournals } from "@/lib/mf-accounting";
+import {
+  getJournals,
+  createJournal,
+  resolveAccountCode,
+  resolveSubAccountCode,
+} from "@/lib/mf-accounting";
 import { getEmployeeCards } from "@/lib/gas-client";
 import { requireBearerAuth } from "@/lib/api-auth";
 
 /**
- * 引落照合API — 未払金(請求)集計（認証必須）
+ * 引落照合API — 未払金(請求)集計 + Stage 3仕訳作成（認証必須）
  * POST /api/admin/card-matching/withdrawal
  *
- * Body: { month: string }  // "2026-03" = 利用月（引落は翌月）
+ * Body: { month: string, action?: "query" | "confirm", withdrawalDate?: string }
  *
- * MF会計Plusから対象月の未払金(MFカード:請求)仕訳を集計し、
- * カード別の内訳を返す。フロントはCSVの引落額と突合する。
+ * action="query"（デフォルト）:
+ *   MF会計Plusから対象月の未払金(MFカード:請求)仕訳を集計し、カード別の内訳を返す。
+ *
+ * action="confirm":
+ *   Stage 3仕訳を作成（借: 未払金:MFカード:請求 → 貸: 普通預金）。
+ *   withdrawalDate: 引落日（YYYY-MM-DD）
  */
 export async function POST(request: NextRequest) {
   const authError = requireBearerAuth(request);
   if (authError) return authError;
 
   try {
-    const { month } = (await request.json()) as { month: string };
+    const body = (await request.json()) as {
+      month: string;
+      action?: "query" | "confirm";
+      withdrawalDate?: string;
+      withdrawalAmount?: number;
+    };
+
+    const { month, action = "query" } = body;
 
     if (!month) {
       return NextResponse.json(
@@ -42,15 +58,11 @@ export async function POST(request: NextRequest) {
     const employeeCards = empRes.success ? (empRes.data?.employees || []) : [];
 
     // 未払金(MFカード:請求) の仕訳を抽出
-    // 借方が未払金(請求)の場合 = Stage 2（カード明細由来の自動仕訳）
-    // 貸方が未払金(請求)の場合 = 引落仕訳（銀行引落）
-    // ここでは借方に未払金が立つ仕訳（= カード利用の計上）を集計
     const unpaidJournals = journals.filter((j) => {
       const branch = j.branches[0];
       if (!branch) return false;
       const creditorName = branch.creditor.account_name || "";
       const creditorSub = branch.creditor.sub_account_name || "";
-      // 貸方が未払金で補助科目がMFカード関連
       return (
         creditorName.includes("未払金") &&
         (creditorSub.includes("請求") || creditorSub.includes("カード"))
@@ -67,11 +79,9 @@ export async function POST(request: NextRequest) {
       const amount = branch.creditor.value;
       const remark = branch.remark || j.memo || "";
 
-      // 摘要からカード下4桁を抽出
       const cardMatch = remark.match(/[*＊](\d{4})\s/) || remark.match(/カード番号[:：]?\s*(\d{4})/);
       const cardLast4 = cardMatch ? cardMatch[1] : "unknown";
 
-      // 従業員名を解決
       const emp = employeeCards.find((e) => e.card_last4 === cardLast4);
       const label = emp
         ? `従業員カード（${emp.name}）`
@@ -93,16 +103,78 @@ export async function POST(request: NextRequest) {
       (a, b) => b.amount - a.amount,
     );
     const unpaidTotal = unpaidBreakdown.reduce((s, b) => s + b.amount, 0);
-
-    // 利用月の表示名
     const usageMonth = `${y}年${m}月`;
 
     console.log(
       `[withdrawal] unpaidTotal=${unpaidTotal}, breakdown=${unpaidBreakdown.length}cards, journals=${unpaidJournals.length}`,
     );
 
+    // --- action="confirm": Stage 3 仕訳を作成 ---
+    if (action === "confirm") {
+      const { withdrawalDate, withdrawalAmount } = body;
+      if (!withdrawalDate) {
+        return NextResponse.json(
+          { error: "withdrawalDate が必要です（YYYY-MM-DD）" },
+          { status: 400 },
+        );
+      }
+
+      const amount = withdrawalAmount || unpaidTotal;
+      if (amount <= 0) {
+        return NextResponse.json(
+          { error: "引落額が0です。仕訳を作成する必要がありません。" },
+          { status: 400 },
+        );
+      }
+
+      // Stage 3 仕訳: 借: 未払金:MFカード:請求 → 貸: 普通預金
+      const unpaidCode = await resolveAccountCode("未払金") || "未払金";
+      const bankCode = await resolveAccountCode("普通預金") || "普通預金";
+      const subBilledCode = await resolveSubAccountCode("未払金", "MFカード:請求");
+
+      const stage3Journal = await createJournal({
+        status: "draft",
+        transaction_date: withdrawalDate,
+        journal_type: "journal_entry",
+        tags: [month, "Stage3"],
+        memo: `${usageMonth}分 MFカード引落 Stage3`,
+        branches: [
+          {
+            remark: `${usageMonth}分 MFビジネスカード引落（未払金消込）`,
+            debitor: {
+              account_code: unpaidCode,
+              ...(subBilledCode ? { sub_account_code: subBilledCode } : {}),
+              value: amount,
+            },
+            creditor: {
+              account_code: bankCode,
+              value: amount,
+            },
+          },
+        ],
+      });
+
+      console.log(
+        `[withdrawal] Stage 3 journal created: ${stage3Journal.id} — ` +
+        `${usageMonth}分 ¥${amount.toLocaleString()}`,
+      );
+
+      return NextResponse.json({
+        ok: true,
+        action: "confirm",
+        usageMonth,
+        withdrawalDate,
+        amount,
+        stage3JournalId: stage3Journal.id,
+        unpaidTotal,
+        diff: unpaidTotal - amount,
+      });
+    }
+
+    // --- action="query": 集計結果を返す ---
     return NextResponse.json({
       ok: true,
+      action: "query",
       usageMonth,
       unpaidTotal,
       unpaidBreakdown,
