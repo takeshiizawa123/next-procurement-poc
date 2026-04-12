@@ -1,0 +1,763 @@
+/**
+ * GAS Web App との連携クライアント
+ *
+ * GAS側の doPost(e) / doGet(e) でリクエストを受け取り、
+ * スプレッドシートの読み書きを行う。
+ *
+ * 注意: GAS Web App は 302 リダイレクトを返すため、
+ * fetch の redirect: "follow" で自動追従する。
+ * ただし POST→リダイレクト時にボディが失われるため、
+ * APIキーはクエリパラメータで送信する。
+ */
+
+const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL || "";
+const GAS_API_KEY = process.env.GAS_API_KEY || "";
+
+const GAS_MAX_RETRIES = 2;
+const GAS_RETRY_BASE_MS = 1000;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface GasResponse<T = Record<string, unknown>> {
+  success: boolean;
+  data: T | null;
+  error: string | null;
+  statusCode: number;
+  timestamp: string;
+}
+
+export interface RegisterResult {
+  prNumber: string;
+  rowNumber: number;
+}
+
+export interface UpdateResult {
+  prNumber: string;
+  rowNumber: number;
+  updatedFields: string[];
+}
+
+export type PurchaseStatus = Record<string, unknown> & {
+  購買番号: string;
+  発注承認ステータス: string;
+  発注ステータス: string;
+  検収ステータス: string;
+  _rowNumber: number;
+};
+
+/**
+ * GAS Web App にPOSTリクエストを送信
+ */
+async function callGasPost<T = Record<string, unknown>>(
+  action: string,
+  payload: Record<string, unknown>,
+): Promise<GasResponse<T>> {
+  if (!GAS_WEB_APP_URL) {
+    console.error("[gas-client] GAS_WEB_APP_URL is not set. Skipping GAS call.");
+    return {
+      success: false,
+      data: null,
+      error: "GAS_WEB_APP_URL is not configured",
+      statusCode: 0,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // APIキーはクエリパラメータ + bodyの両方に含める（リダイレクト対策）
+  const url = `${GAS_WEB_APP_URL}?key=${encodeURIComponent(GAS_API_KEY)}`;
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= GAS_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = GAS_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+      console.warn(`[gas-client] POST retry ${attempt}/${GAS_MAX_RETRIES} after ${delay}ms`);
+      await sleep(delay);
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+        },
+        body: JSON.stringify({ apiKey: GAS_API_KEY, action, ...payload }),
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+      });
+
+      const text = await response.text();
+
+      try {
+        return JSON.parse(text) as GasResponse<T>;
+      } catch {
+        console.error("[gas-client] Failed to parse GAS response:", text.substring(0, 200));
+        throw new Error(`GAS response is not valid JSON (status: ${response.status})`);
+      }
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      if (lastError.name === "AbortError" || lastError.name === "TimeoutError") {
+        continue; // timeout → retry
+      }
+      throw lastError; // non-retryable error
+    }
+  }
+  throw lastError!;
+}
+
+/**
+ * GAS Web App にGETリクエストを送信
+ */
+async function callGasGet<T = Record<string, unknown>>(
+  params: Record<string, string>,
+): Promise<GasResponse<T>> {
+  if (!GAS_WEB_APP_URL) {
+    console.error("[gas-client] GAS_WEB_APP_URL is not set. Skipping GAS call.");
+    return {
+      success: false,
+      data: null,
+      error: "GAS_WEB_APP_URL is not configured",
+      statusCode: 0,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  const searchParams = new URLSearchParams({
+    key: GAS_API_KEY,
+    ...params,
+  });
+  const url = `${GAS_WEB_APP_URL}?${searchParams.toString()}`;
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= GAS_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = GAS_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+      console.warn(`[gas-client] GET retry ${attempt}/${GAS_MAX_RETRIES} after ${delay}ms`);
+      await sleep(delay);
+    }
+
+    try {
+      const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15000) });
+      const text = await response.text();
+
+      try {
+        return JSON.parse(text) as GasResponse<T>;
+      } catch {
+        console.error("[gas-client] Failed to parse GAS response:", text.substring(0, 200));
+        throw new Error(`GAS response is not valid JSON (status: ${response.status})`);
+      }
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      if (lastError.name === "AbortError" || lastError.name === "TimeoutError") {
+        continue;
+      }
+      throw lastError;
+    }
+  }
+  throw lastError!;
+}
+
+// ===========================================
+// 公開API
+// ===========================================
+
+/**
+ * 購買申請をスプレッドシートに新規登録
+ */
+export async function registerPurchase(data: {
+  applicant: string;
+  itemName: string;
+  totalAmount: number;
+  unitPrice?: number;
+  quantity?: number;
+  purchaseSource?: string;
+  purchaseSourceUrl?: string;
+  hubspotInfo?: string;
+  budgetNumber?: string;
+  katanaPo?: string;
+  paymentMethod?: string;
+  approver?: string;
+  inspector?: string;
+  purpose?: string;
+  poNumber?: string;
+  accountTitle?: string;
+  remarks?: string;
+  slackTs?: string;
+  isPurchased?: boolean;
+  hasEvidence?: boolean;
+  isEstimate?: boolean;
+  isPostReport?: boolean;
+}): Promise<GasResponse<RegisterResult>> {
+  return callGasPost<RegisterResult>("register", data);
+}
+
+/**
+ * 購買番号でステータスを照会
+ */
+export async function getStatus(
+  prNumber: string,
+): Promise<GasResponse<PurchaseStatus>> {
+  return callGasGet<PurchaseStatus>({
+    action: "status",
+    prNumber,
+  });
+}
+
+/**
+ * 購買番号でステータスを更新（キャッシュ自動無効化）
+ */
+export async function updateStatus(
+  prNumber: string,
+  updates: Record<string, string>,
+): Promise<GasResponse<UpdateResult>> {
+  const result = await callGasPost<UpdateResult>("update", { prNumber, updates });
+  // ステータス更新時にキャッシュを無効化
+  const { cacheDelete } = await import("./cache");
+  cacheDelete(`purchase:${prNumber}`);
+  return result;
+}
+
+export interface Employee {
+  name: string;
+  departmentCode: string;
+  departmentName: string;
+  slackAliases: string;
+  slackId: string;
+  deptHeadSlackId: string;
+}
+
+// --- 共有キャッシュ（Upstash Redis + インメモリフォールバック + リクエスト合体） ---
+import { cachedFetch, sharedCacheDeleteByPrefix, sharedCacheSet } from "./shared-cache";
+
+const GAS_SHORT_TTL = 3 * 60_000;       // 3分（employees, suppliers, recentRequests）
+const GAS_MASTER_TTL = 4 * 60 * 60_000; // 4時間（MFマスタ — 変更頻度が低い）
+
+/**
+ * 従業員マスタ一覧を取得（3分キャッシュ + リクエスト合体）
+ */
+export async function getEmployees(): Promise<
+  GasResponse<{ employees: Employee[] }>
+> {
+  return cachedFetch("employees", GAS_SHORT_TTL, () =>
+    callGasGet<{ employees: Employee[] }>({ action: "employees" }),
+  );
+}
+
+/**
+ * 従業員の承認者（部門長SlackID）を更新
+ */
+export async function updateApprover(
+  employeeName: string,
+  deptHeadSlackId: string,
+): Promise<GasResponse<{ updated: boolean }>> {
+  // キャッシュ無効化
+  await sharedCacheDeleteByPrefix("employees");
+  return callGasPost<{ updated: boolean }>("updateApprover", {
+    employeeName,
+    deptHeadSlackId,
+  });
+}
+
+export interface DuplicateResult {
+  prNumber: string;
+  itemName: string;
+  totalAmount: number;
+  applicationDate: string;
+  applicant: string;
+  status: string;
+}
+
+export interface PastRequest {
+  prNumber: string;
+  applicationDate: string;
+  itemName: string;
+  totalAmount: number;
+  unitPrice: number;
+  quantity: number;
+  supplierName: string;
+  supplierUrl: string;
+  applicant: string;
+  paymentMethod: string;
+  purpose: string;
+  approvalStatus: string;
+  orderStatus: string;
+  inspectionStatus: string;
+  voucherStatus: string;
+  /** @deprecated Slackリンク列は廃止。スレッドTSから動的生成に移行予定 */
+  slackLink?: string;
+  type: string;
+  department: string;
+  accountTitle: string;
+  hubspotInfo?: string;
+  voucherType?: string;
+  journalId?: string;
+  remarks?: string;
+  inspectionDate?: string;
+  /** 適格請求書の登録番号（T+13桁） */
+  registrationNumber?: string;
+  /** 適格請求書判定: "適格" / "非適格" / "番号なし" */
+  isQualifiedInvoice?: string;
+  /** 登録番号検証ステータス: "verified" / "not_found" / "no_number" / "error" */
+  invoiceVerificationStatus?: string;
+}
+
+/**
+ * 重複チェック
+ */
+export async function checkDuplicate(
+  itemName: string,
+  totalAmount?: number,
+): Promise<GasResponse<{ duplicates: DuplicateResult[] }>> {
+  return callGasPost<{ duplicates: DuplicateResult[] }>("checkDuplicate", {
+    itemName,
+    ...(totalAmount ? { totalAmount } : {}),
+  });
+}
+
+/**
+ * 過去申請一覧を取得（3分キャッシュ + リクエスト合体）
+ */
+export async function getRecentRequests(
+  applicant?: string,
+  limit?: number,
+): Promise<GasResponse<{ requests: PastRequest[] }>> {
+  const cacheKey = `recentRequests:${applicant || "all"}:${limit || 30}`;
+  return cachedFetch(cacheKey, GAS_SHORT_TTL, () =>
+    callGasPost<{ requests: PastRequest[] }>("recentRequests", {
+      ...(applicant ? { applicant } : {}),
+      ...(limit ? { limit } : {}),
+    }),
+  );
+}
+
+/** recentRequestsのキャッシュを無効化（新規申請・ステータス変更後に呼ぶ） */
+export async function invalidateRecentRequests(): Promise<void> {
+  await sharedCacheDeleteByPrefix("recentRequests:");
+}
+
+export interface PendingVoucher {
+  prNumber: string;
+  itemName: string;
+  totalAmount: number;
+  applicationDate: string;
+  daysElapsed: number;
+}
+
+/**
+ * 証憑未提出一覧を取得
+ */
+export async function getPendingVouchers(
+  applicant: string,
+): Promise<GasResponse<{ pending: PendingVoucher[] }>> {
+  return callGasPost<{ pending: PendingVoucher[] }>("pendingVouchers", { applicant });
+}
+
+/**
+ * 購入先名一覧を取得（3分キャッシュ + リクエスト合体）
+ */
+export async function getSuppliers(): Promise<
+  GasResponse<{ suppliers: string[] }>
+> {
+  return cachedFetch("suppliers", GAS_SHORT_TTL, () =>
+    callGasGet<{ suppliers: string[] }>({ action: "suppliers" }),
+  );
+}
+
+/**
+ * GAS接続テスト（ヘルスチェック）
+ */
+export async function testConnection(): Promise<
+  GasResponse<{ status: string; version: string }>
+> {
+  return callGasGet<{ status: string; version: string }>({ action: "health" });
+}
+
+// ===========================================
+// 予測テーブル / 従業員カード情報
+// ===========================================
+
+export interface PredictedTransaction {
+  id: string;
+  po_number: string;
+  type: string; // "purchase" | "trip_transport" | "trip_hotel" | "trip_daily"
+  card_last4: string;
+  predicted_amount: number;
+  predicted_date: string; // YYYY-MM-DD
+  supplier: string;
+  applicant: string;
+  stage1_journal_id?: number;
+  status: string; // "pending" | "matched" | "unmatched" | "cancelled"
+  matched_journal_id?: number;
+  matched_at?: string;
+  amount_diff?: number;
+  created_at: string;
+  /** 概算フラグ — 金額が確定していない場合 true */
+  is_estimate?: boolean;
+  /** 事後報告フラグ — 事前承認なしの緊急購入 */
+  is_post_report?: boolean;
+  /** 緊急理由（事後報告時のみ） */
+  emergency_reason?: string;
+}
+
+export interface EmployeeCard {
+  name: string;
+  slackId: string;
+  card_last4: string;
+  card_holder_name: string;
+}
+
+/**
+ * 予測テーブルを取得（月指定）
+ */
+export async function getPredictedTransactions(
+  month: string, // "2026-03"
+): Promise<GasResponse<{ predictions: PredictedTransaction[] }>> {
+  return callGasPost<{ predictions: PredictedTransaction[] }>(
+    "getPredictions",
+    { month },
+  );
+}
+
+/**
+ * 予測テーブルに新規レコードを追加
+ */
+export async function createPrediction(
+  prediction: Omit<PredictedTransaction, "matched_journal_id" | "matched_at" | "amount_diff">,
+): Promise<GasResponse<{ id: string }>> {
+  return callGasPost<{ id: string }>("createPrediction", prediction);
+}
+
+/**
+ * 予測テーブルのステータスを更新
+ */
+export async function updatePredictionStatus(
+  predictionId: string,
+  updates: Partial<Pick<PredictedTransaction, "status" | "matched_journal_id" | "matched_at" | "amount_diff">>,
+): Promise<GasResponse<{ id: string }>> {
+  return callGasPost<{ id: string }>("updatePrediction", {
+    id: predictionId,
+    ...updates,
+  });
+}
+
+/**
+ * 従業員マスタ（カード情報付き）を取得
+ */
+export async function getEmployeeCards(): Promise<
+  GasResponse<{ employees: EmployeeCard[] }>
+> {
+  return callGasGet<{ employees: EmployeeCard[] }>({ action: "employeeCards" });
+}
+
+// ===========================================
+// MFマスタ（GASスプレッドシート）
+// ===========================================
+
+/** 取引先マスタ_MFシートの1行 */
+export interface GasCounterparty {
+  mfId: string;
+  code: string;
+  name: string;
+  searchKey: string;
+  invoiceRegistrationNumber: string;
+  available: boolean;
+  alias: string;
+}
+
+/** 部門マスタ_MFシートの1行 */
+export interface GasDepartment {
+  mfId: string;
+  code: string;
+  name: string;
+  searchKey: string;
+  available: boolean;
+}
+
+/**
+ * 取引先マスタをGASシートから取得（4時間キャッシュ）
+ */
+export async function getGasCounterparties(): Promise<GasResponse<{ counterparties: GasCounterparty[] }>> {
+  return cachedFetch("gasMfCounterparties", GAS_MASTER_TTL, () =>
+    callGasGet<{ counterparties: GasCounterparty[] }>({ action: "getMfCounterparties" }),
+  );
+}
+
+/**
+ * 部門マスタをGASシートから取得（4時間キャッシュ）
+ */
+export async function getGasDepartments(): Promise<GasResponse<{ departments: GasDepartment[] }>> {
+  return cachedFetch("gasMfDepartments", GAS_MASTER_TTL, () =>
+    callGasGet<{ departments: GasDepartment[] }>({ action: "getMfDepartments" }),
+  );
+}
+
+// --- MFマスタ（GASスプレッドシート: 勘定科目・税区分・補助科目・PJ） ---
+
+/** 勘定科目マスタ_MFシートの1行 */
+export interface GasAccount {
+  mfId: string;
+  code: string;
+  name: string;
+  searchKey: string;
+  taxId: number | null;
+  available: boolean;
+}
+
+/** 税区分マスタ_MFシートの1行 */
+export interface GasTax {
+  mfId: string;
+  code: string;
+  name: string;
+  abbreviation: string;
+  taxRate: number | null;
+  available: boolean;
+}
+
+/** 補助科目マスタ_MFシートの1行 */
+export interface GasSubAccount {
+  mfId: string;
+  code: string;
+  accountId: number | null;
+  name: string;
+  searchKey: string;
+  available: boolean;
+}
+
+/** PJマスタ_MFシートの1行 */
+export interface GasProject {
+  mfId: string;
+  code: string;
+  name: string;
+  searchKey: string;
+  available: boolean;
+}
+
+/**
+ * 勘定科目マスタをGASシートから取得（4時間キャッシュ）
+ */
+export async function getGasAccounts(): Promise<GasResponse<{ accounts: GasAccount[] }>> {
+  return cachedFetch("gasMfAccounts", GAS_MASTER_TTL, () =>
+    callGasGet<{ accounts: GasAccount[] }>({ action: "getMfAccounts" }),
+  );
+}
+
+/**
+ * 税区分マスタをGASシートから取得（4時間キャッシュ）
+ */
+export async function getGasTaxes(): Promise<GasResponse<{ taxes: GasTax[] }>> {
+  return cachedFetch("gasMfTaxes", GAS_MASTER_TTL, () =>
+    callGasGet<{ taxes: GasTax[] }>({ action: "getMfTaxes" }),
+  );
+}
+
+/**
+ * 補助科目マスタをGASシートから取得（4時間キャッシュ）
+ */
+export async function getGasSubAccounts(): Promise<GasResponse<{ subAccounts: GasSubAccount[] }>> {
+  return cachedFetch("gasMfSubAccounts", GAS_MASTER_TTL, () =>
+    callGasGet<{ subAccounts: GasSubAccount[] }>({ action: "getMfSubAccounts" }),
+  );
+}
+
+/**
+ * PJマスタをGASシートから取得（4時間キャッシュ）
+ */
+export async function getGasProjects(): Promise<GasResponse<{ projects: GasProject[] }>> {
+  return cachedFetch("gasMfProjects", GAS_MASTER_TTL, () =>
+    callGasGet<{ projects: GasProject[] }>({ action: "getMfProjects" }),
+  );
+}
+
+// --- マスタ一括取得 ---
+
+export interface MastersBundle {
+  accounts: GasAccount[];
+  taxes: GasTax[];
+  departments: GasDepartment[];
+  subAccounts: GasSubAccount[];
+  projects: GasProject[];
+  counterparties: GasCounterparty[];
+}
+
+/**
+ * 全マスタを1回のGAS呼び出しで一括取得（6往復→1往復、4時間キャッシュ + リクエスト合体）
+ */
+export async function getMastersBundle(): Promise<GasResponse<MastersBundle>> {
+  return cachedFetch("gasMastersBundle", GAS_MASTER_TTL, async () => {
+    const result = await callGasGet<MastersBundle>({ action: "getMastersBundle" });
+    if (result.success && result.data) {
+      // 個別キャッシュにも書き込み（他の関数がキャッシュヒットできるように）
+      await Promise.all([
+        sharedCacheSet("gasMfAccounts", { success: true, data: { accounts: result.data.accounts } }, GAS_MASTER_TTL),
+        sharedCacheSet("gasMfTaxes", { success: true, data: { taxes: result.data.taxes } }, GAS_MASTER_TTL),
+        sharedCacheSet("gasMfDepartments", { success: true, data: { departments: result.data.departments } }, GAS_MASTER_TTL),
+        sharedCacheSet("gasMfSubAccounts", { success: true, data: { subAccounts: result.data.subAccounts } }, GAS_MASTER_TTL),
+        sharedCacheSet("gasMfProjects", { success: true, data: { projects: result.data.projects } }, GAS_MASTER_TTL),
+        sharedCacheSet("gasMfCounterparties", { success: true, data: { counterparties: result.data.counterparties } }, GAS_MASTER_TTL),
+      ]);
+    }
+    return result;
+  });
+}
+
+// --- 過去仕訳統計 ---
+
+export interface CounterpartyAccountStat {
+  counterparty: string;
+  account: string;
+  taxType: string;
+  count: number;
+}
+
+export interface DeptAccountTaxStat {
+  department: string;
+  account: string;
+  taxType: string;
+  count: number;
+}
+
+export interface RemarkAccountStat {
+  keyword: string;
+  account: string;
+  taxType: string;
+  count: number;
+}
+
+export interface JournalStats {
+  counterpartyAccounts: CounterpartyAccountStat[];
+  deptAccountTax: DeptAccountTaxStat[];
+  remarkAccounts: RemarkAccountStat[];
+  totalJournals: number;
+  totalRows: number;
+  computedAt: string;
+}
+
+const STATS_CACHE_TTL = 60 * 60 * 1000; // 1時間
+
+/**
+ * 過去仕訳統計をGASから取得（1時間キャッシュ + リクエスト合体）
+ */
+export async function getJournalStats(): Promise<JournalStats | null> {
+  try {
+    const result = await cachedFetch("journalStats", STATS_CACHE_TTL, () =>
+      callGasGet<{ stats: JournalStats }>({ action: "getJournalStats" }),
+    );
+    return result.success && result.data?.stats ? result.data.stats : null;
+  } catch (e) {
+    console.warn("[gas-client] Failed to fetch journal stats:", e);
+    return null;
+  }
+}
+
+// --- 過去仕訳 原票検索 ---
+
+export interface JournalRow {
+  date: string;
+  remark: string;
+  account: string;
+  taxType: string;
+  amount: number;
+  department: string;
+  counterparty: string;
+}
+
+export interface JournalRowsResult {
+  supplierMatches: JournalRow[];
+  keywordMatches: JournalRow[];
+}
+
+/**
+ * 過去仕訳の原票を取引先・品名キーワードで検索
+ * キャッシュなし（検索条件が毎回異なるため）
+ */
+export async function searchJournalRows(
+  supplier: string,
+  keyword: string,
+): Promise<JournalRowsResult | null> {
+  try {
+    const result = await callGasGet<JournalRowsResult>({
+      action: "searchJournalRows",
+      supplier,
+      keyword,
+    });
+    if (result.success && result.data) {
+      return result.data;
+    }
+  } catch (e) {
+    console.warn("[gas-client] Failed to search journal rows:", e);
+  }
+  return null;
+}
+
+// --- MF APIマスタのJSONキャッシュ（勘定科目・税区分・PJ・補助科目） ---
+
+export interface MfMastersCache {
+  accounts: { code: string | null; name: string; taxId?: number }[];
+  taxes: { code: string | null; name: string; abbreviation?: string; taxRate?: number }[];
+  subAccounts: { id: number; accountId: number; name: string }[];
+  projects: { code: string | null; name: string }[];
+  syncedAt: string;
+}
+
+/**
+ * MF APIマスタ（科目・税区分・PJ・補助科目）をGASに保存
+ */
+export async function saveMfMasters(masters: MfMastersCache): Promise<GasResponse<{ saved: boolean }>> {
+  return callGasPost<{ saved: boolean }>("saveMfMasters", { masters });
+}
+
+/**
+ * GASからMF APIマスタキャッシュを取得
+ */
+export async function getMfMasters(): Promise<GasResponse<{ masters: MfMastersCache }>> {
+  return callGasGet<{ masters: MfMastersCache }>({ action: "getMfMasters" });
+}
+
+// --- 購買申請 下書き保存（GASスプレッドシート、1か月自動消去） ---
+
+/**
+ * ��書きを保存（GAS側で userId + JSON + savedAt を保存）
+ * GAS側は1か月以上前の下書きを自動削除する
+ */
+export async function savePurchaseDraft(
+  userId: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await callGasPost("saveDraft", { userId, draft: data });
+  } catch (e) {
+    console.warn("[gas-client] Failed to save draft:", e);
+  }
+}
+
+/**
+ * 下書きを読み込み（直近1件のみ）
+ */
+export async function loadPurchaseDraft(
+  userId: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const result = await callGasGet<{ draft: Record<string, unknown> | null }>({
+      action: "loadDraft",
+      userId,
+    });
+    if (result.success && result.data?.draft) {
+      return result.data.draft;
+    }
+  } catch (e) {
+    console.warn("[gas-client] Failed to load draft:", e);
+  }
+  return null;
+}
+
+/**
+ * 下書きを削除（申請成功時に呼ぶ）
+ */
+export async function clearPurchaseDraft(userId: string): Promise<void> {
+  try {
+    await callGasPost("clearDraft", { userId });
+  } catch (e) {
+    console.warn("[gas-client] Failed to clear draft:", e);
+  }
+}

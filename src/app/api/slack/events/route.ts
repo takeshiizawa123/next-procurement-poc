@@ -16,9 +16,11 @@ import {
   sendAmountDiffApproval,
   type PurchaseFormData,
   type RequestInfo,
+  savePurchaseDraft,
+  loadPurchaseDraft,
+  clearPurchaseDraft,
 } from "@/lib/slack";
 import { registerPurchase, updateStatus, getStatus, getRecentRequests, getEmployees } from "@/lib/gas-client";
-import { estimateAccount } from "@/lib/account-estimator";
 import { resolveApprovalRoute } from "@/lib/approval-router";
 import { createTripExpense } from "@/lib/mf-expense";
 import { generateTripPredictions } from "@/lib/prediction";
@@ -241,6 +243,22 @@ export async function POST(request: NextRequest) {
           || userId;
         const formData = parsePurchaseFormValues(view.state.values);
         const targetChannelId = view.private_metadata || PURCHASE_CHANNEL;
+
+        // 購入理由バリデーション（モーダル内エラー表示）
+        const hasReference = !!(formData.katanaPo || formData.hubspotDealId || formData.budgetNumber);
+        if (!hasReference && !formData.notes) {
+          // バリデーションエラー時に下書き保存（次回モーダル起動時に復元）
+          after(async () => { await savePurchaseDraft(userId, formData as unknown as Record<string, unknown>); });
+          return NextResponse.json({
+            response_action: "errors",
+            errors: {
+              notes: "PO番号・HubSpot案件番号・実行予算番号のいずれもない場合は購入理由を入力してください",
+            },
+          });
+        }
+
+        // 申請成功 → 下書きクリア（バックグラウンド）
+        after(async () => { await clearPurchaseDraft(userId); });
 
         // モーダルを即座に閉じる（3秒制限対策）
         // バックグラウンドで後続処理
@@ -497,11 +515,8 @@ async function handlePartialInspectionSubmit(
   );
 
   // スレッドにメッセージを確認する必要がある — チャンネルIDを探す
-  // statusDataからslackLinkを取得してチャンネルとtsを解決
-  const slackLink = String(statusData?.["slackLink"] || statusData?.["Slackリンク"] || "");
-  const slackTs = String(statusData?.["slackTs"] || "");
-  const channelMatch = slackLink.match(/archives\/([A-Z0-9]+)\/p(\d+)/);
-  const channelId = channelMatch?.[1] || process.env.SLACK_PURCHASE_CHANNEL || "";
+  const slackTs = String(statusData?.["スレッドTS"] || statusData?.["slackTs"] || "");
+  const channelId = process.env.SLACK_PURCHASE_CHANNEL || "";
 
   if (channelId) {
     const noteText = note ? `（${note}）` : "";
@@ -743,13 +758,30 @@ async function handlePurchaseSubmission(
   formData: PurchaseFormData,
   targetChannelId: string
 ): Promise<void> {
+  console.log("[purchase] formData:", {
+    requestType: formData.requestType,
+    itemName: formData.itemName,
+    amount: formData.amount,
+    quantity: formData.quantity,
+    paymentMethod: formData.paymentMethod,
+    supplierName: formData.supplierName,
+    katanaPo: formData.katanaPo || "(empty)",
+    hubspotDealId: formData.hubspotDealId || "(empty)",
+    budgetNumber: formData.budgetNumber || "(empty)",
+    notes: formData.notes ? `${formData.notes.slice(0, 50)}...` : "(empty)",
+    isEstimate: formData.isEstimate,
+    assetUsage: formData.assetUsage || "(empty)",
+  });
   try {
     const client = getSlackClient();
 
-    const amount = `¥${formData.amount.toLocaleString()}`;
+    const totalAmount = formData.amount * (formData.quantity || 1);
+    const amount = (formData.quantity || 1) > 1
+      ? `¥${totalAmount.toLocaleString()}（単価¥${formData.amount.toLocaleString()} × ${formData.quantity}）`
+      : `¥${totalAmount.toLocaleString()}`;
 
     // 承認ルート解決（従業員マスタから部門長を取得）
-    const approvalRoute = await resolveApprovalRoute(userName, userId, formData.amount);
+    const approvalRoute = await resolveApprovalRoute(userName, userId, totalAmount);
     const department = approvalRoute.employee?.departmentName || "";
     const approverSlackId = approvalRoute.primaryApprover || DEFAULT_APPROVER;
 
@@ -779,16 +811,17 @@ async function handlePurchaseSubmission(
     }
 
     // GAS登録を先に行い、GAS発番のPO番号を取得
-    const estimation = estimateAccount(formData.itemName, formData.supplierName, formData.amount);
     let poNumber = "";
     try {
       const gasResult = await registerPurchase({
         applicant: userName,
         itemName: formData.itemName,
-        totalAmount: formData.amount,
+        totalAmount: totalAmount,
+        unitPrice: formData.amount,
+        quantity: formData.quantity || 1,
         purchaseSource: formData.supplierName,
         paymentMethod: formData.paymentMethod,
-        accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
+        accountTitle: "",
         isPurchased: isPurchased || isPostReport,
         budgetNumber: formData.budgetNumber || undefined,
         katanaPo: formData.katanaPo || undefined,
@@ -819,6 +852,7 @@ async function handlePurchaseSubmission(
       poNumber,
       itemName: formData.itemName,
       amount,
+      unitPrice: formData.amount,
       applicant: `<@${userId}>`,
       department,
       supplierName: formData.supplierName,
@@ -869,13 +903,12 @@ async function handlePurchaseSubmission(
       text: `購買申請: ${poNumber} ${formData.itemName} ${amount}${mentionText}`,
     });
 
-    // Slack投稿後にGASのSlackリンク情報を更新
+    // Slack投稿後にGASのスレッドTS情報を更新
     if (result.ts) {
-      const slackLink = `https://slack.com/archives/${channelId}/p${result.ts.replace(".", "")}`;
       try {
-        await updateStatus(poNumber, { slackTs: result.ts, slackLink });
+        await updateStatus(poNumber, { "スレッドTS": result.ts });
       } catch (e) {
-        console.error("[purchase] Failed to update GAS with Slack link:", e);
+        console.error("[purchase] Failed to update GAS with Slack TS:", e);
       }
     }
 
@@ -1037,6 +1070,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
 
   // 親メッセージを取得してPO番号を抽出
   let parentText = "";
+  let actualThreadTs = threadTs;
   try {
     const result = await client.conversations.history({
       channel: channelId,
@@ -1044,8 +1078,24 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
       inclusive: true,
       limit: 1,
     });
-    parentText = (result.messages?.[0]?.text || "") + " " +
-      JSON.stringify(result.messages?.[0]?.blocks || []);
+    const parentMsg = result.messages?.[0];
+    parentText = (parentMsg?.text || "") + " " +
+      JSON.stringify(parentMsg?.blocks || []);
+
+    // PO番号が見つからない場合、Bot投稿のサブスレッドの可能性
+    // → 元のメインメッセージ（スレッドルート）を探索
+    const poCheck = parentText.match(/(?:PO-\d{6}-\d{4}|PR-\d{6}-\d{1,4})/);
+    if (!poCheck && parentMsg?.thread_ts && parentMsg.thread_ts !== threadTs) {
+      actualThreadTs = parentMsg.thread_ts;
+      const rootResult = await client.conversations.history({
+        channel: channelId,
+        latest: actualThreadTs,
+        inclusive: true,
+        limit: 1,
+      });
+      parentText = (rootResult.messages?.[0]?.text || "") + " " +
+        JSON.stringify(rootResult.messages?.[0]?.blocks || []);
+    }
   } catch (histErr) {
     console.error(`[file-share] conversations.history failed:`, histErr);
     return;
@@ -1095,13 +1145,24 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
           if (ocrResult.amount > 0) ocrAmount = ocrResult.amount;
 
           // GASは税抜金額で保存。OCRは税込金額を返す
+          // 税率変換によるズレを回避するため、税抜同士で直接比較
           let requestedAmount = 0;
           if (statusResult.success && statusResult.data) {
             const dataObj = statusResult.data as Record<string, unknown>;
             const requestedExclTax = Number(dataObj["合計額（税抜）"] || 0);
             const taxRate = ocrResult.tax_rate ?? 10;
+            // OCR税抜金額（subtotalがあればそのまま使用、なければ税込から逆算）
+            const ocrExclTax = ocrResult.subtotal ?? Math.round(ocrResult.amount / (1 + taxRate / 100));
+            // 税抜同士で比較してから、matchAmount用に税込を計算
             requestedAmount = Math.round(requestedExclTax * (1 + taxRate / 100));
-            if (requestedAmount > 0 && ocrResult.amount > 0) {
+            if (requestedExclTax > 0 && ocrResult.amount > 0) {
+              // 税抜同士の差が小さければ一致とみなす（税率変換ズレ対策）
+              const exclDiff = Math.abs(ocrExclTax - requestedExclTax);
+              const exclPct = requestedExclTax > 0 ? exclDiff / requestedExclTax : 0;
+              if (exclDiff <= 1000 || exclPct <= 0.03) {
+                // 税抜ベースで一致 → 税込変換のズレは無視
+                requestedAmount = ocrResult.amount;
+              }
               const match = matchAmount(ocrResult, requestedAmount);
               confirmLines.push(`金額照合: ${match.message}`);
               if (!match.isMatched) {
@@ -1112,7 +1173,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
                   confirmLines.push(`🔄 金額差異が大きいため、承認者に再承認を依頼しました（仕訳は承認後に作成）`);
                   const ocrSubtotal = ocrResult.subtotal ?? Math.round(ocrResult.amount / (1 + (ocrResult.tax_rate ?? 10) / 100));
                   await sendAmountDiffApproval(
-                    client, channelId, threadTs, prNumber,
+                    client, channelId, actualThreadTs, prNumber,
                     ocrResult.amount, requestedAmount, match.difference,
                     approver, ocrSubtotal,
                   );
@@ -1202,7 +1263,35 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
 
       // 支払方法で証憑転送先を分岐
       const paymentMethod = String((statusResult?.data as Record<string, unknown>)?.["支払方法"] || "");
+      const statusData = statusResult?.data as Record<string, unknown> | undefined;
       const isEmployeeExpense = paymentMethod.includes("立替");
+
+      // 勘定科目が未設定の場合、RAG推定を実行してGAS保存（全支払方法共通）
+      let estimatedAccount = String(statusData?.["勘定科目"] || "");
+      if (!estimatedAccount && statusData) {
+        try {
+          const { estimateAccountFromHistory } = await import("@/lib/account-estimator");
+          const itemName = String(statusData["品目名"] || "");
+          const supplierForRag = String(statusData["購入先"] || "");
+          const department = String(statusData["部門"] || "");
+          const totalAmt = Number(statusData["合計額（税込）"] || statusData["合計額（税抜）"] || 0);
+          const ocrItems = statusData["証憑品名"] ? String(statusData["証憑品名"]) : undefined;
+          const ragResult = await estimateAccountFromHistory(
+            ocrItems || itemName,
+            verifiedSupplierName || supplierForRag,
+            ocrAmount || totalAmt,
+            department || undefined,
+            detectedTaxRate ? `課税仕入${detectedTaxRate}%` : undefined,
+            Number(statusData["単価"] || 0) || undefined,
+          );
+          estimatedAccount = ragResult.account;
+          console.log(`[file-share] RAG estimation for ${prNumber}: ${estimatedAccount} (${ragResult.confidence})`);
+          await updateStatus(prNumber, { "勘定科目": estimatedAccount });
+        } catch (ragErr) {
+          console.warn(`[file-share] RAG estimation failed for ${prNumber}:`, ragErr);
+          estimatedAccount = "消耗品費";
+        }
+      }
 
       if (isEmployeeExpense) {
         // 従業員立替 → MF経費に証憑転送
@@ -1236,7 +1325,6 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
             });
             if (fileRes.ok) {
               const buf = Buffer.from(await fileRes.arrayBuffer());
-              const statusData = statusResult?.data as Record<string, unknown> | undefined;
               // 仕訳日 = 検収日（原則）→ 取引日 → 本日のフォールバック
               const txDate = String(statusData?.["検収日"] || statusData?.["申請日"] || new Date().toISOString().slice(0, 10));
               const txAmountExclTax = Number(statusData?.["合計額（税抜）"] || 0);
@@ -1271,13 +1359,18 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
               } else if (process.env.MF_OAUTH_CLIENT_ID && journalAmount > 0) {
                 try {
                   const { buildJournalFromPurchase, createJournal } = await import("@/lib/mf-accounting");
-                  const accountTitle = String(statusData?.["勘定科目"] || "消耗品費");
+                  // 勘定科目は分岐前のRAG推定で確定済み
+                  const accountTitle = estimatedAccount || "消耗品費";
                   const department = String(statusData?.["部門"] || "");
                   const itemName = String(statusData?.["品目名"] || "");
                   const katanaPo = String(statusData?.["PO番号"] || "");
                   const budgetNum = String(statusData?.["予算番号"] || "");
+                  const hubspotDealId = String(statusData?.["HubSpot/案件名"] || "");
                   // 取引先: 国税API確定名 > 発注データの購入先
                   const journalSupplier = verifiedSupplierName || supplier;
+                  // 適格請求書判��
+                  const qualifiedNum = String(statusData?.["適格番号"] || "");
+                  const isQualifiedInvoice = qualifiedNum.startsWith("T") && qualifiedNum.length > 1;
                   const journalReq = await buildJournalFromPurchase({
                     transactionDate: txDate,
                     accountTitle,
@@ -1291,6 +1384,8 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
                     itemName: itemName || undefined,
                     katanaPo: katanaPo || undefined,
                     budgetNumber: budgetNum || undefined,
+                    hubspotDealId: hubspotDealId || undefined,
+                    isQualifiedInvoice,
                   });
                   const journalRes = await createJournal(journalReq);
                   const amountSource = ocrAmount ? "証憑" : "発注";
@@ -1317,7 +1412,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
       }
       await client.chat.postMessage({
         channel: channelId,
-        thread_ts: threadTs,
+        thread_ts: actualThreadTs,
         text: confirmLines.join("\n"),
       });
       await notifyOps(client, `📎 *証憑添付* ${prNumber} — ${voucherType} — 仕訳待ちに移行`);
@@ -1327,7 +1422,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
       console.warn(`[file-share] GAS returned success=false but proceeding with notification for ${prNumber}`);
       await client.chat.postMessage({
         channel: channelId,
-        thread_ts: threadTs,
+        thread_ts: actualThreadTs,
         text: `📎 証憑を確認しました（${prNumber}）\n種別: ${voucherType} / 形式: ${fileFormat}\n⚠️ ステータス更新に問題がある可能性があります。管理本部に確認してください。`,
       });
     }
@@ -1337,7 +1432,7 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
     try {
       await client.chat.postMessage({
         channel: channelId,
-        thread_ts: threadTs,
+        thread_ts: actualThreadTs,
         text: `📎 証憑ファイルを検知しました（${prNumber}）\n⚠️ 自動処理でエラーが発生しました。管理本部に確認してください。`,
       });
     } catch { /* Slack送信も失敗した場合は諦める */ }
@@ -1361,12 +1456,15 @@ async function handleBlockActions(
     value: string;
   }>;
   const channel = payload.channel as { id: string };
-  const message = payload.message as { ts: string };
+  const message = payload.message as { ts: string; thread_ts?: string };
 
   if (!user || !actions || !channel || !message) {
     console.error("Invalid block_actions payload");
     return;
   }
+
+  // thread_ts があればスレッドルートを使用（リプライ上のボタン押下時の分裂防止）
+  const threadRootTs = message.thread_ts || message.ts;
 
   for (const action of actions) {
     const handler = actionHandlers[action.action_id];
@@ -1377,7 +1475,7 @@ async function handleBlockActions(
         userId: user.id,
         userName: user.name || user.username || user.id,
         channelId: channel.id,
-        messageTs: message.ts,
+        messageTs: threadRootTs,
         actionValue: action.value,
       });
     } else {

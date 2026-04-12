@@ -3,6 +3,7 @@
 import { Suspense, useState, useCallback, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api-client";
+import { useUser } from "@/lib/user-context";
 
 // --- 型定義 ---
 
@@ -190,6 +191,7 @@ export default function CardMatchingPage() {
 }
 
 function CardMatchingContent() {
+  const user = useUser();
   const [activeTab, setActiveTab] = useState<TabKey>("needs_review");
   const [confidentMatches, setConfidentMatches] = useState<ConfidentMatch[]>([]);
   const [candidates, setCandidates] = useState<CandidateMatch[]>([]);
@@ -378,6 +380,19 @@ function CardMatchingContent() {
     { key: "unreported", label: "未申請利用", count: unreported.length, pending: pendingUnreported },
     { key: "withdrawal", label: "引落照合", count: 1, pending: 0 },
   ];
+
+  // 管理本部以外はアクセス不可
+  if (user.loaded && !user.isAdmin) {
+    return (
+      <div className="max-w-5xl mx-auto p-8 text-center">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+          <p className="text-red-700 font-bold mb-2">アクセス権限がありません</p>
+          <p className="text-sm text-red-600">このページは管理本部のみ閲覧できます。</p>
+          <a href="/dashboard" className="mt-4 inline-block text-sm text-blue-600 hover:underline">ダッシュボードに戻る</a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -592,7 +607,7 @@ function ConfirmedTab({ items }: { items: ConfidentMatch[] }) {
               <div key={i} className="flex items-center gap-4 py-2 px-3 bg-amber-50 rounded-md text-sm">
                 <span className="font-mono text-gray-600 w-32">{item.poNumber}</span>
                 <span className="text-gray-500 w-12">{item.date}</span>
-                <span className="text-gray-700 w-28">{item.supplier}</span>
+                <span className="text-gray-700 w-28">{item.supplier}{/amazon|アマゾン/i.test(item.supplier) && <AmazonBadge />}</span>
                 <span className="text-gray-500">{item.applicant}</span>
                 <span className="ml-auto font-mono text-gray-500">{yen(item.predictedAmount)}</span>
                 <span className="text-gray-400">→</span>
@@ -610,7 +625,7 @@ function ConfirmedTab({ items }: { items: ConfidentMatch[] }) {
           <div key={i} className="flex items-center gap-4 py-1.5 px-3 text-sm text-gray-400">
             <span className="font-mono w-32">{item.poNumber}</span>
             <span className="w-12">{item.date}</span>
-            <span className="w-28">{item.supplier}</span>
+            <span className="w-28">{item.supplier}{/amazon|アマゾン/i.test(item.supplier) && <AmazonBadge />}</span>
             <span>{item.applicant}</span>
             <span className="ml-auto font-mono">{yen(item.actualAmount)}</span>
           </div>
@@ -966,10 +981,8 @@ function WithdrawalTab({ month }: { month: string }) {
   const [isLoadingUnpaid, setIsLoadingUnpaid] = useState(false);
   const [unpaidError, setUnpaidError] = useState<string | null>(null);
 
-  // 初回 or month変更時に未払金データを取得
-  const [fetchedMonth, setFetchedMonth] = useState<string | null>(null);
-  if (month !== fetchedMonth) {
-    setFetchedMonth(month);
+  // month変更時に未払金データを取得
+  useEffect(() => {
     setIsLoadingUnpaid(true);
     setUnpaidError(null);
     apiFetch("/api/admin/card-matching/withdrawal", {
@@ -991,7 +1004,7 @@ function WithdrawalTab({ month }: { month: string }) {
         setUnpaidError(e instanceof Error ? e.message : String(e));
       })
       .finally(() => setIsLoadingUnpaid(false));
-  }
+  }, [month]);
 
   const usageMonth = unpaidData?.usageMonth || month.replace(/^(\d{4})-0?(\d{1,2})$/, "$1年$2月");
   const unpaidTotal = unpaidData?.unpaidTotal || 0;
@@ -1266,5 +1279,13 @@ function DiffReasonCard({ reason, action }: { reason: string; action: string }) 
       <p className="text-sm text-gray-800">{reason}</p>
       <p className="text-xs text-blue-600 mt-1">{action}</p>
     </div>
+  );
+}
+
+function AmazonBadge() {
+  return (
+    <a href="/admin/journals" className="ml-1 px-1 py-0.5 bg-orange-100 text-orange-700 rounded text-[10px] font-medium hover:bg-orange-200">
+      Amazon照合
+    </a>
   );
 }

@@ -2,7 +2,8 @@
 
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState, useEffect, useRef, useCallback } from "react";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, apiFetchSWR } from "@/lib/api-client";
+import { useUser } from "@/lib/user-context";
 
 interface PurchaseRequest {
   prNumber: string;
@@ -15,12 +16,10 @@ interface PurchaseRequest {
   orderStatus: string;
   inspectionStatus: string;
   voucherStatus: string;
-  slackLink: string;
   type: string;
   department: string;
   isEstimate?: boolean;
   isPostReport?: boolean;
-  isQualifiedInvoice?: string;
 }
 
 function statusColor(status: string): string {
@@ -40,15 +39,17 @@ function statusColor(status: string): string {
 }
 
 function overallStatus(req: PurchaseRequest): { label: string; color: string } {
+  // 証憑が完了とみなされるステータス
+  const voucherDone = req.voucherStatus === "添付済" || req.voucherStatus === "MF自動取得" || req.voucherStatus === "検証済";
   if (req.type === "購入報告") {
-    if (req.voucherStatus === "添付済") return { label: "完了", color: "bg-green-500 text-white" };
+    if (voucherDone) return { label: "完了", color: "bg-green-500 text-white" };
     return { label: "証憑待ち", color: "bg-amber-500 text-white" };
   }
   if (req.approvalStatus === "差戻し") return { label: "差戻し", color: "bg-red-500 text-white" };
   if (req.approvalStatus === "承認待ち") return { label: "承認待ち", color: "bg-yellow-500 text-white" };
   if (req.orderStatus === "未発注") return { label: "発注待ち", color: "bg-blue-500 text-white" };
   if (req.inspectionStatus === "未検収") return { label: "検収待ち", color: "bg-indigo-500 text-white" };
-  if (req.voucherStatus !== "添付済") return { label: "証憑待ち", color: "bg-amber-500 text-white" };
+  if (!voucherDone) return { label: "証憑待ち", color: "bg-amber-500 text-white" };
   return { label: "完了", color: "bg-green-500 text-white" };
 }
 
@@ -61,7 +62,7 @@ function StatusBadge({ label, className }: { label: string; className: string })
 }
 
 /** 証憑アップロードボタン（マイページ用） */
-function VoucherUploadButton({ prNumber, slackLink }: { prNumber: string; slackLink: string }) {
+function VoucherUploadButton({ prNumber, onUploaded }: { prNumber: string; onUploaded?: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [uploaded, setUploaded] = useState(false);
@@ -74,13 +75,20 @@ function VoucherUploadButton({ prNumber, slackLink }: { prNumber: string; slackL
       const formData = new FormData();
       formData.append("file", file);
       formData.append("prNumber", prNumber);
-      formData.append("slackLink", slackLink);
+      formData.append("slackTs", "");
       const res = await apiFetch("/api/purchase/upload-voucher", {
         method: "POST",
         body: formData,
       });
       if (res.ok) {
         setUploaded(true);
+        // 証憑アップロード後 → 一覧キャッシュをクリアし、データを再取得
+        try {
+          const keys = Object.keys(localStorage).filter((k) => k.startsWith("swr:mypage:") || k === "swr:journals:requests");
+          keys.forEach((k) => localStorage.removeItem(k));
+        } catch { /* ignore */ }
+        // 親コンポーネントのデータ再取得を呼び出し
+        onUploaded?.();
       } else {
         setFailed(true);
       }
@@ -89,7 +97,7 @@ function VoucherUploadButton({ prNumber, slackLink }: { prNumber: string; slackL
     } finally {
       setUploading(false);
     }
-  }, [prNumber, slackLink]);
+  }, [prNumber]);
 
   if (uploaded) {
     return <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded">提出済</span>;
@@ -123,38 +131,28 @@ function VoucherUploadButton({ prNumber, slackLink }: { prNumber: string; slackL
 function MyPageInner() {
   const params = useSearchParams();
   const userId = params.get("user_id") || "";
+  const user = useUser();
 
   const [requests, setRequests] = useState<PurchaseRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [filter, setFilter] = useState<"all" | "active" | "completed">("all");
 
-  const fetchRequests = (background = false) => {
-    if (!background) setLoading(true);
+  const fetchRequests = useCallback(() => {
+    if (!user.loaded) return;
     setLoadError(false);
-    apiFetch("/api/purchase/recent?limit=30")
-      .then((r) => r.json())
-      .then((d: { requests?: PurchaseRequest[] }) => {
-        setRequests(d.requests || []);
-        try { sessionStorage.setItem("purchaseRequests_v2", JSON.stringify(d.requests || [])); } catch {}
-      })
-      .catch(() => { if (!background) { setRequests([]); setLoadError(true); } })
-      .finally(() => setLoading(false));
-  };
+    const q = user.name ? `limit=30&applicant=${encodeURIComponent(user.name)}` : "limit=30";
+    apiFetchSWR<{ requests?: PurchaseRequest[] }>(
+      `/api/purchase/recent?${q}`,
+      `mypage:${user.name || "all"}`,
+      (d) => { setRequests(d.requests || []); setLoading(false); },
+    ).catch(() => { setLoadError(true); setLoading(false); });
+  }, [user.loaded, user.name]);
 
   useEffect(() => {
-    // キャッシュがあれば即表示 → バックグラウンド更新
-    try {
-      const cached = sessionStorage.getItem("purchaseRequests_v2");
-      if (cached) {
-        setRequests(JSON.parse(cached) as PurchaseRequest[]);
-        setLoading(false);
-        fetchRequests(true);
-        return;
-      }
-    } catch {}
+    if (!user.loaded) return;
     fetchRequests();
-  }, []);
+  }, [user.loaded, fetchRequests]);
 
   const filtered = requests.filter((req) => {
     if (filter === "all") return true;
@@ -261,13 +259,7 @@ function MyPageInner() {
                   </div>
                   <div className="flex-shrink-0 flex gap-1">
                     {a.voucherStatus === "要取得" && (
-                      <VoucherUploadButton prNumber={a.prNumber} slackLink={a.slackLink} />
-                    )}
-                    {a.slackLink && (
-                      <a href={a.slackLink} target="_blank" rel="noopener noreferrer"
-                        className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">
-                        Slack
-                      </a>
+                      <VoucherUploadButton prNumber={a.prNumber} onUploaded={fetchRequests} />
                     )}
                   </div>
                 </div>
@@ -354,14 +346,6 @@ function MyPageInner() {
                 )}
 
                 {/* Slackリンク */}
-                {req.slackLink && (
-                  <span
-                    onClick={(e) => { e.preventDefault(); window.open(req.slackLink, "_blank"); }}
-                    className="inline-block mt-2 text-xs text-blue-600 hover:text-blue-800"
-                  >
-                    Slackスレッドを開く
-                  </span>
-                )}
               </a>
             );
           })}

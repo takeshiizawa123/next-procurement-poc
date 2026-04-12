@@ -9,7 +9,8 @@ import {
   useRef,
   useEffect,
 } from "react";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, apiFetchSWR, swrInvalidate } from "@/lib/api-client";
+import { useUser } from "@/lib/user-context";
 
 type FormState = {
   ok: boolean;
@@ -262,6 +263,7 @@ interface FormValues {
   hubspotDealId: string;
   budgetNumber: string;
   notes: string;
+  isEstimate?: boolean;
   extraItems?: ExtraItemValue[];
   allItemsTotal?: number;
 }
@@ -293,6 +295,7 @@ function ConfirmationView({
   if (values.hubspotDealId)
     rows.push(["HubSpot案件番号", values.hubspotDealId]);
   if (values.budgetNumber) rows.push(["実行予算番号", values.budgetNumber]);
+  if (values.isEstimate) rows.push(["概算", "金額は概算です"]);
   if (values.notes) rows.push(["購入理由", values.notes]);
 
   return (
@@ -330,7 +333,7 @@ function ConfirmationView({
 
       {values.requestType !== "購入済" && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
-          この申請は部門長の承認が必要です。{(values.allItemsTotal || values.totalAmount) >= 100000 ? "（10万円以上: 固定資産登録の確認対象）" : ""}
+          この申請は部門長の承認が必要です。{(values.amount || values.totalAmount) >= 100000 ? "（単価10万円以上: 固定資産登録の確認対象）" : ""}
         </div>
       )}
 
@@ -361,6 +364,7 @@ function PurchaseFormInner() {
   const params = useSearchParams();
   const userId = params.get("user_id") || "";
   const channelId = params.get("channel_id") || "";
+  const currentUser = useUser();
 
   const [state, action, pending] = useActionState(submitPurchase, null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -375,6 +379,9 @@ function PurchaseFormInner() {
   // MF取引先マスタ（請求書払い時に使用）
   type MfCounterparty = { code: string; name: string; invoiceNumber?: string };
   const [mfCounterparties, setMfCounterparties] = useState<MfCounterparty[]>([]);
+  // PJマスタ（HubSpot案件番号サジェスト用）
+  type MfProject = { code: string; name: string };
+  const [mfProjects, setMfProjects] = useState<MfProject[]>([]);
 
   // KATANA POサジェスト
   type KatanaPO = { id: number; poNumber: string; supplierName: string; status: string; total: number };
@@ -396,6 +403,7 @@ function PurchaseFormInner() {
   const [hubspotDealId, setHubspotDealId] = useState("");
   const [budgetNumber, setBudgetNumber] = useState("");
   const [notes, setNotes] = useState("");
+  const [isEstimate, setIsEstimate] = useState(false);
   const [inspectorName, setInspectorName] = useState("");
 
   // 追加品目（一括申請用）
@@ -428,6 +436,7 @@ function PurchaseFormInner() {
 
   // 確認画面
   const [showConfirm, setShowConfirm] = useState(false);
+  const [isConfirming, setIsConfirming] = useState(false);
 
   // 重複チェック
   type Duplicate = { prNumber: string; itemName: string; totalAmount: number; applicationDate: string; applicant: string; status: string };
@@ -445,10 +454,6 @@ function PurchaseFormInner() {
   const [approvalSteps, setApprovalSteps] = useState<ApprovalStep[]>([]);
   const [approvalSummary, setApprovalSummary] = useState("");
 
-  // 勘定科目推定
-  type AccountEstimation = { account: string; subAccount: string; confidence: "high" | "medium" | "low"; reason: string };
-  const [accountEstimation, setAccountEstimation] = useState<AccountEstimation | null>(null);
-
   // 下書き復元通知
   const [draftRestored, setDraftRestored] = useState(false);
 
@@ -459,46 +464,7 @@ function PurchaseFormInner() {
 
   const isPurchased = requestType === "購入済";
   const totalAmount = amount * quantity;
-  const isHighValue = totalAmount >= 100000;
-
-  // ページ読み込み直後: 未処理タスクを即取得（申請者不明なら全社分）
-  useEffect(() => {
-    const cached = localStorage.getItem("purchase_applicant_name");
-    fetchMyTasks(cached || undefined);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // 従業員マスタ・購入先一覧を取得 → 申請者の自動特定・自動選択
-  useEffect(() => {
-    apiFetch("/api/employees")
-      .then((r) => r.json())
-      .then((d: { employees?: Employee[] }) => {
-        if (!d.employees) return;
-        setEmployees(d.employees);
-        // 申請者を自動特定
-        let matched: Employee | undefined;
-        if (userId) {
-          matched = d.employees.find((e) => e.slackAliases?.includes(userId));
-        }
-        if (!matched) {
-          const cached = localStorage.getItem("purchase_applicant_name");
-          if (cached) matched = d.employees.find((e) => e.name === cached);
-        }
-        if (matched) {
-          if (!userId) setSelectedEmployee(matched);
-          localStorage.setItem("purchase_applicant_name", matched.name);
-          fetchMyTasks(matched.name);
-        }
-      })
-      .catch(() => {});
-    apiFetch("/api/suppliers")
-      .then((r) => r.json())
-      .then((d: { suppliers?: string[] }) => {
-        if (d.suppliers) setSupplierSuggestions(d.suppliers);
-      })
-      .catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const isHighValue = amount >= 100000; // 単価ベースで固定資産判定（会計基準）
 
   // 未処理タスクを取得する共通関数（name省略時は全社）
   const fetchMyTasks = useCallback((name?: string) => {
@@ -511,7 +477,8 @@ function PurchaseFormInner() {
         for (const req of d.requests || []) {
           let status = "";
           if (req.approvalStatus === "差戻し") status = "差戻し";
-          else if (req.orderStatus === "未発注" && req.approvalStatus !== "承認待ち") status = "発注待ち";
+          else if (req.approvalStatus === "承認待ち") status = "承認待ち";
+          else if (req.orderStatus === "未発注") status = "発注待ち";
           else if (req.inspectionStatus === "未検収" && req.orderStatus !== "未発注") status = "検収待ち";
           else if (req.voucherStatus === "要取得" && req.inspectionStatus !== "未検収") status = "証憑待ち";
           if (status) {
@@ -524,21 +491,79 @@ function PurchaseFormInner() {
       .finally(() => setMyTasksLoading(false));
   }, []);
 
+  // ページ読み込み時: 全マスタ + 未処理タスクを並列取得
+  useEffect(() => {
+    if (!currentUser.loaded) return;
+    const cachedName = localStorage.getItem("purchase_applicant_name");
+
+    // 管理本部は全件取得、一般ユーザーは自分の申請のみ
+    const taskQuery = currentUser.isAdmin
+      ? "limit=100"
+      : cachedName ? `applicant=${encodeURIComponent(cachedName)}&limit=50` : "limit=50";
+
+    // 4つのAPIをSWRキャッシュ付きで並列取得
+    type EmpData = { employees?: Employee[] } | null;
+    type SupData = { suppliers?: string[] } | null;
+    type MasData = { counterparties?: { code: string; name: string; invoiceRegistrationNumber?: string | null }[]; projects?: { code: string; name: string }[] } | null;
+    type TaskData = { requests?: PastRequest[] } | null;
+
+    let empData: EmpData = null, supData: SupData = null, masData: MasData = null, taskData: TaskData = null;
+
+    const applyData = () => {
+      // 従業員マスタ → 申請者自動特定
+      if (empData?.employees) {
+        setEmployees(empData.employees);
+        let matched: Employee | undefined;
+        if (userId) matched = empData.employees.find((e: Employee) => e.slackAliases?.includes(userId));
+        if (!matched && cachedName) matched = empData.employees.find((e: Employee) => e.name === cachedName);
+        if (matched) {
+          if (!userId) setSelectedEmployee(matched);
+          localStorage.setItem("purchase_applicant_name", matched.name);
+          // 申請者が特定でき、かつキャッシュ名と異なる場合のみ再取得
+          if (matched.name !== cachedName) fetchMyTasks(matched.name);
+        }
+      }
+      // 購入先サジェスト
+      if (supData?.suppliers) setSupplierSuggestions(supData.suppliers);
+      // MFマスタ（取引先 + PJ）
+      if (masData) {
+        setMfCounterparties((masData.counterparties || []).map((c: { code: string; name: string; invoiceRegistrationNumber?: string | null }) => ({
+          code: c.code, name: c.name, invoiceNumber: c.invoiceRegistrationNumber || undefined,
+        })));
+        setMfProjects(masData.projects || []);
+      }
+      // 未処理タスク（初回取得分）
+      if (taskData?.requests) {
+        const tasks: MyTask[] = [];
+        for (const req of taskData.requests as PastRequest[]) {
+          let status = "";
+          if (req.approvalStatus === "差戻し") status = "差戻し";
+          else if (req.approvalStatus === "承認待ち") status = "承認待ち";
+          else if (req.orderStatus === "未発注") status = "発注待ち";
+          else if (req.inspectionStatus === "未検収" && req.orderStatus !== "未発注") status = "検収待ち";
+          else if (req.voucherStatus === "要取得" && req.inspectionStatus !== "未検収") status = "証憑待ち";
+          if (status) tasks.push({ prNumber: req.prNumber, itemName: req.itemName, totalAmount: req.totalAmount, status, slackLink: req.slackLink });
+        }
+        setMyTasks(tasks);
+        setMyTasksLoading(false);
+      }
+    };
+
+    Promise.all([
+      apiFetchSWR<EmpData>("/api/employees", "new:employees", (d) => { empData = d; applyData(); }),
+      apiFetchSWR<SupData>("/api/suppliers", "new:suppliers", (d) => { supData = d; applyData(); }),
+      apiFetchSWR<MasData>("/api/mf/masters", "new:masters", (d) => { masData = d; applyData(); }),
+      apiFetchSWR<TaskData>(`/api/purchase/recent?${taskQuery}`, `new:tasks:${cachedName || "all"}`, (d) => { taskData = d; applyData(); }),
+    ]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.loaded, currentUser.isAdmin]);
+
   // 手動で申請者を変更した場合にキャッシュ更新 & 再取得
   useEffect(() => {
     if (!selectedEmployee?.name) return;
     localStorage.setItem("purchase_applicant_name", selectedEmployee.name);
     fetchMyTasks(selectedEmployee.name);
   }, [selectedEmployee, fetchMyTasks]);
-
-  // 請求書払い選択時にMF取引先マスタを取得
-  useEffect(() => {
-    if (!paymentMethod.includes("請求書")) { setMfCounterparties([]); return; }
-    apiFetch("/api/mf/counterparties")
-      .then((r) => r.json())
-      .then((d: { counterparties?: MfCounterparty[] }) => setMfCounterparties(d.counterparties || []))
-      .catch(() => setMfCounterparties([]));
-  }, [paymentMethod]);
 
   // 承認ルート取得（金額・区分が変わるたび）
   useEffect(() => {
@@ -650,7 +675,9 @@ function PurchaseFormInner() {
   };
 
   // 確認画面 → 送信
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const handleConfirmSubmit = () => {
+    setIsSubmitting(true);
     formRef.current?.requestSubmit();
   };
 
@@ -720,33 +747,24 @@ function PurchaseFormInner() {
     if (step > 1) setStep(step - 1);
   };
 
-  // Step 3→4遷移時に重複チェック + 勘定科目推定を実行
+  // Step 3→4遷移時に重複チェックを実行（勘定科目推定は証憑添付時に実行）
   const goToConfirm = async () => {
-    const dupParams = new URLSearchParams({ itemName });
-    if (totalAmount > 0) dupParams.set("totalAmount", String(totalAmount));
+    setIsConfirming(true);
+    try {
+      const dupParams = new URLSearchParams({ itemName });
+      if (totalAmount > 0) dupParams.set("totalAmount", String(totalAmount));
 
-    const acctParams = new URLSearchParams({
-      itemName,
-      supplierName,
-      totalAmount: String(totalAmount),
-    });
+      try {
+        const dupRes = await apiFetch(`/api/purchase/check-duplicate?${dupParams}`).then((r) => r.json());
+        setDuplicates(dupRes.duplicates || []);
+      } catch { /* ignore */ }
+      setDupChecked(true);
 
-    const [dupRes, acctRes] = await Promise.allSettled([
-      apiFetch(`/api/purchase/check-duplicate?${dupParams}`).then((r) => r.json()),
-      apiFetch(`/api/purchase/estimate-account?${acctParams}`).then((r) => r.json()),
-    ]);
-
-    if (dupRes.status === "fulfilled") {
-      setDuplicates(dupRes.value.duplicates || []);
+      setShowConfirm(true);
+      setStep(4);
+    } finally {
+      setIsConfirming(false);
     }
-    setDupChecked(true);
-
-    if (acctRes.status === "fulfilled" && acctRes.value.account) {
-      setAccountEstimation(acctRes.value);
-    }
-
-    setShowConfirm(true);
-    setStep(4);
   };
 
   // フォーム送信ハンドラ
@@ -770,6 +788,12 @@ function PurchaseFormInner() {
   }
 
   if (state?.ok) {
+    // 申請成功 → 関連キャッシュをクリアして次回表示時に最新データを取得
+    swrInvalidate(`mypage:${currentUser.name || "all"}`);
+    swrInvalidate(`dashboard:admin`);
+    swrInvalidate(`dashboard:${currentUser.name}`);
+    swrInvalidate(`journals:requests`);
+    swrInvalidate(`new:tasks:${currentUser.name || "all"}`);
     return (
       <div className="max-w-2xl mx-auto p-4 sm:p-6">
         <div className="bg-green-50 border border-green-200 rounded-lg p-6 text-center">
@@ -839,9 +863,9 @@ function PurchaseFormInner() {
               </div>
               <div className="space-y-1">
                 {(() => {
-                  const grouped = { "発注待ち": [] as MyTask[], "検収待ち": [] as MyTask[], "証憑待ち": [] as MyTask[], "差戻し": [] as MyTask[] };
+                  const grouped = { "承認待ち": [] as MyTask[], "発注待ち": [] as MyTask[], "検収待ち": [] as MyTask[], "証憑待ち": [] as MyTask[], "差戻し": [] as MyTask[] };
                   for (const t of myTasks) if (t.status in grouped) (grouped as Record<string, MyTask[]>)[t.status].push(t);
-                  const icons: Record<string, string> = { "発注待ち": "🛒", "検収待ち": "📦", "証憑待ち": "📎", "差戻し": "↩️" };
+                  const icons: Record<string, string> = { "承認待ち": "⏳", "発注待ち": "🛒", "検収待ち": "📦", "証憑待ち": "📎", "差戻し": "↩️" };
                   return Object.entries(grouped).filter(([, items]) => items.length > 0).map(([status, items]) => (
                     <div key={status} className="text-sm text-amber-800">
                       <span>{icons[status]} {status}: {items.length}件</span>
@@ -887,6 +911,8 @@ function PurchaseFormInner() {
         <input type="hidden" name="hubspot_deal_id" value={hubspotDealId} />
         <input type="hidden" name="budget_number" value={budgetNumber} />
         <input type="hidden" name="notes" value={notes} />
+        <input type="hidden" name="is_estimate" value={isEstimate ? "true" : ""} />
+        <input type="hidden" name="is_post_report" value={isPurchased ? "true" : ""} />
         <input type="hidden" name="extra_items" value={JSON.stringify(extraItems.filter((e) => e.itemName && e.amount > 0).map((e) => ({ itemName: e.itemName, amount: e.amount, quantity: e.quantity, url: e.url })))} />
 
         {/* ステップインジケーター */}
@@ -941,30 +967,6 @@ function PurchaseFormInner() {
               </div>
             )}
 
-            {/* 勘定科目推定 */}
-            {accountEstimation && (
-              <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-green-800">推定勘定科目:</span>
-                  <span className="font-bold text-green-900">
-                    {accountEstimation.account}
-                    {accountEstimation.subAccount && (
-                      <span className="font-normal text-green-700 ml-1">/ {accountEstimation.subAccount}</span>
-                    )}
-                  </span>
-                  <span className={`text-xs px-1.5 py-0.5 rounded-full ${
-                    accountEstimation.confidence === "high" ? "bg-green-200 text-green-800" :
-                    accountEstimation.confidence === "medium" ? "bg-yellow-200 text-yellow-800" :
-                    "bg-gray-200 text-gray-600"
-                  }`}>
-                    {accountEstimation.confidence === "high" ? "確度高" :
-                     accountEstimation.confidence === "medium" ? "確度中" : "確度低"}
-                  </span>
-                </div>
-                <p className="text-xs text-green-600 mt-1">{accountEstimation.reason}</p>
-              </div>
-            )}
-
           <ConfirmationView
             values={{
               requestType,
@@ -981,6 +983,7 @@ function PurchaseFormInner() {
               hubspotDealId,
               budgetNumber,
               notes,
+              isEstimate,
               extraItems: extraItems.filter((e) => e.itemName && e.amount > 0).map((e) => ({
                 itemName: e.itemName, amount: e.amount, quantity: e.quantity, url: e.url
               })),
@@ -988,7 +991,7 @@ function PurchaseFormInner() {
             }}
             onBack={() => { setShowConfirm(false); setDupChecked(false); setStep(3); }}
             onSubmit={handleConfirmSubmit}
-            pending={pending}
+            pending={pending || isSubmitting}
           />
           </>
         ) : (
@@ -1187,6 +1190,20 @@ function PurchaseFormInner() {
                     </span>
                   )}
                 </div>
+              )}
+
+              {/* 概算チェック */}
+              {!isPurchased && (
+                <label className="mt-2 flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    name="is_estimate"
+                    checked={isEstimate}
+                    onChange={(e) => setIsEstimate(e.target.checked)}
+                    className="rounded border-gray-300"
+                  />
+                  <span className="text-gray-700">金額は概算です（確定後に修正します）</span>
+                </label>
               )}
 
               {/* 承認ルートプレビュー */}
@@ -1594,11 +1611,19 @@ function PurchaseFormInner() {
               <input
                 type="text"
                 name="hubspot_deal_id"
+                list="hubspot-project-list"
                 value={hubspotDealId}
                 onChange={(e) => setHubspotDealId(e.target.value)}
-                placeholder="例: 12345678"
+                placeholder="例: 12345678（PJマスタから選択可）"
                 className="w-full border rounded-lg px-3 py-2"
               />
+              {mfProjects.length > 0 && (
+                <datalist id="hubspot-project-list">
+                  {mfProjects.map((p) => (
+                    <option key={p.code} value={p.code}>{p.name}</option>
+                  ))}
+                </datalist>
+              )}
               <p className="text-xs text-gray-500 mt-1">
                 案件利用でプロジェクトコードを持っている場合は必ず入力
               </p>
@@ -1671,11 +1696,11 @@ function PurchaseFormInner() {
                   </button>
                   <button
                     type="button"
-                    disabled={!canProceedStep3}
+                    disabled={!canProceedStep3 || isConfirming}
                     onClick={goToConfirm}
                     className="flex-1 py-3 px-4 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
                   >
-                    確認画面へ
+                    {isConfirming ? "確認中..." : "確認画面へ"}
                   </button>
                 </div>
 

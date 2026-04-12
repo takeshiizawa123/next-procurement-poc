@@ -8,8 +8,7 @@ import {
   calcPaymentDueDate,
   type RequestInfo,
 } from "@/lib/slack";
-import { registerPurchase, updateStatus, getEmployees, type Employee } from "@/lib/gas-client";
-import { estimateAccount } from "@/lib/account-estimator";
+import { registerPurchase, updateStatus, getEmployees, invalidateRecentRequests, type Employee } from "@/lib/gas-client";
 import { resolveApprovalRoute } from "@/lib/approval-router";
 import { requireApiKey } from "@/lib/api-auth";
 
@@ -130,7 +129,6 @@ export async function POST(request: NextRequest) {
     const approverSlackId = isPurchased ? "" : approvalRoute.primaryApprover;
 
     // GAS登録を先に行い、GAS発番のPO番号を取得
-    const estimation = estimateAccount(itemName, supplierName, totalAmount);
     let poNumber = "";
     try {
       // 承認者名を解決（SlackID → 表示名）
@@ -159,12 +157,14 @@ export async function POST(request: NextRequest) {
         budgetNumber: sanitize((formData.get("budget_number") as string)?.trim() || ""),
         paymentMethod,
         approver: approverName,
+        inspector: resolveInspector(formData, userId, employees),
         purpose: sanitize((formData.get("asset_usage") as string)?.trim() || ""),
-        deliveryLocation: sanitize((formData.get("delivery_location") as string)?.trim() || ""),
         poNumber: sanitize((formData.get("katana_po") as string)?.trim() || ""),
-        accountTitle: estimation.account + (estimation.subAccount ? `（${estimation.subAccount}）` : ""),
+        accountTitle: "",
         remarks: sanitize((formData.get("notes") as string)?.trim() || ""),
         isPurchased,
+        isEstimate: (formData.get("is_estimate") as string) === "true",
+        isPostReport: isPurchased,
       });
       if (gasResult.success && gasResult.data?.prNumber) {
         poNumber = gasResult.data.prNumber;
@@ -224,13 +224,12 @@ export async function POST(request: NextRequest) {
       console.error("[web-purchase] Slack postMessage failed (data saved in GAS):", slackError);
     }
 
-    // Slack投稿後にGASのSlackリンク情報を更新
+    // Slack投稿後にGASのスレッドTS情報を更新
     if (resultTs) {
-      const slackLink = `https://slack.com/archives/${channelId}/p${resultTs.replace(".", "")}`;
       try {
-        await updateStatus(poNumber, { slackTs: resultTs, slackLink });
+        await updateStatus(poNumber, { "スレッドTS": resultTs });
       } catch (e) {
-        console.error("[web-purchase] Failed to update GAS with Slack link:", e);
+        console.error("[web-purchase] Failed to update GAS with Slack TS:", e);
       }
     }
 
@@ -296,6 +295,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 追加品目の登録（一括申請）
+    let extraItemWarning = "";
     const extraItemsRaw = (formData.get("extra_items") as string)?.trim() || "[]";
     try {
       let extraItems: { itemName: string; amount: number; quantity: number; url: string }[];
@@ -305,38 +305,45 @@ export async function POST(request: NextRequest) {
       } catch {
         extraItems = [];
       }
-      const extraSlackLink = resultTs
-        ? `https://slack.com/archives/${channelId}/p${resultTs.replace(".", "")}`
-        : "";
-      for (const extra of extraItems) {
-        if (!extra.itemName || !extra.amount || extra.amount <= 0 || extra.quantity <= 0) continue;
-        extra.itemName = sanitize(extra.itemName);
-        const extraTotal = extra.amount * extra.quantity;
-        const extraEstimation = estimateAccount(extra.itemName, supplierName, extraTotal);
-        await registerPurchase({
-          applicant: userName,
-          itemName: extra.itemName,
-          totalAmount: extraTotal,
-          unitPrice: extra.amount,
-          quantity: extra.quantity,
-          purchaseSource: supplierName,
-          purchaseSourceUrl: extra.url || "",
-          paymentMethod,
-          accountTitle: extraEstimation.account + (extraEstimation.subAccount ? `（${extraEstimation.subAccount}）` : ""),
-          remarks: `[一括申請: ${poNumber}]`,
-          slackTs: resultTs || "",
-          slackLink: extraSlackLink,
-          isPurchased,
-        }).catch((e) => console.error("[web-purchase] Extra item GAS error:", e));
+      const extraResults = await Promise.allSettled(
+        extraItems
+          .filter((extra) => extra.itemName && extra.amount > 0 && extra.quantity > 0)
+          .map((extra) => {
+            extra.itemName = sanitize(extra.itemName);
+            const extraTotal = extra.amount * extra.quantity;
+            return registerPurchase({
+              applicant: userName,
+              itemName: extra.itemName,
+              totalAmount: extraTotal,
+              unitPrice: extra.amount,
+              quantity: extra.quantity,
+              purchaseSource: supplierName,
+              purchaseSourceUrl: extra.url || "",
+              paymentMethod,
+              accountTitle: "",
+              remarks: `[一括申請: ${poNumber}]`,
+              slackTs: resultTs || "",
+              isPurchased,
+            });
+          }),
+      );
+      const failedExtras = extraResults.filter((r) => r.status === "rejected");
+      if (failedExtras.length > 0) {
+        console.error("[web-purchase] Extra items failed:", failedExtras.length);
+        extraItemWarning = `追加品目のうち${failedExtras.length}件の登録に失敗しました。`;
       }
     } catch {
       // JSON parse error - ignore
     }
 
+    await invalidateRecentRequests();
+    const warnings: string[] = [];
+    if (!slackPosted) warnings.push("申請データは保存されましたが、Slack通知に失敗しました。管理者に連絡してください。");
+    if (extraItemWarning) warnings.push(extraItemWarning);
     return NextResponse.json({
       ok: true,
       poNumber,
-      ...(slackPosted ? {} : { warning: "申請データは保存されましたが、Slack通知に失敗しました。管理者に連絡してください。" }),
+      ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
     });
   } catch (error) {
     console.error("[web-purchase] submit error:", error);

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSlackClient } from "@/lib/slack";
+import { getSlackClient, safeDmChannel } from "@/lib/slack";
 import { getRecentRequests } from "@/lib/gas-client";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
       ];
 
       await client.chat.postMessage({
-        channel: slackId,
+        channel: safeDmChannel(slackId),
         text: lines.join("\n"),
       });
       sent++;

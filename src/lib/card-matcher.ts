@@ -376,6 +376,13 @@ function phase2ScoreMatch(
   const usedStatementIds = new Set<string>();
   const usedJournalIds = new Set<number>();
 
+  if (remainingStatements.length === 0) {
+    console.warn("[card-matcher] Phase 2: 入力明細が空です（スコアリングをスキップ）");
+  }
+  if (journals.length === 0) {
+    console.warn("[card-matcher] Phase 2: 仕訳データが空です（スコアリングをスキップ）");
+  }
+
   for (const stmt of remainingStatements) {
     const scored: {
       journal: JournalListItem;

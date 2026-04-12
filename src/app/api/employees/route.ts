@@ -6,8 +6,7 @@ import { requireApiKey } from "@/lib/api-auth";
  * 従業員マスタ一覧を返す（APIキー認証）
  * GET /api/employees
  *
- * GAS Web Appの従業員マスタをプロキシ。
- * Webフォームの申請者サジェストに使用。
+ * CDNキャッシュ: 5分 + stale-while-revalidate 1時間
  */
 export async function GET(request: NextRequest) {
   const authError = requireApiKey(request);
@@ -20,7 +19,9 @@ export async function GET(request: NextRequest) {
         { status: 500 },
       );
     }
-    return NextResponse.json(result.data);
+    const res = NextResponse.json(result.data);
+    res.headers.set("Cache-Control", "public, s-maxage=300, stale-while-revalidate=3600");
+    return res;
   } catch (error) {
     console.error("[employees] Error:", error);
     return NextResponse.json(

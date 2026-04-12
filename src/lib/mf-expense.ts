@@ -7,10 +7,11 @@
  */
 
 const MF_EXPENSE_BASE = "https://expense.moneyforward.com/api/external/v1";
-const MF_EXPENSE_OFFICE_ID = process.env.MF_EXPENSE_OFFICE_ID || "";
+// 環境変数に改行が混入していたケースがあるため trim
+const MF_EXPENSE_OFFICE_ID = (process.env.MF_EXPENSE_OFFICE_ID || "").trim();
 
 // MF経費は独自のBearer Tokenを使用（OAuth基盤とは別）
-const MF_EXPENSE_TOKEN = process.env.MF_EXPENSE_ACCESS_TOKEN || "";
+const MF_EXPENSE_TOKEN = (process.env.MF_EXPENSE_ACCESS_TOKEN || "").trim();
 
 // --- 型定義 ---
 
@@ -22,6 +23,105 @@ export interface ExTransaction {
   ex_item_id?: string;
   project_id?: string;
   dept_id?: string;
+}
+
+/**
+ * MF経費 ex_transactions API のレスポンス型
+ * (fetchCardStatements / fetchEnrichedTransactions で取得)
+ */
+export interface MfExTransaction {
+  id: string;
+  number: number;
+  value: number;
+  recognized_at: string; // YYYY-MM-DD
+  remark: string;
+  memo: string | null;
+
+  // 従業員特定（card_last4に依存しない主キー）
+  office_member_id: string;
+  office_member?: {
+    id: string;
+    name: string;
+    identification_code: string;
+    number: string;
+  };
+
+  // データソース識別
+  automatic_status: string; // "manual" | "input_done" | "automatic" 等
+  receipt_type: string | null; // "paper" | "e_doc" | null
+
+  // 部門・PJ・科目
+  dept_id: string | null;
+  project_id: string | null;
+  ex_item_id: string | null;
+  dept?: { id: string; code: string; name: string };
+  project?: { id: string; code: string; name: string } | null;
+  ex_item?: { id: string; name: string; code: string };
+
+  // 税区分・仕訳情報（既に仕訳化されている場合）
+  dr_excise_id: string | null;
+  dr_excise?: { id: string; long_name: string; rate: number };
+  cr_item_id: string | null;
+  cr_item?: { id: string; name: string; code: string };
+  excise_value: number | null;
+
+  // 適格請求書
+  invoice_registration_number: string | null;
+  invoice_kind: number | null;
+
+  // 経費レポート関連
+  is_exported: boolean;
+  is_reported: boolean;
+  approved_at: string | null;
+  created_at: string;
+  updated_at: string;
+
+  // 添付ファイル
+  mf_file?: {
+    id: string;
+    name: string;
+    byte_size: number;
+    content_type: string;
+  } | null;
+}
+
+/**
+ * カード照合用に正規化された形式
+ */
+export interface NormalizedCardStatement {
+  /** MF経費側の取引ID */
+  mfExTransactionId: string;
+  /** 従業員ID（MF経費側） */
+  officeMemberId: string;
+  /** 従業員名 */
+  memberName: string;
+  /** 金額（円） */
+  amount: number;
+  /** 取引日 */
+  date: string;
+  /** 摘要（加盟店名など） */
+  remark: string;
+  /** メモ */
+  memo: string | null;
+  /** データソース: manual=手動入力, input_done=OCR読取済, automatic=カード自動取込 */
+  source: string;
+  /** レシート種別 */
+  receiptType: string | null;
+  /** 部門名 */
+  deptName: string | null;
+  /** PJ名 */
+  projectName: string | null;
+  /** 経費科目名 */
+  exItemName: string | null;
+  /** 適格請求書登録番号 */
+  registrationNumber: string | null;
+  /** 既存の仕訳情報（Stage 1相当） */
+  stage1?: {
+    drAccount: string;
+    drTaxCode: string;
+    crAccount: string;
+    taxValue: number;
+  };
 }
 
 interface MasterItem {
@@ -206,6 +306,129 @@ export async function createTripExpense(params: {
     project_id: projectId,
     dept_id: deptId,
   });
+}
+
+// ============================================================================
+// カード明細取得（office_member_id ベースの照合に対応）
+// ============================================================================
+
+/**
+ * MF経費からカード/経費明細を取得（全フィールド取得）
+ *
+ * Phase 0 の実装と違い、office_member_id / automatic_status / 仕訳情報などを含む
+ * 全フィールドを取得して返す。
+ *
+ * @param options 取得オプション
+ * @returns 正規化された明細リスト
+ */
+export async function fetchCardStatements(options: {
+  /** 取得開始日 YYYY-MM-DD */
+  from: string;
+  /** 取得終了日 YYYY-MM-DD (from からの期間は最大3ヶ月) */
+  to: string;
+  /** ページング */
+  page?: number;
+  /** office_id内の全ユーザー分取得（管理者用）。false または未指定で /me のみ */
+  officeWide?: boolean;
+}): Promise<{
+  statements: NormalizedCardStatement[];
+  rawTransactions: MfExTransaction[];
+  hasNextPage: boolean;
+}> {
+  if (!MF_EXPENSE_TOKEN || !MF_EXPENSE_OFFICE_ID) {
+    console.warn("[mf-expense] MF_EXPENSE credentials not set");
+    return { statements: [], rawTransactions: [], hasNextPage: false };
+  }
+
+  const basePath = options.officeWide
+    ? `/offices/${MF_EXPENSE_OFFICE_ID}/ex_transactions`
+    : `/offices/${MF_EXPENSE_OFFICE_ID}/me/ex_transactions`;
+
+  const params = new URLSearchParams({
+    "query_object[recognized_at_from]": options.from,
+    "query_object[recognized_at_to]": options.to,
+  });
+  if (options.page && options.page > 1) {
+    params.append("page", String(options.page));
+  }
+
+  const url = `${MF_EXPENSE_BASE}${basePath}?${params.toString()}`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${MF_EXPENSE_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`MF Expense API error ${res.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  // レスポンスは配列 or { ex_transactions: [...], next: "...", prev: "..." }
+  let rawList: MfExTransaction[];
+  let hasNext = false;
+  if (Array.isArray(data)) {
+    rawList = data;
+  } else {
+    rawList = data.ex_transactions ?? [];
+    hasNext = !!data.next;
+  }
+
+  const statements: NormalizedCardStatement[] = rawList
+    .filter((tx) => tx.recognized_at && tx.value)
+    .map((tx) => ({
+      mfExTransactionId: tx.id,
+      officeMemberId: tx.office_member_id,
+      memberName: tx.office_member?.name ?? "",
+      amount: tx.value,
+      date: tx.recognized_at,
+      remark: tx.remark ?? "",
+      memo: tx.memo,
+      source: tx.automatic_status ?? "unknown",
+      receiptType: tx.receipt_type,
+      deptName: tx.dept?.name ?? null,
+      projectName: tx.project?.name ?? null,
+      exItemName: tx.ex_item?.name ?? null,
+      registrationNumber: tx.invoice_registration_number,
+      stage1: tx.dr_excise
+        ? {
+            drAccount: tx.ex_item?.name ?? "",
+            drTaxCode: tx.dr_excise.long_name,
+            crAccount: tx.cr_item?.name ?? "",
+            taxValue: tx.excise_value ?? 0,
+          }
+        : undefined,
+    }));
+
+  return { statements, rawTransactions: rawList, hasNextPage: hasNext };
+}
+
+/**
+ * 指定期間の全カード明細を全ページ取得
+ *
+ * 期間が3ヶ月を超える場合は分割して取得。
+ */
+export async function fetchAllCardStatements(options: {
+  from: string;
+  to: string;
+  officeWide?: boolean;
+}): Promise<NormalizedCardStatement[]> {
+  const all: NormalizedCardStatement[] = [];
+  let page = 1;
+  let hasNext = true;
+  const MAX_PAGES = 20;
+
+  while (hasNext && page <= MAX_PAGES) {
+    const result = await fetchCardStatements({ ...options, page });
+    all.push(...result.statements);
+    hasNext = result.hasNextPage;
+    page++;
+  }
+
+  return all;
 }
 
 // --- じゃらんCSVパーサー ---

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateStatus, getStatus } from "@/lib/gas-client";
+import { updateStatus, getStatus, invalidateRecentRequests } from "@/lib/gas-client";
+import { updateSlackMessageForWebAction } from "@/lib/slack";
 import { cacheGet, cacheSet, cacheDelete } from "@/lib/cache";
+import { isEcLinkedSite, VOUCHER_STATUS_MF_AUTO } from "@/lib/ec-sites";
 
 const CACHE_PREFIX = "purchase:";
 const CACHE_TTL = 60_000; // 60秒
@@ -17,14 +19,14 @@ export async function POST(
     return NextResponse.json({ error: "prNumber is required" }, { status: 400 });
   }
 
-  let body: { action: string; comment?: string };
+  let body: { action: string; comment?: string; operatorName?: string; deliveryNote?: "attached" | "none"; supplierName?: string };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { action, comment } = body;
+  const { action, comment, operatorName } = body;
 
   // アクションに応じて更新フィールドを決定
   const updates: Record<string, string> = {};
@@ -32,12 +34,27 @@ export async function POST(
     case "order_complete":
       updates["発注ステータス"] = "発注済";
       break;
-    case "inspection_complete":
+    case "inspection_complete": {
       updates["検収ステータス"] = "検収済";
       updates["検収日"] = new Date().toISOString().slice(0, 10);
       if (comment) updates["検収コメント"] = comment;
-      // 検収後は証憑を要求
-      updates["証憑対応"] = "要取得";
+      // 納品書ステータス
+      updates["納品書"] = body.deliveryNote === "attached" ? "添付済" : "なし";
+      // EC連携サイトなら証憑はMF自動取得、それ以外は手動要求
+      const supplier = body.supplierName || "";
+      updates["証憑対応"] = isEcLinkedSite(supplier) ? VOUCHER_STATUS_MF_AUTO : "要取得";
+      break;
+    }
+    case "approve":
+      updates["発注承認ステータス"] = "承認済";
+      break;
+    case "reject":
+      updates["発注承認ステータス"] = "差戻し";
+      if (comment) updates["差戻し理由"] = comment;
+      break;
+    case "cancel":
+      updates["発注承認ステータス"] = "取消";
+      updates["取消日"] = new Date().toISOString().slice(0, 10);
       break;
     default:
       return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
@@ -50,10 +67,20 @@ export async function POST(
     }
     // キャッシュ無効化
     cacheDelete(`${CACHE_PREFIX}${prNumber}`);
+    await invalidateRecentRequests();
     // 更新後の最新データを返す
     const status = await getStatus(prNumber);
     if (status.success && status.data) {
       cacheSet(`${CACHE_PREFIX}${prNumber}`, status.data, CACHE_TTL);
+      // Slackメッセージのブロックを書き換え
+      const purchaseData = status.data as Record<string, unknown>;
+      try {
+        await updateSlackMessageForWebAction(
+          prNumber, action, operatorName || "Web", purchaseData,
+        );
+      } catch (slackErr) {
+        console.error(`[purchase-status] Slack update error:`, slackErr);
+      }
     }
     return NextResponse.json({ success: true, data: status.data });
   } catch (e) {
@@ -89,7 +116,7 @@ export async function PUT(
   }
 
   // 更新可能なフィールドを制限
-  const allowed = ["勘定科目", "税区分", "部門", "MF取引先", "MF摘要", "HubSpot/案件名"];
+  const allowed = ["勘定科目", "税区分", "部門", "MF取引先", "MF摘要", "HubSpot案件番号", "適格番号"];
   const filtered: Record<string, string> = {};
   for (const [k, v] of Object.entries(body.updates)) {
     if (allowed.includes(k)) filtered[k] = v;

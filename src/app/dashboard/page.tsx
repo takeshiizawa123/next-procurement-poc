@@ -1,7 +1,8 @@
 "use client";
 
 import { Suspense, useState, useEffect } from "react";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetchSWR } from "@/lib/api-client";
+import { useUser } from "@/lib/user-context";
 
 interface PurchaseRequest {
   prNumber: string;
@@ -17,10 +18,8 @@ interface PurchaseRequest {
   type: string;
   department: string;
   accountTitle: string;
-  slackLink: string;
   isEstimate?: boolean;
   isPostReport?: boolean;
-  isQualifiedInvoice?: string;
 }
 
 function overallLabel(req: PurchaseRequest): string {
@@ -36,16 +35,20 @@ function overallLabel(req: PurchaseRequest): string {
 }
 
 function DashboardInner() {
+  const user = useUser();
   const [requests, setRequests] = useState<PurchaseRequest[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    apiFetch("/api/purchase/recent?limit=30")
-      .then((r) => r.json())
-      .then((d: { requests?: PurchaseRequest[] }) => setRequests(d.requests || []))
-      .catch(() => setRequests([]))
-      .finally(() => setLoading(false));
-  }, []);
+    if (!user.loaded) return;
+    const q = user.isAdmin ? "limit=30" : `limit=30&applicant=${encodeURIComponent(user.name)}`;
+    const cacheKey = `dashboard:${user.isAdmin ? "admin" : user.name}`;
+    apiFetchSWR<{ requests?: PurchaseRequest[] }>(
+      `/api/purchase/recent?${q}`,
+      cacheKey,
+      (d) => { setRequests(d.requests || []); setLoading(false); },
+    );
+  }, [user.loaded, user.isAdmin, user.name]);
 
   if (loading) {
     return <div className="max-w-5xl mx-auto p-6 text-center text-gray-500 animate-pulse">読み込み中...</div>;
@@ -91,21 +94,13 @@ function DashboardInner() {
     monthlyStats[month].amount += req.totalAmount || 0;
   }
 
-  // 適格請求書・概算・事後報告の集計
-  const invoiceCounts = { qualified: 0, unqualified: 0, noNumber: 0, total: 0 };
+  // 概算・事後報告の集計
   let estimateCount = 0;
   let postReportCount = 0;
   for (const req of requests) {
-    if (req.isQualifiedInvoice) {
-      invoiceCounts.total++;
-      if (req.isQualifiedInvoice === "適格") invoiceCounts.qualified++;
-      else if (req.isQualifiedInvoice === "非適格") invoiceCounts.unqualified++;
-      else invoiceCounts.noNumber++;
-    }
     if (req.isEstimate) estimateCount++;
-    if (req.isPostReport) postReportCount++;
+    if (req.isPostReport || req.type === "購入報告") postReportCount++;
   }
-  const qualifiedRate = invoiceCounts.total > 0 ? Math.round((invoiceCounts.qualified / invoiceCounts.total) * 100) : 0;
 
   const statusOrder = ["承認待ち", "発注待ち", "検収待ち", "証憑待ち", "差戻し", "完了"];
   const statusColorMap: Record<string, string> = {
@@ -201,7 +196,7 @@ function DashboardInner() {
                   <ul className="space-y-0.5">
                     {overdueItems.slice(0, 3).map((r) => (
                       <li key={r.prNumber} className="text-sm text-amber-800">
-                        {r.slackLink ? <a href={r.slackLink} target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-600">{r.prNumber}</a> : r.prNumber}: {r.itemName}（{r.applicant}）
+                        <a href={`/purchase/${r.prNumber}`} className="underline hover:text-amber-600">{r.prNumber}</a>: {r.itemName}（{r.applicant}）
                       </li>
                     ))}
                   </ul>
@@ -213,25 +208,11 @@ function DashboardInner() {
                   <ul className="space-y-0.5">
                     {approvalOverdue.slice(0, 3).map((r) => (
                       <li key={r.prNumber} className="text-sm text-amber-800">
-                        {r.slackLink ? <a href={r.slackLink} target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-600">{r.prNumber}</a> : r.prNumber}: {r.itemName}（{r.applicant}）
+                        <a href={`/purchase/${r.prNumber}`} className="underline hover:text-amber-600">{r.prNumber}</a>: {r.itemName}（{r.applicant}）
                       </li>
                     ))}
                   </ul>
                 </div>
-              )}
-              {/* 一括フォロー: 遅延案件のSlackリンクをまとめて開く */}
-              {[...overdueItems, ...approvalOverdue].some((r) => r.slackLink) && (
-                <button
-                  onClick={() => {
-                    [...overdueItems, ...approvalOverdue]
-                      .filter((r) => r.slackLink)
-                      .slice(0, 5)
-                      .forEach((r) => window.open(r.slackLink, "_blank"));
-                  }}
-                  className="mt-2 text-xs px-3 py-1 bg-amber-200 text-amber-800 rounded hover:bg-amber-300"
-                >
-                  Slackで確認（最大5件を開く）
-                </button>
               )}
             </div>
           )}
@@ -274,29 +255,8 @@ function DashboardInner() {
         </div>
       </div>
 
-      {/* 適格請求書・概算・事後報告 */}
-      <div className="grid sm:grid-cols-3 gap-4 mb-6">
-        <div className="bg-white border rounded-xl p-4 shadow-sm">
-          <h2 className="text-sm font-bold text-gray-700 mb-2">適格請求書</h2>
-          {invoiceCounts.total > 0 ? (
-            <div>
-              <div className="text-3xl font-bold text-green-600">{qualifiedRate}%</div>
-              <div className="text-xs text-gray-500 mt-1">適格率（{invoiceCounts.qualified}/{invoiceCounts.total}件）</div>
-              {invoiceCounts.unqualified > 0 && (
-                <div className="mt-2 text-xs px-2 py-1 bg-red-50 text-red-700 rounded">
-                  非適格: {invoiceCounts.unqualified}件
-                </div>
-              )}
-              {invoiceCounts.noNumber > 0 && (
-                <div className="mt-1 text-xs px-2 py-1 bg-gray-50 text-gray-600 rounded">
-                  番号なし: {invoiceCounts.noNumber}件
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="text-sm text-gray-400">データなし</div>
-          )}
-        </div>
+      {/* 概算・事後報告 */}
+      <div className="grid sm:grid-cols-2 gap-4 mb-6">
         <div className="bg-white border rounded-xl p-4 shadow-sm">
           <h2 className="text-sm font-bold text-gray-700 mb-2">概算申請</h2>
           <div className="text-3xl font-bold text-purple-600">{estimateCount}</div>

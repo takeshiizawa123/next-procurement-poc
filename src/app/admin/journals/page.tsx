@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, apiFetchSWR, swrInvalidate } from "@/lib/api-client";
+import { useUser } from "@/lib/user-context";
+import AmazonMatchingTab from "./AmazonMatchingTab";
 
 const CREDIT_MAP: Record<string, { account: string; sub: string }[]> = {
   "MFカード": [{ account: "未払金", sub: "MFカード:未請求" }, { account: "未払金", sub: "MFカード:請求" }],
@@ -68,6 +70,31 @@ function resolveCreditDefault(paymentMethod: string): { account: string; sub: st
   return { account: "買掛金", sub: "" };
 }
 
+/** select の value が options に存在することを保証する。存在しなければ最近似 or fallback or 先頭を返す */
+function snapToOption(value: string, options: string[] | null, fallback?: string): string {
+  if (!options || options.length === 0) return value;
+  if (options.includes(value)) return value;
+  if (value) {
+    const prefix = options.find((o) => o.startsWith(value) || value.startsWith(o));
+    if (prefix) return prefix;
+    const subs = options.filter((o) => o.includes(value) || value.includes(o));
+    if (subs.length > 0) return subs.sort((a, b) => a.length - b.length)[0];
+  }
+  if (fallback && options.includes(fallback)) return fallback;
+  return options[0];
+}
+
+/** 貸方科目+補助の組合せが creditOptions に存在することを保証する */
+function snapToCreditOption(
+  account: string, sub: string, creditOptions: { account: string; sub: string }[]
+): { account: string; sub: string } {
+  if (creditOptions.length === 0) return { account, sub };
+  if (creditOptions.some((o) => o.account === account && o.sub === sub)) return { account, sub };
+  const byAccount = creditOptions.find((o) => o.account === account);
+  if (byAccount) return byAccount;
+  return creditOptions[0];
+}
+
 // --- 型定義 ---
 
 interface PurchaseRequest {
@@ -103,6 +130,12 @@ interface OcrData {
   taxCategory?: string;
   driveFileId?: string;
   verifiedSupplierName?: string;  // 国税API確定の正式法人名
+  voucherDate?: string;           // 証憑発行日（YYYY-MM-DD）
+  voucherItems?: string;          // 証憑品名（カンマ区切り）
+  mfVendorName?: string;          // MF取引先マスタ照合済み名称
+  itemCategory?: string;          // 品目カテゴリ（物品/サービス/ソフトウェア...）
+  itemNature?: string;            // 品目性質（消耗品/耐久財/無形資産/役務）
+  aiSuggestion?: string;          // AI科目提案JSON
   katanaPo?: string;
   budgetNumber?: string;
 }
@@ -118,7 +151,7 @@ interface JournalEdits {
   memo: string;
 }
 
-type Tab = "pending" | "registered";
+type Tab = "pending" | "registered" | "amazon";
 
 // --- 仕訳明細コンポーネント ---
 
@@ -138,33 +171,42 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
   const taxNames = masters ? masters.taxes.map((t) => t.name) : null;
   const deptNames = masters ? masters.departments.map((d) => d.name) : null;
 
+  // OCRデータ・推定根拠を非同期取得（resolvedDebitで参照するため先に宣言）
+  const [ocr, setOcr] = useState<OcrData | null>(null);
+  const [estimation, setEstimation] = useState<{ account: string; confidence: string; reason: string; taxType?: string } | null>(null);
+  const [isReEstimating, setIsReEstimating] = useState(false);
+  const fetchedRef = useRef(false);
+
   const rawDebit = r.accountTitle?.split("（")[0]?.trim() || "";
-  // MFマスタがある場合のみ科目解決
-  const resolvedDebit = accountNames
-    ? (accountNames.find((a) => a === rawDebit)
-      || accountNames.find((a) => a.startsWith(rawDebit))
-      || accountNames.filter((a) => rawDebit && a.includes(rawDebit)).sort((x, y) => x.length - y.length)[0]
-      || "")
-    : rawDebit;
-  const debitAccount = edits.debitAccount ?? resolvedDebit;
+  const creditOptions = buildCreditOptions(r.paymentMethod, masters);
+  const projectOptions = masters?.projects.map((p) => p.code || p.name) || null;
+
+  // 全フィールドを snapToOption で MF マスタ選択肢に正規化
+  const debitAccount = snapToOption(
+    edits.debitAccount ?? rawDebit, accountNames, "消耗品費",
+  );
+  const rawTaxCat = edits.taxCategory ?? resolveAccountTax(debitAccount, masters);
+  const taxCat = snapToOption(rawTaxCat, taxNames);
+  const dept = snapToOption(edits.department ?? r.department, deptNames);
   const defaultCredit = resolveCreditDefault(r.paymentMethod);
-  const creditAccount = edits.creditAccount ?? defaultCredit.account;
-  const creditSubAccount = edits.creditSubAccount ?? defaultCredit.sub;
-  const taxCat = edits.taxCategory ?? resolveAccountTax(debitAccount, masters);
-  const dept = edits.department ?? r.department;
-  const hubspot = edits.hubspotDealId ?? (r.hubspotInfo || "");
+  const snappedCredit = snapToCreditOption(
+    edits.creditAccount ?? defaultCredit.account,
+    edits.creditSubAccount ?? defaultCredit.sub,
+    creditOptions,
+  );
+  const creditAccount = snappedCredit.account;
+  const creditSubAccount = snappedCredit.sub;
+  const hubspot = snapToOption(
+    edits.hubspotDealId ?? (r.hubspotInfo || ""),
+    projectOptions ? ["", ...projectOptions] : null,
+  );
   const baseDate = r.inspectionDate || r.applicationDate || new Date().toISOString().slice(0, 10);
-  // 日付を安全にYYYY/MM形式に変換（ロケール文字列対応）
   const parsedDate = new Date(baseDate);
   const ym = !isNaN(parsedDate.getTime())
     ? `${parsedDate.getFullYear()}/${String(parsedDate.getMonth() + 1).padStart(2, "0")}`
     : baseDate.slice(0, 7).replace("-", "/");
-  const creditOptions = buildCreditOptions(r.paymentMethod, masters);
   const hasEdits = Object.keys(edits).length > 0;
-
-  // OCRデータを非同期取得
-  const [ocr, setOcr] = useState<OcrData | null>(null);
-  const fetchedRef = useRef(false);
+  // Step 1: OCRデータ取得
   useEffect(() => {
     if (fetchedRef.current) return;
     fetchedRef.current = true;
@@ -179,13 +221,105 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
             taxCategory: json.data["税区分"] || undefined,
             driveFileId: json.data["DriveファイルID"] || undefined,
             verifiedSupplierName: json.data["MF取引先"] || undefined,
-            katanaPo: json.data["PO番号"] || undefined,
-            budgetNumber: json.data["予算番号"] || undefined,
+            voucherDate: json.data["証憑発行日"] || undefined,
+            voucherItems: json.data["証憑品名"] || undefined,
+            mfVendorName: json.data["MF取引先"] || undefined,
+            itemCategory: json.data["品目カテゴリ"] || undefined,
+            itemNature: json.data["品目性質"] || undefined,
+            aiSuggestion: json.data["AI科目提案"] || undefined,
+            katanaPo: json.data["KATANA PO番号"] || undefined,
+            budgetNumber: json.data["実行予算番号"] || undefined,
           });
         }
       })
       .catch(() => {});
   }, [r.prNumber]);
+
+  // Step 2: OCR到着後にAI推定（証憑データ優先で呼ぶ）
+  const estimationFetchedRef = useRef(false);
+  useEffect(() => {
+    if (estimationFetchedRef.current) return;
+    if (ocr === null) return; // OCR未到着 — 待つ
+    estimationFetchedRef.current = true;
+    const params = new URLSearchParams({
+      itemName: r.itemName || "",
+      supplierName: r.supplierName || "",
+      totalAmount: String(r.totalAmount || 0),
+      department: r.department || "",
+    });
+    // 証憑データがあれば追加（API側で優先利用）
+    if (ocr.verifiedSupplierName) params.set("verifiedSupplierName", ocr.verifiedSupplierName);
+    if (ocr.voucherAmount) params.set("voucherAmount", String(ocr.voucherAmount));
+    if (ocr.taxCategory) params.set("ocrTaxCategory", ocr.taxCategory);
+    if (ocr.voucherItems) params.set("voucherItems", ocr.voucherItems);
+    apiFetch(`/api/purchase/estimate-account`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prNumber: r.prNumber }),
+    })
+      .then((res) => res.json())
+      .then((json: { account?: string; confidence?: string; reason?: string; taxType?: string }) => {
+        if (json.account) {
+          setEstimation(json as { account: string; confidence: string; reason: string; taxType?: string });
+        }
+      })
+      .catch(() => {});
+  }, [ocr, r.prNumber]);
+
+  // masters ロード時にスナップ結果を edits に反映（未編集フィールドのみ）
+  // rawDebit が空の場合は借方・税区分を書かない（AI推定待ち）
+  const mastersLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!masters || mastersLoadedRef.current) return;
+    mastersLoadedRef.current = true;
+    if (rawDebit && !edits.debitAccount) onEdit("debitAccount", debitAccount);
+    if (rawDebit && !edits.taxCategory) onEdit("taxCategory", taxCat);
+    if (!edits.department) onEdit("department", dept);
+    if (!edits.creditAccount) {
+      onEdit("creditAccount", creditAccount);
+      onEdit("creditSubAccount", creditSubAccount);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [masters]);
+
+  // AI推定到着時: GAS科目が空の場合にMFマスタ内の推定結果を edits に反映
+  const estimationAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!estimation || !accountNames || estimationAppliedRef.current) return;
+    if (rawDebit) return; // GASに科目があればAI推定は上書きしない
+    estimationAppliedRef.current = true;
+    const acct = snapToOption(estimation.account, accountNames);
+    onEdit("debitAccount", acct);
+    if (estimation.taxType && taxNames) {
+      onEdit("taxCategory", snapToOption(estimation.taxType, taxNames));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estimation, accountNames]);
+
+  // 手動再推定
+  const handleReEstimate = useCallback(async () => {
+    setIsReEstimating(true);
+    try {
+      const res = await apiFetch(`/api/purchase/estimate-account`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prNumber: r.prNumber }),
+      });
+      const json = await res.json() as { account?: string; confidence?: string; reason?: string; taxType?: string };
+      if (json.account && accountNames) {
+        const acct = snapToOption(json.account, accountNames);
+        onEdit("debitAccount", acct);
+        if (json.taxType && taxNames) {
+          onEdit("taxCategory", snapToOption(json.taxType, taxNames));
+        }
+        setEstimation(json as { account: string; confidence: string; reason: string; taxType?: string });
+      }
+    } catch (e) {
+      console.error("[re-estimate] Error:", e);
+    } finally {
+      setIsReEstimating(false);
+    }
+  }, [r.prNumber, accountNames, taxNames, onEdit]);
 
   const amountMatchOk = ocr?.amountMatch?.includes("一致") || ocr?.amountMatch?.includes("承認済");
   const amountMatchNg = ocr?.amountMatch && !amountMatchOk;
@@ -210,17 +344,17 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
     return c.name === q || c.name.includes(q) || q.includes(c.name);
   });
   const journalSupplierCode = matchedCounterparty?.code || matchedCounterparty?.name || "";
-  // 摘要: 年月 PO番号 [予算番号] [KATANA PO] 品名
-  const remarkParts = [ym, r.prNumber];
-  if (ocr?.budgetNumber) remarkParts.push(ocr.budgetNumber);
+  // 摘要: 年月 PR番号 品名 [KATANA PO / 予算番号]
+  const journalItemName = ocr?.voucherItems || r.itemName;
+  const remarkParts = [ym, r.prNumber, journalItemName];
   if (ocr?.katanaPo) remarkParts.push(ocr.katanaPo);
-  remarkParts.push(r.itemName);
+  if (ocr?.budgetNumber) remarkParts.push(ocr.budgetNumber);
   const defaultMemo = edits.memo ?? remarkParts.join(" ");
 
   return (
     <div className="bg-gray-50 px-4 py-4 border-t text-xs">
       {/* 発注データ vs 証憑データの比較パネル */}
-      {ocr && (ocr.voucherAmount || ocr.verifiedSupplierName) && (
+      {ocr && (ocr.voucherAmount || ocr.verifiedSupplierName || ocr.voucherDate || ocr.voucherItems) && (
         <div className="mb-3 border rounded bg-white p-3">
           <div className="font-medium text-gray-700 mb-2">発注データ / 証憑データ比較</div>
           <table className="w-full text-xs">
@@ -255,6 +389,46 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                 <td className="px-2 py-1 text-gray-400">{taxCat}</td>
                 <td className="px-2 py-1 font-medium">{ocr.taxCategory || "-"}</td>
               </tr>
+              {ocr.voucherDate && (
+                <tr className="border-t">
+                  <td className="px-2 py-1 text-gray-500">発行日</td>
+                  <td className="px-2 py-1 text-gray-400">{r.applicationDate}</td>
+                  <td className="px-2 py-1 font-medium">{ocr.voucherDate}</td>
+                </tr>
+              )}
+              {ocr.voucherItems && (
+                <tr className="border-t">
+                  <td className="px-2 py-1 text-gray-500">品名</td>
+                  <td className="px-2 py-1 text-gray-400 truncate max-w-[120px]" title={r.itemName}>{r.itemName}</td>
+                  <td className="px-2 py-1 font-medium truncate max-w-[200px]" title={ocr.voucherItems}>{ocr.voucherItems}</td>
+                </tr>
+              )}
+              {(ocr.itemCategory || ocr.itemNature) && (
+                <tr className="border-t">
+                  <td className="px-2 py-1 text-gray-500">AI分類</td>
+                  <td className="px-2 py-1 text-gray-400" colSpan={2}>
+                    {ocr.itemCategory && <span className="inline-block bg-blue-50 text-blue-700 rounded px-1.5 py-0.5 mr-1">{ocr.itemCategory}</span>}
+                    {ocr.itemNature && <span className="inline-block bg-purple-50 text-purple-700 rounded px-1.5 py-0.5">{ocr.itemNature}</span>}
+                  </td>
+                </tr>
+              )}
+              {ocr.aiSuggestion && (() => {
+                try {
+                  const suggestions = JSON.parse(ocr.aiSuggestion) as { account: string; confidence: string; reason: string }[];
+                  return (
+                    <tr className="border-t">
+                      <td className="px-2 py-1 text-gray-500">AI推定</td>
+                      <td className="px-2 py-1 text-gray-400" colSpan={2}>
+                        {suggestions.map((s, i) => (
+                          <span key={i} className={`inline-block rounded px-1.5 py-0.5 mr-1 mb-0.5 ${s.confidence === "high" ? "bg-green-50 text-green-700" : s.confidence === "medium" ? "bg-yellow-50 text-yellow-700" : "bg-gray-100 text-gray-500"}`}>
+                            {s.account} <span className="text-[9px]">({s.reason})</span>
+                          </span>
+                        ))}
+                      </td>
+                    </tr>
+                  );
+                } catch { return null; }
+              })()}
               {(ocr.katanaPo || ocr.budgetNumber) && (
                 <tr className="border-t">
                   <td className="px-2 py-1 text-gray-500">番号</td>
@@ -353,6 +527,25 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                       <div className="font-medium text-amber-600 text-xs">番号未検出</div>
                     </div>
                   ) : null}
+                  {r.isQualifiedInvoice === "非適格" && (
+                    <div className="bg-red-50 rounded p-1.5">
+                      <div className="text-gray-400 text-[10px]">経過措置</div>
+                      <div className="font-medium text-red-600 text-xs">80%控除（〜2026/9）</div>
+                    </div>
+                  )}
+                  {estimation && (
+                    <div className="bg-blue-50 rounded p-1.5">
+                      <div className="text-gray-400 text-[10px]">AI推定根拠</div>
+                      <div className="font-medium text-blue-700 text-xs">{estimation.account}</div>
+                      <div className="text-[10px] text-blue-500">{estimation.reason}</div>
+                      {estimation.taxType && (
+                        <div className="text-[10px] text-blue-400 mt-0.5">税区分: {estimation.taxType}</div>
+                      )}
+                      <div className="text-[10px] text-gray-400 mt-0.5">
+                        信頼度: <span className={estimation.confidence === "high" ? "text-green-600" : estimation.confidence === "medium" ? "text-amber-600" : "text-red-500"}>{estimation.confidence}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-gray-400 text-xs">読み込み中...</div>
@@ -401,19 +594,35 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
             <div className="grid grid-cols-2 gap-2">
               <label className="block">
                 <span className="text-gray-500 text-xs">借方科目</span>
-                {accountNames ? (
-                  <select value={debitAccount}
-                    onChange={(e) => {
-                      onEdit("debitAccount", e.target.value);
-                      const newTax = resolveAccountTax(e.target.value, masters);
-                      onEdit("taxCategory", newTax);
-                    }}
-                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
-                    {accountNames.map((a) => <option key={a} value={a}>{a}</option>)}
-                  </select>
-                ) : (
-                  <input type="text" value={edits.debitAccount ?? rawDebit} onChange={(e) => onEdit("debitAccount", e.target.value)}
-                    className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs" />
+                <div className="flex gap-1 items-center mt-0.5">
+                  {accountNames ? (
+                    <select value={debitAccount}
+                      onChange={(e) => {
+                        onEdit("debitAccount", e.target.value);
+                        const newTax = resolveAccountTax(e.target.value, masters);
+                        onEdit("taxCategory", newTax);
+                      }}
+                      className="flex-1 px-2 py-1.5 border rounded text-xs bg-white">
+                      {accountNames.map((a) => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                  ) : (
+                    <input type="text" value={edits.debitAccount ?? rawDebit} onChange={(e) => onEdit("debitAccount", e.target.value)}
+                      className="flex-1 px-2 py-1.5 border rounded text-xs" />
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleReEstimate}
+                    disabled={isReEstimating}
+                    title="AI再推定"
+                    className="shrink-0 px-1.5 py-1.5 border rounded text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 disabled:opacity-50"
+                  >
+                    {isReEstimating ? "..." : "AI"}
+                  </button>
+                </div>
+                {estimation && (
+                  <div className="mt-0.5 text-[10px] text-gray-400">
+                    {estimation.confidence === "high" ? "🟢" : estimation.confidence === "medium" ? "🟡" : "🔴"} {estimation.reason}
+                  </div>
                 )}
               </label>
               <label className="block">
@@ -549,6 +758,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
 // --- メインコンポーネント ---
 
 export default function JournalManagement() {
+  const user = useUser();
   const [requests, setRequests] = useState<PurchaseRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -580,38 +790,6 @@ export default function JournalManagement() {
       .finally(() => setMfAuthLoaded(true));
   }, []);
 
-  useEffect(() => { fetchAuthStatus(); }, [fetchAuthStatus]);
-
-  // URLパラメータでmf_auth=okなら認証完了→ステータス再取得
-  useEffect(() => {
-    if (typeof window !== "undefined" && window.location.search.includes("mf_auth=ok")) {
-      fetchAuthStatus();
-      // URLからパラメータを消す
-      window.history.replaceState({}, "", window.location.pathname);
-    }
-  }, [fetchAuthStatus]);
-
-  // MF会計マスタデータ取得
-  useEffect(() => {
-    apiFetch("/api/mf/masters")
-      .then((r) => r.json())
-      .then((d: { ok?: boolean; error?: string } & Partial<MfMasters>) => {
-        if (d.ok && d.accounts) {
-          setMasters({
-            accounts: d.accounts || [],
-            taxes: d.taxes || [],
-            departments: d.departments || [],
-            subAccounts: d.subAccounts || [],
-            projects: d.projects || [],
-            counterparties: d.counterparties || [],
-          });
-        } else {
-          setMastersError(d.error || "マスタ取得失敗");
-        }
-      })
-      .catch(() => setMastersError("MF会計マスタの取得に失敗しました"));
-  }, []);
-
   const fetchData = useCallback(() => {
     setLoading(true);
     setError("");
@@ -622,7 +800,56 @@ export default function JournalManagement() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  // ページ読み込み時: 認証 + マスタ + 申請データを並列取得
+  useEffect(() => {
+    // URLパラメータでmf_auth=okなら認証完了→パラメータ消す
+    if (typeof window !== "undefined" && window.location.search.includes("mf_auth=ok")) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+
+    // SWRキャッシュで即時表示 → バックグラウンド更新
+    // 認証ステータス（キャッシュ不要 — 軽量）
+    apiFetch("/api/mf/auth/status").then((r) => r.json())
+      .then((d) => setMfAuth(d || { authenticated: false, cookieDaysRemaining: null, cookieExpiresAt: null }))
+      .catch(() => setMfAuth({ authenticated: false, cookieDaysRemaining: null, cookieExpiresAt: null }))
+      .finally(() => setMfAuthLoaded(true));
+
+    // マスタ + 申請データを SWR で並列取得
+    type MastersData = { ok?: boolean; accounts?: MfMasters["accounts"]; taxes?: MfMasters["taxes"]; departments?: MfMasters["departments"]; subAccounts?: MfMasters["subAccounts"]; projects?: MfMasters["projects"]; counterparties?: MfMasters["counterparties"]; error?: string };
+    type ReqData = { requests?: PurchaseRequest[] };
+
+    const mastersReady = apiFetchSWR<MastersData>(
+      "/api/mf/masters", "journals:masters",
+      (masData) => {
+        if (masData?.ok && masData.accounts) {
+          setMasters({
+            accounts: masData.accounts || [],
+            taxes: masData.taxes || [],
+            departments: masData.departments || [],
+            subAccounts: masData.subAccounts || [],
+            projects: masData.projects || [],
+            counterparties: masData.counterparties || [],
+          });
+        } else {
+          setMastersError(masData?.error || "マスタ取得失敗");
+        }
+      },
+    );
+
+    const dataReady = apiFetchSWR<ReqData>(
+      "/api/purchase/recent?limit=100", "journals:requests",
+      (reqData) => {
+        if (reqData?.requests) {
+          setRequests(reqData.requests);
+        } else {
+          setError("データの取得に失敗しました");
+        }
+      },
+    );
+
+    Promise.all([mastersReady, dataReady]).then(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const pending = requests.filter((r) =>
     r.voucherStatus === "添付済" &&
@@ -632,7 +859,9 @@ export default function JournalManagement() {
   );
 
   const registered = requests.filter((r) =>
-    results[r.prNumber]?.ok || r.journalId
+    (results[r.prNumber]?.ok || r.journalId) &&
+    r.approvalStatus !== "却下" &&
+    r.approvalStatus !== "取消"
   );
 
   const displayed = tab === "pending" ? pending : registered;
@@ -655,7 +884,7 @@ export default function JournalManagement() {
       if (e.department) updates["部門"] = e.department;
       if (e.counterpartyCode) updates["MF取引先"] = e.counterpartyCode;
       if (e.memo) updates["MF摘要"] = e.memo;
-      if (e.hubspotDealId !== undefined) updates["HubSpot/案件名"] = e.hubspotDealId;
+      if (e.hubspotDealId !== undefined) updates["HubSpot案件番号"] = e.hubspotDealId;
 
       await apiFetch(`/api/purchase/${encodeURIComponent(prNumber)}/status`, {
         method: "PUT",
@@ -682,6 +911,7 @@ export default function JournalManagement() {
       const data = await res.json();
       if (res.ok && data.ok) {
         setResults((prev) => ({ ...prev, [prNumber]: { ok: true, message: `MF仕訳ID: ${data.journalId}` } }));
+        swrInvalidate("journals:requests");
       } else {
         setResults((prev) => ({ ...prev, [prNumber]: { ok: false, message: data.error || "登録に失敗しました" } }));
       }
@@ -701,6 +931,19 @@ export default function JournalManagement() {
     }
     setBulkRegistering(false);
   };
+
+  // 管理本部以外はアクセス不可
+  if (user.loaded && !user.isAdmin) {
+    return (
+      <div className="max-w-5xl mx-auto p-8 text-center">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+          <p className="text-red-700 font-bold mb-2">アクセス権限がありません</p>
+          <p className="text-sm text-red-600">このページは管理本部のみ閲覧できます。</p>
+          <a href="/dashboard" className="mt-4 inline-block text-sm text-blue-600 hover:underline">ダッシュボードに戻る</a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -802,6 +1045,9 @@ export default function JournalManagement() {
           <button onClick={() => setTab("registered")} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === "registered" ? "bg-green-100 text-green-800" : "bg-white text-gray-600 hover:bg-gray-100"}`}>
             登録済み（{registered.length}）
           </button>
+          <button onClick={() => setTab("amazon")} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === "amazon" ? "bg-blue-100 text-blue-800" : "bg-white text-gray-600 hover:bg-gray-100"}`}>
+            Amazon照合
+          </button>
         </div>
 
         {tab === "pending" && pending.length > 0 && (
@@ -813,7 +1059,9 @@ export default function JournalManagement() {
           </div>
         )}
 
-        {loading ? (
+        {tab === "amazon" ? (
+          <AmazonMatchingTab requests={requests} />
+        ) : loading ? (
           <div className="text-center py-12 text-gray-400">読み込み中...</div>
         ) : displayed.length === 0 ? (
           <div className="text-center py-12 text-gray-400">
@@ -826,7 +1074,7 @@ export default function JournalManagement() {
                 <thead>
                   <tr className="bg-gray-50 border-b text-left">
                     <th className="px-3 py-2.5 font-medium text-gray-600 w-8"></th>
-                    <th className="px-3 py-2.5 font-medium text-gray-600">PO番号</th>
+                    <th className="px-3 py-2.5 font-medium text-gray-600">購買番号</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600 w-16">区分</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600">品目</th>
                     <th className="px-3 py-2.5 font-medium text-gray-600 text-right">発注金額</th>
@@ -846,19 +1094,17 @@ export default function JournalManagement() {
                     const isExpanded = expanded[r.prNumber];
                     const e = edits[r.prNumber] || {};
                     const acctNames = masters ? masters.accounts.map((a) => a.name) : null;
+                    const txNames = masters ? masters.taxes.map((t) => t.name) : null;
+                    const dpNames = masters ? masters.departments.map((d) => d.name) : null;
                     const rawDebitRow = r.accountTitle?.split("（")[0]?.trim() || "";
-                    const resolvedDebitRow = acctNames
-                      ? (acctNames.find((a) => a === rawDebitRow)
-                        || acctNames.find((a) => a.startsWith(rawDebitRow))
-                        || acctNames.filter((a) => rawDebitRow && a.includes(rawDebitRow)).sort((x, y) => x.length - y.length)[0]
-                        || "")
-                      : rawDebitRow;
-                    const debit = e.debitAccount ?? resolvedDebitRow;
+                    const debit = snapToOption(e.debitAccount ?? rawDebitRow, acctNames, "消耗品費");
+                    const creditOpts = buildCreditOptions(r.paymentMethod, masters);
                     const credit = resolveCreditDefault(r.paymentMethod);
-                    const creditAcc = e.creditAccount ?? credit.account;
-                    const creditSub = e.creditSubAccount ?? credit.sub;
-                    const taxCat = e.taxCategory ?? resolveAccountTax(debit, masters);
-                    const dept = e.department ?? r.department;
+                    const snapped = snapToCreditOption(e.creditAccount ?? credit.account, e.creditSubAccount ?? credit.sub, creditOpts);
+                    const creditAcc = snapped.account;
+                    const creditSub = snapped.sub;
+                    const taxCat = snapToOption(e.taxCategory ?? resolveAccountTax(debit, masters), txNames);
+                    const dept = snapToOption(e.department ?? r.department, dpNames);
                     const hubspot = e.hubspotDealId ?? (r.hubspotInfo || "");
                     const edited = Object.keys(e).length > 0;
                     return (
@@ -877,7 +1123,7 @@ export default function JournalManagement() {
                         </td>
                         <td className="px-3 py-2.5 max-w-[160px] truncate" title={r.itemName}>{r.itemName}</td>
                         <td className="px-3 py-2.5 text-right font-mono">¥{r.totalAmount.toLocaleString()}</td>
-                        <td className="px-3 py-2.5 text-xs">{debit}</td>
+                        <td className="px-3 py-2.5 text-xs">{!rawDebitRow && !e.debitAccount ? <span className="text-gray-400">AI推定中...</span> : debit}</td>
                         <td className="px-3 py-2.5 text-xs">
                           <div>{creditAcc}</div>
                           {creditSub && <div className="text-gray-400 text-[10px]">{creditSub}</div>}
@@ -893,7 +1139,9 @@ export default function JournalManagement() {
                           {r.isQualifiedInvoice === "適格" ? (
                             <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded" title={r.registrationNumber || ""}>適格</span>
                           ) : r.isQualifiedInvoice === "非適格" ? (
-                            <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded">非適格</span>
+                            <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded">非適格
+                              <span className="block text-[9px] text-red-500">80%控除</span>
+                            </span>
                           ) : (
                             <span className="text-gray-300">-</span>
                           )}

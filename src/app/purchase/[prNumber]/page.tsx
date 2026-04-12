@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { apiFetch } from "@/lib/api-client";
+import { apiFetch, swrInvalidate } from "@/lib/api-client";
+import { useUser } from "@/lib/user-context";
 
 /** ISO日付やGAS日付文字列を YYYY-MM-DD に変換 */
 function formatDate(val: string): string {
@@ -20,15 +21,17 @@ interface PurchaseDetail {
   申請日: string;
   申請者: string;
   品目名: string;
-  "合計額（税抜）": string;
-  "単価（税抜）": string;
+  "合計額（税込）": string;
+  "単価（税込・円）": string;
   数量: string;
-  購入先: string;
+  購入先名: string;
   購入先URL: string;
   部門: string;
   支払方法: string;
-  購入目的: string;
+  "購入品の用途": string;
+  購入理由: string;
   承認者: string;
+  検収者: string;
   発注承認ステータス: string;
   発注ステータス: string;
   検収ステータス: string;
@@ -39,10 +42,9 @@ interface PurchaseDetail {
   金額照合: string;
   適格番号: string;
   税区分: string;
-  Slackリンク: string;
   スレッドTS: string;
-  PO番号: string;
-  種別: string;
+  "KATANA PO番号": string;
+  申請区分: string;
   備考: string;
   [key: string]: string | undefined;
 }
@@ -66,6 +68,7 @@ function statusColor(status: string): string {
     case "未検収": return "bg-gray-100 text-gray-600";
     case "添付済": return "bg-green-100 text-green-800";
     case "要取得": return "bg-amber-100 text-amber-800";
+    case "MF自動取得": return "bg-blue-100 text-blue-800";
     default: return "bg-gray-100 text-gray-600";
   }
 }
@@ -102,6 +105,7 @@ function StepIndicator({ steps }: { steps: Array<{ label: string; status: string
 export default function PurchaseDetailPage() {
   const { prNumber } = useParams<{ prNumber: string }>();
   const router = useRouter();
+  const user = useUser();
   const [data, setData] = useState<PurchaseDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -109,7 +113,11 @@ export default function PurchaseDetailPage() {
   const [actionLoading, setActionLoading] = useState("");
   const [actionResult, setActionResult] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const deliveryNoteRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [showInspectionModal, setShowInspectionModal] = useState(false);
+  const [deliveryNoteOption, setDeliveryNoteOption] = useState<"attached" | "none">("none");
+  const [deliveryNoteFile, setDeliveryNoteFile] = useState<File | null>(null);
 
   const fetchDetail = useCallback(async (background = false) => {
     if (background) setRefreshing(true);
@@ -146,15 +154,17 @@ export default function PurchaseDetailPage() {
             "申請日": formatDate(String(match.applicationDate || "")),
             "申請者": String(match.applicant || ""),
             "品目名": String(match.itemName || ""),
-            "合計額（税抜）": String(match.totalAmount || ""),
-            "単価（税抜）": String(match.unitPrice || ""),
+            "合計額（税込）": String(match.totalAmount || ""),
+            "単価（税込・円）": String(match.unitPrice || ""),
             "数量": String(match.quantity || "1"),
-            "購入先": String(match.supplierName || ""),
+            "購入先名": String(match.supplierName || ""),
             "購入先URL": String(match.supplierUrl || ""),
             "部門": String(match.department || ""),
             "支払方法": String(match.paymentMethod || ""),
-            "購入目的": String(match.purpose || ""),
+            "購入品の用途": String(match.purpose || ""),
+            "購入理由": "",
             "承認者": "",
+            "検収者": "",
             "発注承認ステータス": String(match.approvalStatus || ""),
             "発注ステータス": String(match.orderStatus || ""),
             "検収ステータス": String(match.inspectionStatus || ""),
@@ -165,10 +175,9 @@ export default function PurchaseDetailPage() {
             "金額照合": String(match.amountMatch || ""),
             "適格番号": String(match.registrationNumber || ""),
             "税区分": String(match.taxCategory || ""),
-            "Slackリンク": String(match.slackLink || ""),
             "スレッドTS": "",
-            "PO番号": "",
-            "種別": String(match.type || ""),
+            "KATANA PO番号": "",
+            "申請区分": String(match.type || ""),
             "備考": "",
           });
           setLoading(false);
@@ -182,19 +191,25 @@ export default function PurchaseDetailPage() {
     fetchDetail();
   }, [prNumber, fetchDetail]);
 
-  const handleAction = async (action: string, comment?: string) => {
+  const handleAction = async (action: string, comment?: string, extra?: Record<string, string>) => {
     setActionLoading(action);
     setActionResult(null);
     try {
       const res = await apiFetch(`/api/purchase/${encodeURIComponent(prNumber)}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, comment }),
+        body: JSON.stringify({ action, comment, operatorName: user.name || "Web", ...extra }),
       });
       const json = await res.json();
       if (json.success) {
-        setActionResult({ type: "success", message: action === "order_complete" ? "発注完了にしました" : "検収完了にしました" });
+        const msgs: Record<string, string> = { approve: "承認しました", reject: "差戻ししました", order_complete: "発注完了にしました", inspection_complete: "検収完了にしました", cancel: "申請を取り消しました" };
+        setActionResult({ type: "success", message: msgs[action] || "更新しました" });
         setData(json.data as PurchaseDetail);
+        // ステータス変更 → 関連キャッシュをクリア
+        swrInvalidate(`mypage:${user.name || "all"}`);
+        swrInvalidate(`dashboard:admin`);
+        swrInvalidate(`dashboard:${user.name}`);
+        swrInvalidate(`journals:requests`);
       } else {
         setActionResult({ type: "error", message: json.error || "更新に失敗しました" });
       }
@@ -212,13 +227,15 @@ export default function PurchaseDetailPage() {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("prNumber", prNumber);
-      formData.append("slackLink", data?.["Slackリンク"] || "");
+      formData.append("slackTs", data?.["スレッドTS"] || "");
       const res = await apiFetch("/api/purchase/upload-voucher", {
         method: "POST",
         body: formData,
       });
       if (res.ok) {
         setActionResult({ type: "success", message: "証憑をアップロードしました" });
+        swrInvalidate(`mypage:${user.name || "all"}`);
+        swrInvalidate(`journals:requests`);
         setTimeout(fetchDetail, 2000);
       } else {
         setActionResult({ type: "error", message: "アップロードに失敗しました" });
@@ -244,6 +261,23 @@ export default function PurchaseDetailPage() {
     );
   }
 
+  // 権限チェック: 管理本部 or 自分の申請のみ閲覧可
+  if (user.loaded && !user.isAdmin) {
+    const applicant = data["申請者"] || "";
+    const isOwner = applicant.includes(user.name) || applicant.includes(user.slackId);
+    if (user.name && !isOwner) {
+      return (
+        <div className="max-w-2xl mx-auto p-6 text-center">
+          <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+            <p className="text-red-700 font-bold mb-2">アクセス権限がありません</p>
+            <p className="text-sm text-red-600">この申請は他のユーザーのものです。</p>
+            <a href="/purchase/my" className="mt-4 inline-block text-sm text-blue-600 hover:underline">マイ申請に戻る</a>
+          </div>
+        </div>
+      );
+    }
+  }
+
   const approval = data["発注承認ステータス"] || "-";
   const order = data["発注ステータス"] || "-";
   const inspection = data["検収ステータス"] || "-";
@@ -253,13 +287,18 @@ export default function PurchaseDetailPage() {
     { label: "承認", status: approval, done: approval === "承認済", active: approval === "承認待ち" },
     { label: "発注", status: order, done: order === "発注済", active: approval === "承認済" && order !== "発注済" },
     { label: "検収", status: inspection, done: inspection === "検収済", active: order === "発注済" && inspection !== "検収済" },
-    { label: "証憑", status: voucher, done: voucher === "添付済", active: inspection === "検収済" && voucher !== "添付済" },
+    { label: "証憑", status: voucher, done: voucher === "添付済" || voucher === "MF自動取得", active: inspection === "検収済" && voucher !== "添付済" && voucher !== "MF自動取得" },
   ];
 
+  // 承認権者判定: 承認者フィールドに自分のSlack IDまたは名前が含まれている
+  const approver = data["承認者"] || "";
+  const isApprover = user.slackId && approver.includes(user.slackId) || user.name && approver.includes(user.name);
+  const canApprove = approval === "承認待ち" && (isApprover || user.isAdmin);
   const canOrder = approval === "承認済" && order !== "発注済";
   const canInspect = order === "発注済" && inspection !== "検収済";
-  const canUploadVoucher = inspection === "検収済" && voucher !== "添付済";
-  const amount = Number(data["合計額（税抜）"] || 0);
+  const canUploadVoucher = inspection === "検収済" && voucher !== "添付済" && voucher !== "MF自動取得";
+  const canCancel = approval !== "取消" && approval !== "却下" && order !== "発注済";
+  const amount = Number(data["合計額（税込）"] || 0);
 
   return (
     <div className="max-w-2xl mx-auto p-4 sm:p-6">
@@ -269,7 +308,7 @@ export default function PurchaseDetailPage() {
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <span className="font-mono text-sm text-gray-500">{prNumber}</span>
-            {data["種別"] && <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">{data["種別"]}</span>}
+            {data["申請区分"] && <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">{data["申請区分"]}</span>}
           </div>
           <h1 className="text-xl font-bold">{data["品目名"]}</h1>
         </div>
@@ -292,9 +331,30 @@ export default function PurchaseDetailPage() {
       )}
 
       {/* アクションボタン */}
-      {(canOrder || canInspect || canUploadVoucher) && (
+      {(canApprove || canOrder || canInspect || canUploadVoucher) && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4">
           <h2 className="font-bold text-blue-800 mb-3">次のアクション</h2>
+          {canApprove && (
+            <div className="flex gap-2 mb-2">
+              <button
+                onClick={() => handleAction("approve")}
+                disabled={!!actionLoading}
+                className="flex-1 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50"
+              >
+                {actionLoading === "approve" ? "処理中..." : "承認する"}
+              </button>
+              <button
+                onClick={() => {
+                  const reason = prompt("差戻し理由を入力してください");
+                  if (reason !== null) handleAction("reject", reason);
+                }}
+                disabled={!!actionLoading}
+                className="flex-1 py-3 bg-white border border-red-400 text-red-600 rounded-lg font-medium hover:bg-red-50 disabled:opacity-50"
+              >
+                {actionLoading === "reject" ? "処理中..." : "差戻し"}
+              </button>
+            </div>
+          )}
           {canOrder && (
             <button
               onClick={() => handleAction("order_complete")}
@@ -306,11 +366,11 @@ export default function PurchaseDetailPage() {
           )}
           {canInspect && (
             <button
-              onClick={() => handleAction("inspection_complete")}
+              onClick={() => { setShowInspectionModal(true); setDeliveryNoteOption("none"); setDeliveryNoteFile(null); }}
               disabled={!!actionLoading}
               className="w-full py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50"
             >
-              {actionLoading === "inspection_complete" ? "処理中..." : "検収完了にする"}
+              検収完了にする
             </button>
           )}
           {canUploadVoucher && (
@@ -334,16 +394,101 @@ export default function PurchaseDetailPage() {
         </div>
       )}
 
+      {/* 検収モーダル */}
+      {showInspectionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-lg w-full max-w-md mx-4 p-6">
+            <h3 className="text-lg font-bold mb-4">検収完了</h3>
+
+            <div className="mb-4">
+              <p className="text-sm font-medium text-gray-700 mb-2">納品書</p>
+              <div className="flex gap-3">
+                <label className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-lg border-2 cursor-pointer text-sm font-medium ${deliveryNoteOption === "attached" ? "border-green-500 bg-green-50 text-green-700" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
+                  <input type="radio" name="deliveryNote" value="attached" checked={deliveryNoteOption === "attached"} onChange={() => setDeliveryNoteOption("attached")} className="sr-only" />
+                  あり（添付）
+                </label>
+                <label className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-lg border-2 cursor-pointer text-sm font-medium ${deliveryNoteOption === "none" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
+                  <input type="radio" name="deliveryNote" value="none" checked={deliveryNoteOption === "none"} onChange={() => { setDeliveryNoteOption("none"); setDeliveryNoteFile(null); }} className="sr-only" />
+                  なし
+                </label>
+              </div>
+            </div>
+
+            {deliveryNoteOption === "attached" && (
+              <div className="mb-4">
+                <input ref={deliveryNoteRef} type="file" accept=".pdf,image/*" className="hidden"
+                  onChange={(e) => { if (e.target.files?.[0]) setDeliveryNoteFile(e.target.files[0]); }} />
+                {deliveryNoteFile ? (
+                  <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-sm">
+                    <span className="text-green-700 flex-1 truncate">{deliveryNoteFile.name}</span>
+                    <button onClick={() => setDeliveryNoteFile(null)} className="text-gray-400 hover:text-gray-600">x</button>
+                  </div>
+                ) : (
+                  <button onClick={() => deliveryNoteRef.current?.click()}
+                    className="w-full py-3 border-2 border-dashed border-gray-300 rounded-lg text-sm text-gray-500 hover:border-gray-400 hover:bg-gray-50">
+                    納品書ファイルを選択（PDF・画像）
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button onClick={() => setShowInspectionModal(false)}
+                className="flex-1 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50">
+                キャンセル
+              </button>
+              <button
+                disabled={!!actionLoading || (deliveryNoteOption === "attached" && !deliveryNoteFile)}
+                onClick={async () => {
+                  // 納品書ファイルがある場合はSlackスレッドにアップロード
+                  if (deliveryNoteOption === "attached" && deliveryNoteFile) {
+                    const formData = new FormData();
+                    formData.append("file", deliveryNoteFile);
+                    formData.append("prNumber", prNumber);
+                    formData.append("slackTs", data?.["スレッドTS"] || "");
+                    formData.append("type", "delivery_note");
+                    await apiFetch("/api/purchase/upload-voucher", { method: "POST", body: formData }).catch(() => {});
+                  }
+                  await handleAction("inspection_complete", undefined, {
+                    deliveryNote: deliveryNoteOption,
+                    supplierName: data?.["購入先"] || "",
+                  });
+                  setShowInspectionModal(false);
+                }}
+                className="flex-1 py-2.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {actionLoading === "inspection_complete" ? "処理中..." : "検収完了"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 申請取り消し */}
+      {canCancel && (
+        <div className="border border-red-200 rounded-xl p-4 mb-4">
+          <button
+            onClick={() => {
+              if (confirm("この申請を取り消しますか？")) handleAction("cancel");
+            }}
+            disabled={!!actionLoading}
+            className="w-full py-2 bg-white border border-red-400 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 disabled:opacity-50"
+          >
+            {actionLoading === "cancel" ? "処理中..." : "この申請を取り消す"}
+          </button>
+        </div>
+      )}
+
       {/* 申請詳細 */}
       <div className="bg-white border rounded-xl p-5 mb-4">
         <h2 className="font-bold text-gray-800 mb-3">申請内容</h2>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-          <dt className="text-gray-500">金額（税抜）</dt>
+          <dt className="text-gray-500">金額（税込）</dt>
           <dd className="font-medium">¥{amount.toLocaleString()}</dd>
           <dt className="text-gray-500">単価</dt>
-          <dd>¥{Number(data["単価（税抜）"] || 0).toLocaleString()} × {data["数量"] || 1}</dd>
-          <dt className="text-gray-500">購入先</dt>
-          <dd>{data["購入先URL"] ? <a href={data["購入先URL"]} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{data["購入先"]}</a> : data["購入先"]}</dd>
+          <dd>¥{Number(data["単価（税込・円）"] || 0).toLocaleString()} × {data["数量"] || 1}</dd>
+          <dt className="text-gray-500">購入先名</dt>
+          <dd>{data["購入先URL"] ? <a href={data["購入先URL"]} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{data["購入先名"]}</a> : data["購入先名"]}</dd>
           <dt className="text-gray-500">部門</dt>
           <dd>{data["部門"] || "-"}</dd>
           <dt className="text-gray-500">支払方法</dt>
@@ -354,8 +499,9 @@ export default function PurchaseDetailPage() {
           <dd>{data["申請日"]}</dd>
           <dt className="text-gray-500">申請者</dt>
           <dd>{data["申請者"]}</dd>
-          {data["購入目的"] && (<><dt className="text-gray-500">目的</dt><dd>{data["購入目的"]}</dd></>)}
-          {data["PO番号"] && (<><dt className="text-gray-500">PO番号</dt><dd className="font-mono">{data["PO番号"]}</dd></>)}
+          {data["購入品の用途"] && (<><dt className="text-gray-500">用途</dt><dd>{data["購入品の用途"]}</dd></>)}
+          {data["購入理由"] && (<><dt className="text-gray-500">購入理由</dt><dd>{data["購入理由"]}</dd></>)}
+          {data["KATANA PO番号"] && (<><dt className="text-gray-500">KATANA PO番号</dt><dd className="font-mono">{data["KATANA PO番号"]}</dd></>)}
         </dl>
       </div>
 
@@ -381,12 +527,6 @@ export default function PurchaseDetailPage() {
 
       {/* リンク */}
       <div className="flex gap-3 mt-4">
-        {data["Slackリンク"] && (
-          <a href={data["Slackリンク"]} target="_blank" rel="noopener noreferrer"
-            className="flex-1 text-center py-2 bg-white border rounded-lg text-sm text-blue-600 hover:bg-blue-50">
-            Slackスレッドを開く
-          </a>
-        )}
         <button onClick={() => router.push("/purchase/my")}
           className="flex-1 text-center py-2 bg-white border rounded-lg text-sm text-gray-600 hover:bg-gray-50">
           一覧に戻る

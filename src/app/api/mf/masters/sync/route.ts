@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAccounts, getTaxes, getProjects, fetchSubAccounts } from "@/lib/mf-accounting";
-import { saveMfMasters } from "@/lib/gas-client";
 import { requireBearerAuth, requireApiKey } from "@/lib/api-auth";
 
+const GAS_WEB_APP_URL = (process.env.GAS_WEB_APP_URL || "").trim();
+const GAS_API_KEY = process.env.GAS_API_KEY || "";
+
 /**
- * MF APIマスタ（勘定科目・税区分・PJ・補助科目）をGASにJSONキャッシュ保存
+ * MF APIマスタをGASスプレッドシートの個別シートに差分同期
  * POST /api/mf/masters/sync
  *
- * 取引先・部門はGASスプレッドシートに既存のため対象外
+ * MF認証後にcallbackから呼ばれる
  */
 export async function POST(request: NextRequest) {
   const bearerError = requireBearerAuth(request);
@@ -22,42 +24,56 @@ export async function POST(request: NextRequest) {
       getProjects(),
     ]);
 
-    const masters = {
-      accounts: accounts.filter((a) => a.available !== false).map((a) => ({
-        code: a.code, name: a.name, taxId: a.tax_id,
+    const payload = {
+      accounts: accounts.map((a) => ({
+        id: a.id, code: a.code, name: a.name,
+        search_key: a.search_key, tax_id: a.tax_id, available: a.available,
       })),
-      taxes: taxes.filter((t) => t.available !== false).map((t) => ({
-        code: t.code, name: t.name, abbreviation: t.abbreviation, taxRate: t.tax_rate,
+      taxes: taxes.map((t) => ({
+        id: t.id, code: t.code, name: t.name,
+        abbreviation: t.abbreviation, tax_rate: t.tax_rate, available: t.available,
       })),
-      subAccounts: subAccounts.filter((s) => s.available !== false).map((s) => ({
-        id: s.id, accountId: s.account_id, name: s.name,
+      subAccounts: subAccounts.map((s) => ({
+        id: s.id, code: s.code, account_id: s.account_id,
+        name: s.name, search_key: s.search_key, available: s.available,
       })),
-      projects: projects.filter((p) => p.available !== false).map((p) => ({
-        code: p.code, name: p.name,
+      projects: projects.map((p) => ({
+        id: p.id, code: p.code, name: p.name,
+        search_key: p.search_key, available: p.available,
       })),
-      syncedAt: new Date().toISOString(),
     };
 
-    const gasResult = await saveMfMasters(masters);
+    // GASのsyncAllMfMastersFromApi アクションを呼び出し
+    const res = await fetch(GAS_WEB_APP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        apiKey: GAS_API_KEY,
+        action: "syncMfMastersFromApi",
+        ...payload,
+      }),
+    });
 
-    console.log("[mf-masters-sync] Synced:", {
-      accounts: masters.accounts.length,
-      taxes: masters.taxes.length,
-      subAccounts: masters.subAccounts.length,
-      projects: masters.projects.length,
-      savedToGas: gasResult.success,
+    const gasResult = await res.json();
+
+    console.log("[mf-masters-sync] Synced to GAS sheets:", {
+      accounts: payload.accounts.length,
+      taxes: payload.taxes.length,
+      subAccounts: payload.subAccounts.length,
+      projects: payload.projects.length,
+      gasSuccess: gasResult.success,
     });
 
     return NextResponse.json({
       ok: true,
       counts: {
-        accounts: masters.accounts.length,
-        taxes: masters.taxes.length,
-        subAccounts: masters.subAccounts.length,
-        projects: masters.projects.length,
+        accounts: payload.accounts.length,
+        taxes: payload.taxes.length,
+        subAccounts: payload.subAccounts.length,
+        projects: payload.projects.length,
       },
       savedToGas: gasResult.success,
-      syncedAt: masters.syncedAt,
+      syncedAt: new Date().toISOString(),
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

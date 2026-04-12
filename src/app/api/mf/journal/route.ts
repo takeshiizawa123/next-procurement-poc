@@ -65,7 +65,17 @@ export async function POST(request: NextRequest) {
     const voucherAmount = Number((purchase as Record<string, unknown>)["証憑金額"] || 0);
     // 発注データは税抜なのでフォールバック時は税込換算
     const orderAmountExclTax = Number((purchase as Record<string, unknown>)["合計額（税抜）"] || 0);
-    const orderAmount = orderAmountExclTax > 0 ? Math.round(orderAmountExclTax * 1.1) : 0;
+    // 税率: 購買データに税率フィールドがあればそれを使用、なければ10%にフォールバック
+    const purchaseTaxRate = Number((purchase as Record<string, unknown>)["税率"] || 0);
+    let orderAmount = 0;
+    if (orderAmountExclTax > 0) {
+      if (purchaseTaxRate > 0) {
+        orderAmount = Math.round(orderAmountExclTax * (1 + purchaseTaxRate / 100));
+      } else {
+        console.warn(`[mf-journal] ${prNumber}: 税率フィールドが未設定のため10%で計算します（税抜額: ¥${orderAmountExclTax}）`);
+        orderAmount = Math.round(orderAmountExclTax * 1.1);
+      }
+    }
     const amount = voucherAmount || orderAmount;
     // 仕訳日 = 検収日（原則）→ 申請日 → 本日のフォールバック
     const transactionDate = String(
@@ -80,6 +90,10 @@ export async function POST(request: NextRequest) {
     // 取引先: 国税API確定名 > 発注データの購入先
     const verifiedName = String(p["MF取引先"] || "");
     const supplierName = verifiedName || String(p["購入先"] || "");
+    // 適格請求書判定: 適格番号があれば適格
+    const qualifiedNumber = String(p["適格番号"] || "");
+    const isQualifiedInvoice = qualifiedNumber.startsWith("T") && qualifiedNumber.length > 1;
+
     const journalRequest = await buildJournalFromPurchase({
       transactionDate,
       accountTitle: String(p["勘定科目"] || "消耗品費"),
@@ -91,6 +105,7 @@ export async function POST(request: NextRequest) {
       itemName: itemName || undefined,
       katanaPo: katanaPo || undefined,
       budgetNumber: budgetNum || undefined,
+      isQualifiedInvoice,
     });
 
     // UI編集内容(overrides)を仕訳リクエストに反映
@@ -134,7 +149,6 @@ export async function POST(request: NextRequest) {
 
     // GASステータスを「計上済」に更新
     await updateStatus(prNumber, {
-      "仕訳ステータス": "計上済",
       "MF仕訳ID": String(journalResult.id),
     });
 

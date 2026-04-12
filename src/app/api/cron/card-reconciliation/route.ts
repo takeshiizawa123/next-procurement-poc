@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSlackClient, notifyOps } from "@/lib/slack";
+import { getSlackClient, notifyOps, safeDmChannel } from "@/lib/slack";
 import { getRecentRequests } from "@/lib/gas-client";
 import { reconcile, generateAlerts, type CardStatement } from "@/lib/reconciliation";
+import { fetchAllCardStatements, type NormalizedCardStatement } from "@/lib/mf-expense";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
-const MF_EXPENSE_TOKEN = process.env.MF_EXPENSE_ACCESS_TOKEN || "";
-const MF_EXPENSE_OFFICE_ID = process.env.MF_EXPENSE_OFFICE_ID || "";
 
 /**
  * カード明細突合バッチ（週次）
@@ -25,8 +24,31 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // 1. カード明細取得（MF経費API）
-    const statements = await fetchCardStatements();
+    // 1. カード明細取得（MF経費API、過去30日分）
+    const now = new Date();
+    const from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const to = now.toISOString().slice(0, 10);
+    let enrichedStatements: NormalizedCardStatement[] = [];
+    try {
+      enrichedStatements = await fetchAllCardStatements({ from, to, officeWide: true });
+    } catch (e) {
+      console.error("[card-reconciliation] fetchAllCardStatements failed:", e);
+      try {
+        const client = getSlackClient();
+        await notifyOps(
+          client,
+          `🚨 *カード明細API障害* — MF Expense APIへの接続に失敗しました\nエラー: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      } catch { /* Slack通知失敗は無視 */ }
+    }
+
+    // レガシー形式への変換（既存reconcile()用）
+    const statements: CardStatement[] = enrichedStatements.map((s) => ({
+      date: s.date,
+      description: s.remark,
+      amount: s.amount,
+      cardName: s.memberName,
+    }));
 
     if (statements.length === 0) {
       return NextResponse.json({ ok: true, message: "カード明細なし", alerts: 0 });
@@ -52,6 +74,15 @@ export async function GET(request: NextRequest) {
         `🟡 承認前購入: ${result.preApproval.length}件`,
         `🟠 金額不一致: ${result.amountMismatch.length}件`,
       ];
+
+      // Amazon関連注記
+      if (result.amazonRelated.count > 0) {
+        lines.push(
+          "",
+          `📦 Amazon関連: ${result.amazonRelated.count}件（¥${result.amazonRelated.total.toLocaleString()}）`,
+          `   → 仕訳管理ページの「Amazon照合」タブでCSV突合してください`,
+        );
+      }
 
       // HIGH severity アラートのみ詳細表示
       const highAlerts = alerts.filter((a) => a.severity === "HIGH");
@@ -98,7 +129,7 @@ export async function GET(request: NextRequest) {
                 `  • ${s.date} ${s.description} ¥${s.amount.toLocaleString()}`);
               if (items.length > 5) itemLines.push(`  …他 ${items.length - 5}件`);
               await client.chat.postMessage({
-                channel: emp.slackId,
+                channel: safeDmChannel(emp.slackId),
                 text: [
                   `🔴 *未申請のカード利用が ${items.length}件 検出されました*`,
                   `事後報告が必要な場合は /purchase で「🚨 緊急事後報告」を選択してください。`,
@@ -129,43 +160,4 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/**
- * MF経費APIからカード明細を取得
- * 直近30日分のカード経費明細を取得
- */
-async function fetchCardStatements(): Promise<CardStatement[]> {
-  if (!MF_EXPENSE_TOKEN || !MF_EXPENSE_OFFICE_ID) {
-    console.warn("[card-reconciliation] MF Expense credentials not set, using empty statements");
-    return [];
-  }
-
-  try {
-    const url = `https://expense.moneyforward.com/api/external/v1/offices/${MF_EXPENSE_OFFICE_ID}/me/ex_transactions`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${MF_EXPENSE_TOKEN}` },
-      signal: AbortSignal.timeout(15000),
-    });
-
-    if (!res.ok) {
-      console.error("[card-reconciliation] MF API error:", res.status, await res.text());
-      return [];
-    }
-
-    const data = (await res.json()) as Array<{
-      recognized_at?: string;
-      remark?: string;
-      value?: number;
-    }>;
-
-    return data
-      .filter((tx) => tx.recognized_at && tx.value)
-      .map((tx) => ({
-        date: tx.recognized_at || "",
-        description: tx.remark || "",
-        amount: tx.value || 0,
-      }));
-  } catch (e) {
-    console.error("[card-reconciliation] Fetch error:", e);
-    return [];
-  }
-}
+// fetchCardStatements は @/lib/mf-expense に移動済み（fetchAllCardStatements を使用）

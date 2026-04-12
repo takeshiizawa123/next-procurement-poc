@@ -14,7 +14,9 @@ export async function GET(request: NextRequest) {
     if (!result.success) {
       return NextResponse.json({ suppliers: [] });
     }
-    return NextResponse.json(result.data);
+    const res = NextResponse.json(result.data);
+    res.headers.set("Cache-Control", "public, s-maxage=300, stale-while-revalidate=3600");
+    return res;
   } catch {
     return NextResponse.json({ suppliers: [] });
   }

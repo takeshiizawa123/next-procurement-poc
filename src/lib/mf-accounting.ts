@@ -6,6 +6,7 @@
  */
 
 import { getValidAccessToken, forceRefreshToken } from "./mf-oauth";
+import { estimateTaxPrefix } from "./account-estimator";
 
 const API_BASE = "https://api-enterprise-accounting.moneyforward.com/api/v3";
 
@@ -18,6 +19,7 @@ interface BranchSide {
   department_code?: string;
   project_code?: string;
   counterparty_code?: string;
+  invoice_transitional_measures?: "deductible_80" | "none";
   value: number;
   tax_value?: number;
 }
@@ -143,22 +145,32 @@ export interface CounterpartyItem {
   invoice_registration_number?: string | null;
 }
 
-const counterpartyCache: CacheEntry<CounterpartyItem[]> | null = null;
+let counterpartyCache: CacheEntry<CounterpartyItem[]> | null = null;
 
 export async function getCounterparties(): Promise<CounterpartyItem[]> {
   if (counterpartyCache && Date.now() - counterpartyCache.fetchedAt < CACHE_TTL) {
     return counterpartyCache.data;
   }
-  const data = await authenticatedRequest<{ counterparties: CounterpartyItem[] }>(
-    "GET",
-    "/masters/counterparties",
-  );
-  const items = (data.counterparties || []).filter((c) => c.available !== false);
+  // cursor ベースのページネーションで全件取得
+  let allItems: CounterpartyItem[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const data = await authenticatedRequest<{ counterparties: CounterpartyItem[]; next_cursor: string }>(
+      "GET",
+      `/masters/counterparties${qs}`,
+    );
+    const page = (data.counterparties || []).filter((c) => c.available !== false);
+    allItems = allItems.concat(page);
+    if (!data.next_cursor) break;
+    cursor = data.next_cursor;
+  }
+  counterpartyCache = { data: allItems, fetchedAt: Date.now() };
   masterCache["_counterparties"] = {
-    data: items as unknown as MasterItem[],
+    data: allItems as unknown as MasterItem[],
     fetchedAt: Date.now(),
   };
-  return items;
+  return allItems;
 }
 
 /** 取引先名からコードを解決（部分一致対応） */
@@ -185,7 +197,7 @@ export interface SubAccountItem {
   available: boolean;
 }
 
-const subAccountCache: CacheEntry<SubAccountItem[]> | null = null;
+let subAccountCache: CacheEntry<SubAccountItem[]> | null = null;
 
 export async function fetchSubAccounts(): Promise<SubAccountItem[]> {
   if (subAccountCache && Date.now() - subAccountCache.fetchedAt < CACHE_TTL) {
@@ -197,7 +209,7 @@ export async function fetchSubAccounts(): Promise<SubAccountItem[]> {
     "/masters/sub_accounts",
   );
   const items = data.sub_accounts || [];
-  // キャッシュは masterCache と同じ仕組みで管理
+  subAccountCache = { data: items, fetchedAt: Date.now() };
   masterCache["_sub_accounts"] = {
     data: items as unknown as MasterItem[],
     fetchedAt: Date.now(),
@@ -261,6 +273,11 @@ export async function resolveTaxCode(nameOrCode: string): Promise<string | undef
 
 export async function resolveDepartmentCode(nameOrCode: string): Promise<string | undefined> {
   const items = await getDepartments();
+  return resolveMasterItem(items, nameOrCode)?.code ?? undefined;
+}
+
+export async function resolveProjectCode(nameOrCode: string): Promise<string | undefined> {
+  const items = await getProjects();
   return resolveMasterItem(items, nameOrCode)?.code ?? undefined;
 }
 
@@ -370,6 +387,21 @@ async function resolveCreditAccount(paymentMethod: string): Promise<{
  *   借方: 費用科目（消耗品費等）
  *   貸方: 未払金(MFカード:未請求)（カード払い）or 買掛金（請求書払い）
  */
+/**
+ * 非適格事業者の経過措置率を判定
+ * - 2023/10〜2026/9: 80%控除 (deductible_80)
+ * - 2026/10〜2029/9: 50%控除 (deductible_50) ※MF API未対応の場合あり
+ * - 2029/10〜: 0%控除
+ */
+function getTransitionalMeasure(txDate: string): { measure: "deductible_80" | "none"; rate: number } {
+  const d = new Date(txDate);
+  if (d >= new Date("2023-10-01") && d < new Date("2026-10-01")) {
+    return { measure: "deductible_80", rate: 80 };
+  }
+  // 2026/10以降はMF APIの対応を確認してから拡張
+  return { measure: "none", rate: 0 };
+}
+
 export async function buildJournalFromPurchase(params: {
   transactionDate: string;
   accountTitle: string;
@@ -381,12 +413,16 @@ export async function buildJournalFromPurchase(params: {
   memo?: string;
   /** OCR読取の税率（8 or 10）。8%の場合は軽減税率の税区分を使用 */
   ocrTaxRate?: number;
+  /** 適格請求書発行事業者かどうか（false=非適格→経過措置適用） */
+  isQualifiedInvoice?: boolean;
   /** 品名（OCRまたは発注データ） */
   itemName?: string;
   /** KATANA PO番号 */
   katanaPo?: string;
   /** 実行予算番号 */
   budgetNumber?: string;
+  /** HubSpot案件番号（プロジェクトコード解決用） */
+  hubspotDealId?: string;
 }): Promise<CreateJournalRequest> {
   const {
     transactionDate,
@@ -398,9 +434,11 @@ export async function buildJournalFromPurchase(params: {
     poNumber,
     memo,
     ocrTaxRate,
+    isQualifiedInvoice,
     itemName,
     katanaPo,
     budgetNumber,
+    hubspotDealId,
   } = params;
 
   // 借方: 費用科目を解決
@@ -411,13 +449,10 @@ export async function buildJournalFromPurchase(params: {
   // 貸方: 支払方法に応じた科目 + 補助科目
   const credit = await resolveCreditAccount(paymentMethod);
 
-  // 税区分 — 科目に対応する税区分を解決
-  // OCRで8%軽減税率を検出した場合は税区分を切り替え
-  const expenseMapping = EXPENSE_ACCOUNT_MAP[mainAccount];
-  const baseTaxType = expenseMapping?.taxType || "共-課仕 10%";
-  const taxTypeName = ocrTaxRate === 8
-    ? baseTaxType.replace("10%", "8%")  // "共-課仕 10%" → "共-課仕 8%", "課仕 10%" → "課仕 8%"
-    : baseTaxType;
+  // 税区分 — 過去仕訳統計から共通/課税仕入を推定、フォールバックはEXPENSE_ACCOUNT_MAP
+  const taxPrefix = await estimateTaxPrefix(department || "", mainAccount);
+  const rateStr = ocrTaxRate === 8 ? "8%" : "10%";
+  const taxTypeName = taxPrefix === "共通" ? `共-課仕 ${rateStr}` : `課仕 ${rateStr}`;
   const taxCode = await resolveTaxCode(taxTypeName);
 
   // 部門
@@ -426,6 +461,11 @@ export async function buildJournalFromPurchase(params: {
   // 取引先（全支払方法で設定 — 適格請求書の発行元管理・購入先別支出分析に必要）
   const counterpartyCode = supplierName
     ? await resolveCounterpartyCode(supplierName)
+    : undefined;
+
+  // プロジェクト（HubSpot案件番号から解決）
+  const projectCode = hubspotDealId
+    ? await resolveProjectCode(hubspotDealId)
     : undefined;
 
   // 税込金額から税額を計算（税区分名から税率を解決）
@@ -458,6 +498,10 @@ export async function buildJournalFromPurchase(params: {
           account_code: debitAccountCode || mainAccount,
           tax_code: taxCode,
           department_code: departmentCode,
+          project_code: projectCode,
+          ...(isQualifiedInvoice === false
+            ? { invoice_transitional_measures: getTransitionalMeasure(transactionDate).measure }
+            : {}),
           value: amount,
           tax_value: taxValue,
         },

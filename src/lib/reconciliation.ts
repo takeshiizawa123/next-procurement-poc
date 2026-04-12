@@ -34,8 +34,18 @@ export interface ReconciliationResult {
   amountMismatch: { statement: CardStatement; request: PastRequest; difference: number }[];
   /** 正常マッチ */
   matched: { statement: CardStatement; request: PastRequest; score: number }[];
+  /** Amazon関連明細の集計 */
+  amazonRelated: { count: number; total: number; statements: CardStatement[] };
   /** 処理日時 */
   processedAt: string;
+}
+
+// --- Amazon判定 ---
+
+const AMAZON_PATTERN = /amazon|アマゾン/i;
+
+export function isAmazonStatement(st: CardStatement): boolean {
+  return AMAZON_PATTERN.test(st.description);
 }
 
 // --- ベンダー名正規化 ---
@@ -116,11 +126,16 @@ export function reconcile(
   statements: CardStatement[],
   requests: PastRequest[],
 ): ReconciliationResult {
+  // Amazon関連明細を集計
+  const amazonStatements = statements.filter(isAmazonStatement);
+  const amazonTotal = amazonStatements.reduce((s, st) => s + st.amount, 0);
+
   const result: ReconciliationResult = {
     noRequest: [],
     preApproval: [],
     amountMismatch: [],
     matched: [],
+    amazonRelated: { count: amazonStatements.length, total: amazonTotal, statements: amazonStatements },
     processedAt: new Date().toISOString(),
   };
 

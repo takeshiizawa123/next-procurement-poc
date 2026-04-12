@@ -1,7 +1,8 @@
 # 内部テスト計画 — 購買管理システム
 
 **作成日**: 2026-03-26
-**テスト環境**: Vercel (本番) + GAS (本番スプレッドシート)
+**最終更新**: 2026-04-12（DB・OAuth・Redisテスト追加）
+**テスト環境**: Vercel + Supabase Postgres (Tokyo) + Upstash Redis (Tokyo) + NextAuth
 **テスト担当**: 管理本部 + 開発者
 
 ---
@@ -10,12 +11,14 @@
 
 | Phase | 内容 | 前提条件 | 所要時間 |
 |-------|------|---------|---------|
-| Phase 0 | ビルド・API疎通確認 | なし | 10分 |
+| Phase 0 | ビルド・API疎通・DB接続確認 | なし | 15分 |
+| Phase 0.5 | 認証（Google OAuth）確認 | Phase 0完了 | 10分 |
 | Phase 1 | 環境変数・マスタ設定 | Vercelアクセス | 30分 |
 | Phase 2 | 購買申請E2E（4パターン） | Phase 1完了 | 1時間 |
 | Phase 3 | 統制機能確認 | Phase 2完了 | 30分 |
 | Phase 4 | 出張申請確認 | Phase 1完了 | 15分 |
-| Phase 5 | Web画面確認 | Phase 1完了 | 15分 |
+| Phase 5 | Web画面確認（ログイン必須） | Phase 0.5完了 | 15分 |
+| Phase 6 | DB接続・レイテンシ確認 | Phase 0完了 | 10分 |
 
 ---
 
@@ -38,12 +41,63 @@ curl https://next-procurement-poc.vercel.app/api/test/health
 - [ ] `hasPurchaseChannel: true`
 - [ ] `hasDefaultApprover: true`
 
-### T-0.3: GAS疎通
+### T-0.3: GAS疎通 ⚠️ 非推奨（DB移行後は廃止予定）
 ```bash
 curl https://next-procurement-poc.vercel.app/api/test/gas
 ```
-- [ ] GASからのレスポンスが返る
-- [ ] `success: true`
+- [ ] GASからのレスポンスが返る（移行期のみ、将来削除）
+
+### T-0.4: DB接続確認（Supabase Postgres）
+```bash
+curl "https://next-procurement-poc-tau.vercel.app/api/test/db" \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+- [ ] `ok: true`
+- [ ] `region: "ap-northeast-1"` （**必須: Tokyo**）
+- [ ] `latencyMs < 500ms`（ウォーム時）
+- [ ] Postgresバージョン表示 (17.x)
+
+### T-0.5: Redis接続確認（Upstash）
+```bash
+curl "https://next-procurement-poc-tau.vercel.app/api/cron/cache-warm" \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+- [ ] `redis: true`
+- [ ] 全タスクが `ok: true`
+
+---
+
+## Phase 0.5: 認証（Google OAuth）確認
+
+### T-0.5.1: ログインフロー
+1. ブラウザで `https://next-procurement-poc-tau.vercel.app` を開く
+- [ ] 自動的に `/auth/signin` にリダイレクトされる
+- [ ] 「Googleでログイン」ボタンが表示される
+
+2. 「Googleでログイン」をクリック
+- [ ] Google OAuth画面に遷移
+- [ ] 社内アカウント（@futurestandard.co.jp）選択可能
+
+3. 承認後
+- [ ] `/dashboard` に自動遷移
+- [ ] ユーザー名が右上に表示される
+
+### T-0.5.2: ドメイン制限
+- [ ] 社外Googleアカウントでログインしようとすると拒否される
+- [ ] `GOOGLE_ALLOWED_DOMAIN` が設定されている場合のみ
+
+### T-0.5.3: 未認証アクセス
+```bash
+curl -v https://next-procurement-poc-tau.vercel.app/dashboard
+```
+- [ ] 307リダイレクト → `/auth/signin`
+
+### T-0.5.4: API route認証バイパス
+```bash
+curl "https://next-procurement-poc-tau.vercel.app/api/employees" \
+  -H "x-api-key: $INTERNAL_API_KEY"
+```
+- [ ] 200 OK（proxy側の認証はバイパス、API route独自認証で通る）
 
 ---
 
@@ -390,14 +444,42 @@ W001,,2026-03-20,2026-03-20,MFビジネスカード 2月利用分,1245800,HIROSH
 
 | Phase | テスト項目数 | Pass | Fail | 備考 |
 |-------|-----------|------|------|------|
-| Phase 0 | 3 | | | |
+| Phase 0 | 5 (ビルド+DB+Redis含む) | | | |
+| Phase 0.5 | 4 (OAuth認証) | | | |
 | Phase 1 | 3 | | | |
 | Phase 2 | 5シナリオ | | | |
 | Phase 3 | 4 | | | |
 | Phase 4 | 2 | | | |
 | Phase 5 | 4 | | | |
-| Phase 6 | 5シナリオ | | | |
-| **合計** | **26** | | | |
+| Phase 6 | 5シナリオ (カード照合) + 3 (DBレイテンシ) | | | |
+| **合計** | **35** | | | |
+
+---
+
+## Phase 6補足: DB接続・レイテンシ検証
+
+### T-6.DB.1: 初回接続レイテンシ（コールドスタート）
+```bash
+curl -w "time: %{time_total}s\n" \
+  "https://next-procurement-poc-tau.vercel.app/api/test/db" \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+- [ ] 初回: < 2000ms
+- [ ] 2回目: < 300ms
+- [ ] 3回目: < 200ms
+
+### T-6.DB.2: 同時リクエスト耐性
+複数のAPIリクエストを同時発行し、接続プール枯渇がないことを確認。
+- [ ] 10並列で全て成功
+- [ ] エラーログに connection pool exhausted が出ない
+
+### T-6.DB.3: Redis キャッシュヒット率
+```bash
+# cache-warm実行後
+curl "https://next-procurement-poc-tau.vercel.app/api/employees" \
+  -H "x-api-key: $INTERNAL_API_KEY" -w "time: %{time_total}s\n"
+```
+- [ ] 2回目以降のリクエストが `< 100ms`（Redisから取得）
 
 ---
 

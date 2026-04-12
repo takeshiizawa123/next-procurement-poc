@@ -1,7 +1,10 @@
 import { WebClient } from "@slack/web-api";
-import { updateStatus, getStatus, getPendingVouchers } from "./gas-client";
+import { updateStatus, getStatus, getPendingVouchers, loadPurchaseDraft as _loadPurchaseDraft } from "./gas-client";
 import { generatePrediction, isCardPayment } from "./prediction";
 import { buildAmountDiffJournal, buildJournalFromPurchase, createJournal } from "./mf-accounting";
+
+/** 開発者用: 全承認権限を持つSlack ID */
+const DEV_ADMIN_SLACK_ID = "U04FBAX6MEK"; // 伊澤 剛志
 
 /** GAS更新を実行し、失敗時にSlackスレッドに警告を投稿する */
 async function safeUpdateStatus(
@@ -11,24 +14,36 @@ async function safeUpdateStatus(
   poNumber: string,
   updates: Record<string, string>,
   context: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const result = await updateStatus(poNumber, updates);
     if (!result.success) {
-      console.error(`[${context}] GAS update returned failure for ${poNumber}:`, result);
+      console.error(`[${context}] GAS update returned failure for ${poNumber}:`, {
+        error: result.error,
+        statusCode: result.statusCode,
+        updates,
+      });
       await client.chat.postMessage({
         channel: channelId,
         thread_ts: threadTs,
-        text: `⚠️ ステータス更新に失敗しました（${poNumber}）。管理本部に連絡してください。`,
+        text: `⚠️ ステータス更新に失敗しました（${poNumber}）。原因: ${result.error || "不明"}`,
       }).catch(() => {});
+      return false;
     }
+    return true;
   } catch (e) {
-    console.error(`[${context}] GAS update error for ${poNumber}:`, e);
+    const errorMessage = e instanceof Error ? e.message : String(e);
+    console.error(`[${context}] GAS update error for ${poNumber}:`, {
+      message: errorMessage,
+      updates,
+      gasUrl: process.env.GAS_WEB_APP_URL ? "configured" : "NOT SET",
+    });
     await client.chat.postMessage({
       channel: channelId,
       thread_ts: threadTs,
-      text: `⚠️ ステータス更新に失敗しました（${poNumber}）。管理本部に連絡してください。`,
+      text: `⚠️ ステータス更新に失敗しました（${poNumber}）。原因: ${errorMessage}`,
     }).catch(() => {});
+    return false;
   }
 }
 
@@ -39,6 +54,24 @@ async function safeUpdateStatus(
  */
 
 let client: WebClient | null = null;
+
+/** テストモード: 全DM送信をテストチャンネルにリダイレクト */
+const TEST_MODE = process.env.TEST_MODE === "true";
+const TEST_REDIRECT_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
+
+/**
+ * DM送信先を安全なチャンネルにリダイレクトする。
+ * TEST_MODE=true の場合、ユーザーID宛（U始まり）のDMを全てテストチャンネルにリダイレクトし、
+ * 本番ユーザーにテスト通知が届くのを防止する。
+ */
+export function safeDmChannel(channel: string): string {
+  if (!TEST_MODE) return channel;
+  // ユーザーIDへのDM（U始まり）をリダイレクト
+  if (channel.startsWith("U") && TEST_REDIRECT_CHANNEL) {
+    return TEST_REDIRECT_CHANNEL;
+  }
+  return channel;
+}
 
 export function getSlackClient(): WebClient {
   if (client) return client;
@@ -78,12 +111,12 @@ function extractRequestInfoFromBlocks(
 
 /**
  * actionValue からパイプ区切りの値を分解
- * 形式: "poNumber|applicantSlackId|approverSlackId|inspectorSlackId|rawAmount|paymentMethod"
- * 後方互換: 旧4フィールド形式もサポート（rawAmount="0", paymentMethod=""にフォールバック）
+ * 形式: "poNumber|applicantSlackId|approverSlackId|inspectorSlackId|rawAmount|paymentMethod|unitPrice"
+ * 後方互換: 旧形式もサポート（unitPriceなければrawAmountにフォールバック）
  */
 function parseActionValue(value: string) {
-  const [poNumber = "", applicantSlackId = "", approverSlackId = "", inspectorSlackId = "", rawAmount = "0", paymentMethod = ""] = value.split("|");
-  return { poNumber, applicantSlackId, approverSlackId, inspectorSlackId, rawAmount, paymentMethod };
+  const [poNumber = "", applicantSlackId = "", approverSlackId = "", inspectorSlackId = "", rawAmount = "0", paymentMethod = "", unitPrice = ""] = value.split("|");
+  return { poNumber, applicantSlackId, approverSlackId, inspectorSlackId, rawAmount, paymentMethod, unitPrice: unitPrice || rawAmount };
 }
 
 // --- アクションハンドラー ---
@@ -112,18 +145,29 @@ export const handleApprove: SlackActionHandler = async ({
 }) => {
   const { poNumber, approverSlackId } = parseActionValue(actionValue);
 
-  // 権限チェック: 指定された承認者のみ
-  if (approverSlackId && userId !== approverSlackId) {
+  // 権限チェック: 指定された承認者 or 開発者（承認者未設定の場合も拒否）
+  const adminMembers = (process.env.SLACK_ADMIN_MEMBERS || "").split(",").filter(Boolean);
+  const isAuthorizedApprover = userId === approverSlackId || userId === DEV_ADMIN_SLACK_ID || adminMembers.includes(userId);
+  if (!isAuthorizedApprover) {
     await client.chat.postEphemeral({
       channel: channelId,
       user: userId,
-      text: "⚠️ この申請の承認権限がありません。承認者として指定された方のみ操作できます。",
+      text: approverSlackId
+        ? "⚠️ この申請の承認権限がありません。承認者として指定された方のみ操作できます。"
+        : "⚠️ 承認者が設定されていないため操作できません。管理者に連絡してください。",
     });
     return;
   }
 
   const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
   const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
+
+  // GASステータス更新を先に実行（失敗時はSlackメッセージを更新しない）
+  const gasOk = await safeUpdateStatus(client, channelId, messageTs, poNumber, { "発注承認ステータス": "承認済" }, "approve");
+  if (!gasOk) {
+    await client.chat.postEphemeral({ channel: channelId, user: userId, text: "⚠️ ステータス更新に失敗しました。もう一度お試しください。" });
+    return;
+  }
 
   await client.chat.update({
     channel: channelId,
@@ -133,9 +177,6 @@ export const handleApprove: SlackActionHandler = async ({
   });
 
   await notifyOps(client, `✅ *承認完了* ${poNumber}（${userName} が承認）— ${info?.itemName || ""} ${info?.amount || ""}`);
-
-  // GASステータス更新（失敗時はスレッドに警告）
-  await safeUpdateStatus(client, channelId, messageTs, poNumber, { "発注承認ステータス": "承認済" }, "approve");
 
   // 承認後の通知分岐
   const { applicantSlackId } = parseActionValue(actionValue);
@@ -166,15 +207,15 @@ export const handleApprove: SlackActionHandler = async ({
     // 購入済（立替）: 発注・検収不要 → 即「証憑待ち」
     if (applicantSlackId) {
       await client.chat.postMessage({
-        channel: applicantSlackId,
+        channel: safeDmChannel(applicantSlackId),
         text: `✅ 購入済申請 ${poNumber} が承認されました。証憑（納品書・領収書）がスレッドに添付されていることを確認してください。`,
       });
     }
     // GASも証憑待ち状態に更新
-    updateStatus(poNumber, {
+    await safeUpdateStatus(client, channelId, messageTs, poNumber, {
       "発注ステータス": "発注済",
       "検収ステータス": "検収済",
-    }).catch((e) => console.error("[approve] GAS purchased update error:", e));
+    }, "approve-purchased");
   } else {
     // 前払い請求書の場合、OPSに先払い依頼を通知
     if (payMethod.includes("前払い")) {
@@ -191,7 +232,7 @@ export const handleApprove: SlackActionHandler = async ({
         ? `✅ 購買申請 ${poNumber} が承認されました。発注してください。\n届いた請求書は管理本部に提出してください。\n発注後、チャンネルの [発注完了] ボタンを押してください。`
         : `✅ 購買申請 ${poNumber} が承認されました。カードで発注してください。\n発注後、チャンネルの [発注完了] ボタンを押してください。`;
       await client.chat.postMessage({
-        channel: applicantSlackId,
+        channel: safeDmChannel(applicantSlackId),
         text: orderMsg,
       });
     }
@@ -238,7 +279,7 @@ export const handleReject: SlackActionHandler = async ({
     const baseUrl = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
     const reapplyUrl = baseUrl ? `${baseUrl}/purchase/new?user_id=${applicantSlackId}` : "";
     await client.chat.postMessage({
-      channel: applicantSlackId,
+      channel: safeDmChannel(applicantSlackId),
       text: [
         `↩️ 購買申請 ${poNumber} が差戻しされました（${userName}）。`,
         `内容を確認のうえ、必要に応じて再申請してください。`,
@@ -268,10 +309,10 @@ export const handleOrderComplete: SlackActionHandler = async ({
   const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
   const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
 
-  // 権限チェック: 申請者・承認者・管理本部メンバー
+  // 権限チェック: 申請者・承認者・管理本部メンバー（全員空なら拒否）
   {
-    const allowed = [applicantSlackId, approverSlackId, ...adminMembers].filter(Boolean);
-    if (allowed.length > 0 && !allowed.includes(userId)) {
+    const allowed = [applicantSlackId, approverSlackId, DEV_ADMIN_SLACK_ID, ...adminMembers].filter(Boolean);
+    if (allowed.length === 0 || !allowed.includes(userId)) {
       await client.chat.postEphemeral({
         channel: channelId,
         user: userId,
@@ -279,6 +320,13 @@ export const handleOrderComplete: SlackActionHandler = async ({
       });
       return;
     }
+  }
+
+  // GASステータス更新を先に実行
+  const orderGasOk = await safeUpdateStatus(client, channelId, messageTs, poNumber, { "発注ステータス": "発注済" }, "order");
+  if (!orderGasOk) {
+    await client.chat.postEphemeral({ channel: channelId, user: userId, text: "⚠️ ステータス更新に失敗しました。もう一度お試しください。" });
+    return;
   }
 
   await client.chat.update({
@@ -290,13 +338,10 @@ export const handleOrderComplete: SlackActionHandler = async ({
 
   await notifyOps(client, `🛒 *発注完了* ${poNumber}（${userName} が発注）— ${info?.itemName || ""} ${info?.amount || ""}`);
 
-  // GASステータス更新（失敗時はスレッドに警告）
-  await safeUpdateStatus(client, channelId, messageTs, poNumber, { "発注ステータス": "発注済" }, "order");
-
   // 申請者に検収依頼DM
   if (applicantSlackId && applicantSlackId !== userId) {
     await client.chat.postMessage({
-      channel: applicantSlackId,
+      channel: safeDmChannel(applicantSlackId),
       text: `🛒 ${poNumber} が発注されました（${userName}）。届いたら [検収完了] ボタンを押してください。`,
     });
   }
@@ -374,11 +419,12 @@ export const handleInspectionComplete: SlackActionHandler = async ({
   messageTs,
   actionValue,
 }) => {
-  const { poNumber, applicantSlackId, inspectorSlackId, rawAmount } = parseActionValue(actionValue);
+  const { poNumber, applicantSlackId, inspectorSlackId, rawAmount, unitPrice: unitPriceStr } = parseActionValue(actionValue);
 
-  // 権限チェック: 検収者 or 申請者
-  const allowed = [inspectorSlackId, applicantSlackId].filter(Boolean);
-  if (allowed.length > 0 && !allowed.includes(userId)) {
+  // 権限チェック: 検収者 or 申請者 or 開発者（全員空なら拒否）
+  const inspectionAdminMembers = (process.env.SLACK_ADMIN_MEMBERS || "").split(",").filter(Boolean);
+  const inspectionAllowed = [inspectorSlackId, applicantSlackId, DEV_ADMIN_SLACK_ID, ...inspectionAdminMembers].filter(Boolean);
+  if (inspectionAllowed.length === 0 || !inspectionAllowed.includes(userId)) {
     await client.chat.postEphemeral({
       channel: channelId,
       user: userId,
@@ -390,51 +436,88 @@ export const handleInspectionComplete: SlackActionHandler = async ({
   const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
   const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
 
+  // EC連携サイト判定
+  const { isEcLinkedSite, VOUCHER_STATUS_MF_AUTO } = await import("@/lib/ec-sites");
+  const supplierName = info?.supplierName || "";
+  const ecLinked = isEcLinkedSite(supplierName);
+
+  // GASステータス更新を先に実行
+  const todayStr = new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" });
+  const inspectionUpdates: Record<string, string> = {
+    "検収ステータス": "検収済",
+    "検収日": todayStr,
+    "証憑対応": ecLinked ? VOUCHER_STATUS_MF_AUTO : "要取得",
+  };
+  const inspGasOk = await safeUpdateStatus(client, channelId, messageTs, poNumber, inspectionUpdates, "inspection");
+  if (!inspGasOk) {
+    await client.chat.postEphemeral({ channel: channelId, user: userId, text: "⚠️ ステータス更新に失敗しました。もう一度お試しください。" });
+    return;
+  }
+
   await client.chat.update({
     channel: channelId,
     ts: messageTs,
-    blocks: buildInspectedBlocks(poNumber, userName, info, actionValue),
+    blocks: buildInspectedBlocks(poNumber, userName, info, actionValue, ecLinked),
     text: `検収済（${userName}）`,
   });
 
-  // スレッドに証憑添付依頼を投稿
+  // スレッドに検収完了メッセージ投稿
   await client.chat.postMessage({
     channel: channelId,
     thread_ts: messageTs,
-    text: [
-      `✅ 検収記録しました（${userName}）`,
-      `📎 納品書をこのスレッドに添付してください。`,
-      `⏸️ 証憑が添付されるまで、この案件の経理処理は保留されます。`,
-    ].join("\n"),
+    text: ecLinked
+      ? [
+          `✅ 検収記録しました（${userName}）`,
+          `🔄 証憑（適格請求書）はMF会計Plusが自動取得します。`,
+          `📄 納品書がある場合はこのスレッドに添付してください。`,
+        ].join("\n")
+      : [
+          `✅ 検収記録しました（${userName}）`,
+          `📎 証憑（領収書・請求書）をこのスレッドに添付してください。`,
+          `📄 納品書がある場合は併せて添付してください。`,
+          `⏸️ 証憑が添付されるまで、この案件の経理処理は保留されます。`,
+        ].join("\n"),
   });
 
-  await notifyOps(client, `📦 *検収完了* ${poNumber}（${userName} が検収）— 証憑待ち`);
+  await notifyOps(client, ecLinked
+    ? `📦 *検収完了* ${poNumber}（${userName} が検収）— EC連携（${supplierName}）証憑MF自動取得`
+    : `📦 *検収完了* ${poNumber}（${userName} が検収）— 証憑待ち`);
 
-  // 固定資産通知（10万円以上の場合）
-  const amount = parseInt(rawAmount, 10);
-  if (amount >= 100000) {
+  // 固定資産通知（単価10万円以上の場合）
+  const unitPriceForAsset = parseInt(unitPriceStr, 10);
+  if (unitPriceForAsset >= 100000) {
     const itemName = info?.itemName || "";
     const supplier = info?.supplierName || "";
     const department = info?.department || "";
     const today = new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" });
+    const totalAmt = parseInt(rawAmount, 10);
     await notifyOps(
       client,
+      `🏷️ 固定資産登録が必要です — ${poNumber}`,
       [
-        `🏷️ *固定資産登録が必要です*`,
-        `  申請番号: ${poNumber}`,
-        `  資産名: ${itemName}`,
-        `  取得価額: ¥${amount.toLocaleString()}`,
-        `  取得日: ${today}`,
-        `  部門: ${department}`,
-        `  購入先: ${supplier}`,
-        `  → MF固定資産に登録してください`,
-      ].join("\n"),
+        {
+          type: "header",
+          text: { type: "plain_text", text: "🏷️ 固定資産登録が必要です" },
+        },
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: `*申請番号:*\n${poNumber}` },
+            { type: "mrkdwn", text: `*資産名:*\n${itemName}` },
+            { type: "mrkdwn", text: `*取得価額:*\n¥${totalAmt.toLocaleString()}` },
+            { type: "mrkdwn", text: `*取得日:*\n${today}` },
+            { type: "mrkdwn", text: `*部門:*\n${department}` },
+            { type: "mrkdwn", text: `*購入先:*\n${supplier}` },
+          ],
+        },
+        { type: "divider" },
+        {
+          type: "context",
+          elements: [{ type: "mrkdwn", text: "→ MF固定資産に登録してください" }],
+        },
+      ],
     );
   }
-
-  // GASステータス更新（失敗時はスレッドに警告）
-  const todayStr = new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" });
-  await safeUpdateStatus(client, channelId, messageTs, poNumber, { "検収ステータス": "検収済", "検収日": todayStr }, "inspection");
 };
 
 /**
@@ -531,7 +614,7 @@ export const handleReturn: SlackActionHandler = async ({
 
   // private_metadata にコンテキスト情報を埋め込む
   const metadata = JSON.stringify({
-    poNumber, channelId, messageTs: (body as { message?: { ts?: string } }).message?.ts || "",
+    poNumber, channelId, messageTs: ((body as { message?: { ts?: string; thread_ts?: string } }).message?.thread_ts || (body as { message?: { ts?: string } }).message?.ts) || "",
     actionValue, totalAmount, quantity,
     itemName: info?.itemName || "", supplierName: info?.supplierName || "",
     paymentMethod: info?.paymentMethod || "",
@@ -719,7 +802,7 @@ export const handleDmApprove: SlackActionHandler = async ({
   const poNumber = parts[3];
   const approverSlackId = parts[5];
 
-  if (approverSlackId && userId !== approverSlackId) {
+  if (approverSlackId && userId !== approverSlackId && userId !== DEV_ADMIN_SLACK_ID) {
     await client.chat.postEphemeral({
       channel: dmChannelId,
       user: userId,
@@ -835,7 +918,7 @@ export const handleDmReject: SlackActionHandler = async ({
     const baseUrl = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
     const reapplyUrl = baseUrl ? `${baseUrl}/purchase/new?user_id=${applicantSlackId}` : "";
     await client.chat.postMessage({
-      channel: applicantSlackId,
+      channel: safeDmChannel(applicantSlackId),
       text: [
         `↩️ 購買申請 ${poNumber} が差戻しされました（${userName}）。`,
         `内容を確認のうえ、必要に応じて再申請してください。`,
@@ -852,6 +935,7 @@ export const handleDmReject: SlackActionHandler = async ({
 export const handleOpenModal: SlackActionHandler = async ({
   client,
   body,
+  userId,
   actionValue,
 }) => {
   const triggerId = (body as { trigger_id?: string }).trigger_id;
@@ -860,9 +944,10 @@ export const handleOpenModal: SlackActionHandler = async ({
     return;
   }
   const channelId = actionValue; // value にチャンネルIDを入れている
+  const draft = await _loadPurchaseDraft(userId) as Partial<PurchaseFormData> | null;
   await client.views.open({
     trigger_id: triggerId,
-    view: buildPurchaseModal(channelId),
+    view: buildPurchaseModal(channelId, draft),
   });
 };
 
@@ -1012,7 +1097,7 @@ const handleAmountDiffApprove: SlackActionHandler = async ({
   const [prNumber, approverSlackId, ocrAmountStr, requestedAmountStr, subtotalStr] = actionValue.split("|");
   const ocrAmount = Number(ocrAmountStr);
 
-  if (approverSlackId && userId !== approverSlackId) {
+  if (approverSlackId && userId !== approverSlackId && userId !== DEV_ADMIN_SLACK_ID) {
     await client.chat.postEphemeral({
       channel: channelId,
       user: userId,
@@ -1025,7 +1110,7 @@ const handleAmountDiffApprove: SlackActionHandler = async ({
   const ocrSubtotal = subtotalStr ? Number(subtotalStr) : Math.round(ocrAmount / 1.1);
   const gasUpdates: Record<string, string> = {
     "金額照合": `承認済（差額承認: ${userName}）`,
-    "合計額（税抜）": String(ocrSubtotal),
+    "合計額（税込）": String(ocrSubtotal),
   };
 
   await client.chat.update({
@@ -1167,9 +1252,10 @@ export async function handlePurchaseCommand(
 
   // Webフォーム URL が設定されていない場合はモーダル直接表示
   if (!webFormUrl) {
+    const draft = await _loadPurchaseDraft(userId) as Partial<PurchaseFormData> | null;
     await slackClient.views.open({
       trigger_id: triggerId,
-      view: buildPurchaseModal(channelId),
+      view: buildPurchaseModal(channelId, draft),
     });
     return "modal";
   }
@@ -1227,7 +1313,13 @@ export async function handlePurchaseCommand(
 /**
  * 購買申請モーダル
  */
-function buildPurchaseModal(channelId: string) {
+// --- 下書き保存（GASスプレッドシート永続化、1か月自動消去） ---
+// GAS側で saveDraft / loadDraft / clearDraft アクションを実装する前提
+
+export { savePurchaseDraft, loadPurchaseDraft, clearPurchaseDraft } from "./gas-client";
+
+function buildPurchaseModal(channelId: string, draft?: Partial<PurchaseFormData> | null) {
+  const d = draft || {};
   return {
     type: "modal" as const,
     callback_id: "purchase_submit",
@@ -1261,18 +1353,20 @@ function buildPurchaseModal(channelId: string) {
           type: "plain_text_input",
           action_id: "item_name_input",
           placeholder: { type: "plain_text", text: "例: ノートPC、モニター等" },
+          ...(d.itemName ? { initial_value: d.itemName } : {}),
         },
       },
       // 3. 金額（税込）
       {
         type: "input",
         block_id: "amount",
-        label: { type: "plain_text", text: "金額（税込・円）" },
-        hint: { type: "plain_text", text: "合計金額（税込）を入力" },
+        label: { type: "plain_text", text: "単価（税込・円）" },
+        hint: { type: "plain_text", text: "1個あたりの税込金額を入力。合計は「単価×数量」で自動計算されます" },
         element: {
           type: "plain_text_input",
           action_id: "amount_input",
           placeholder: { type: "plain_text", text: "例: 165000" },
+          ...(d.amount ? { initial_value: String(d.amount) } : {}),
         },
       },
       // 3b. 概算チェックボックス
@@ -1325,7 +1419,7 @@ function buildPurchaseModal(channelId: string) {
           type: "plain_text_input",
           action_id: "quantity_input",
           placeholder: { type: "plain_text", text: "1" },
-          initial_value: "1",
+          initial_value: d.quantity ? String(d.quantity) : "1",
         },
       },
       // 5. 支払方法
@@ -1350,11 +1444,12 @@ function buildPurchaseModal(channelId: string) {
         type: "input",
         block_id: "supplier_name",
         label: { type: "plain_text", text: "購入先名" },
-        hint: { type: "plain_text", text: "Amazonマーケットプレイスの場合は出品者名を記入してください" },
+        hint: { type: "plain_text", text: "正式名称で入力（例: 株式会社アルコム）" },
         element: {
           type: "plain_text_input",
           action_id: "supplier_name_input",
-          placeholder: { type: "plain_text", text: "例: Amazon、モノタロウ、ASKUL等" },
+          placeholder: { type: "plain_text", text: "例: Amazon、モノタロウ、ASKUL、株式会社○○" },
+          ...(d.supplierName ? { initial_value: d.supplierName } : {}),
         },
       },
       // 7. 購入先URL（任意）
@@ -1367,6 +1462,7 @@ function buildPurchaseModal(channelId: string) {
           type: "plain_text_input",
           action_id: "url_input",
           placeholder: { type: "plain_text", text: "https://www.amazon.co.jp/..." },
+          ...(d.url ? { initial_value: d.url } : {}),
         },
       },
       // 8. 検収者
@@ -1410,6 +1506,7 @@ function buildPurchaseModal(channelId: string) {
           type: "plain_text_input",
           action_id: "katana_po_input",
           placeholder: { type: "plain_text", text: "例: PO-12345" },
+          ...(d.katanaPo ? { initial_value: d.katanaPo } : {}),
         },
       },
       // 11. HubSpot案件番号（任意）
@@ -1423,6 +1520,7 @@ function buildPurchaseModal(channelId: string) {
           type: "plain_text_input",
           action_id: "hubspot_deal_id_input",
           placeholder: { type: "plain_text", text: "例: 12345678" },
+          ...(d.hubspotDealId ? { initial_value: d.hubspotDealId } : {}),
         },
       },
       // 12. 実行予算番号（任意）
@@ -1435,6 +1533,7 @@ function buildPurchaseModal(channelId: string) {
           type: "plain_text_input",
           action_id: "budget_number_input",
           placeholder: { type: "plain_text", text: "あれば入力" },
+          ...(d.budgetNumber ? { initial_value: d.budgetNumber } : {}),
         },
       },
       // 13. 証憑案内
@@ -1448,18 +1547,19 @@ function buildPurchaseModal(channelId: string) {
           },
         ],
       },
-      // 14. 購入理由（任意）
+      // 14. 購入理由（PO/HubSpot/予算番号があれば省略可）
       {
         type: "input",
         block_id: "notes",
         label: { type: "plain_text", text: "購入理由" },
-        hint: { type: "plain_text", text: "単価10万円以上、または案件外の購入は必ず記入してください" },
+        hint: { type: "plain_text", text: "PO番号・HubSpot案件番号・実行予算番号のいずれかがあれば省略可。それ以外は必ず記入してください" },
         optional: true,
         element: {
           type: "plain_text_input",
           action_id: "notes_input",
           multiline: true,
-          placeholder: { type: "plain_text", text: "購入の目的・理由を記入" },
+          placeholder: { type: "plain_text", text: "例: 開発用デバッグ機材として必要 / 社内会議用モニター購入 / ○○プロジェクトの量産部品" },
+          ...(d.notes ? { initial_value: d.notes } : {}),
         },
       },
     ],
@@ -1564,6 +1664,7 @@ export interface RequestInfo {
   poNumber: string;
   itemName: string;
   amount: string;
+  unitPrice?: number; // 単価（固定資産判定用）
   applicant: string;
   department: string;
   supplierName: string;
@@ -1585,11 +1686,12 @@ export function calcPaymentDueDate(baseDate?: Date): string {
 }
 
 /**
- * actionValue 共通形式: "poNumber|applicantSlackId|approverSlackId|inspectorSlackId|rawAmount|paymentMethod"
+ * actionValue 共通形式: "poNumber|applicantSlackId|approverSlackId|inspectorSlackId|rawAmount|paymentMethod|unitPrice"
  */
 function buildActionValue(info: RequestInfo): string {
   const rawAmount = info.amount.replace(/[^\d]/g, "") || "0";
-  return `${info.poNumber}|${info.applicantSlackId}|${info.approverSlackId}|${info.inspectorSlackId}|${rawAmount}|${info.paymentMethod}`;
+  const unitPrice = info.unitPrice ? String(info.unitPrice) : rawAmount;
+  return `${info.poNumber}|${info.applicantSlackId}|${info.approverSlackId}|${info.inspectorSlackId}|${rawAmount}|${info.paymentMethod}|${unitPrice}`;
 }
 
 export function buildNewRequestBlocks(info: RequestInfo) {
@@ -1727,7 +1829,7 @@ export async function sendApprovalDM(
   ];
 
   await slackClient.chat.postMessage({
-    channel: info.approverSlackId,
+    channel: safeDmChannel(info.approverSlackId),
     text: `📋 承認依頼: ${info.poNumber} ${info.itemName} ${info.amount}（申請者: ${info.applicant}）${pendingWarning}`,
     blocks: allBlocks,
   });
@@ -1885,6 +1987,7 @@ function buildInspectedBlocks(
   inspector: string,
   info: { itemName: string; amount: string; applicant: string; department: string; supplierName: string; paymentMethod: string } | null,
   actionValue?: string,
+  ecLinked = false,
 ) {
   const fields = info
     ? [
@@ -1911,7 +2014,9 @@ function buildInspectedBlocks(
       elements: [
         {
           type: "mrkdwn",
-          text: `🟠 ステータス: *検収済・証憑待ち* （${inspector} が検収）`,
+          text: ecLinked
+            ? `🟢 ステータス: *検収済・証憑MF自動取得* （${inspector} が検収）`
+            : `🟠 ステータス: *検収済・証憑待ち* （${inspector} が検収）`,
         },
       ],
     },
@@ -1919,7 +2024,9 @@ function buildInspectedBlocks(
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "📎 *納品書をこのスレッドに添付してください*\n⏸️ 証憑が揃うまで経理処理は保留されます",
+        text: ecLinked
+          ? "🔄 *証憑はMF会計Plusが自動取得します*\n📄 納品書がある場合はスレッドに添付してください"
+          : "📎 *証憑（領収書・請求書）をこのスレッドに添付してください*\n⏸️ 証憑が揃うまで経理処理は保留されます",
       },
     },
     ...(actionValue
@@ -2009,6 +2116,7 @@ const OPS_CHANNEL = process.env.SLACK_OPS_CHANNEL || "";
 export async function notifyOps(
   slackClient: WebClient,
   text: string,
+  blocks?: Array<Record<string, unknown>>,
 ): Promise<void> {
   if (!OPS_CHANNEL) {
     console.warn("[ops] SLACK_OPS_CHANNEL is not set, skipping notification");
@@ -2018,8 +2126,139 @@ export async function notifyOps(
     await slackClient.chat.postMessage({
       channel: OPS_CHANNEL,
       text,
+      ...(blocks ? { blocks } : {}),
     });
   } catch (error) {
     console.error("[ops] Failed to notify:", error);
+  }
+}
+
+/**
+ * Web操作後にSlackメッセージのブロックを更新する
+ * GASデータから申請情報を組み立て、アクションに応じたブロックに書き換え
+ */
+export async function updateSlackMessageForWebAction(
+  prNumber: string,
+  action: string,
+  operatorName: string,
+  purchaseData: Record<string, unknown>,
+): Promise<void> {
+  const channelId = process.env.SLACK_PURCHASE_CHANNEL || "";
+  const rawTs = purchaseData["スレッドTS"];
+
+  // スレッドTSを解決（GASが数値に変換して精度が落ちる問題の対策）
+  let threadTs = "";
+  if (typeof rawTs === "number" && rawTs > 0) {
+    // 精度が落ちている可能性 → Slack APIで周辺検索して正確なTSを特定
+    const approxTs = rawTs.toFixed(6);
+    const client = getSlackClient();
+    try {
+      const history = await client.conversations.history({
+        channel: channelId,
+        latest: String(Math.ceil(rawTs) + 1),
+        oldest: String(Math.floor(rawTs) - 1),
+        limit: 5,
+      });
+      const match = history.messages?.find((m) =>
+        m.text?.includes(prNumber) || JSON.stringify(m.blocks)?.includes(prNumber),
+      );
+      threadTs = match?.ts || approxTs;
+    } catch {
+      threadTs = approxTs;
+    }
+  } else if (rawTs) {
+    threadTs = String(rawTs);
+  }
+  if (!channelId || !threadTs) {
+    // TS解決失敗 → OPSチャンネルに警告を投稿
+    console.warn(`[slack-update] ${prNumber}: スレッドTS解決失敗（channelId=${!!channelId}, threadTs=${!!threadTs}）`);
+    try {
+      const warnClient = getSlackClient();
+      await notifyOps(
+        warnClient,
+        `⚠️ *Slackメッセージ更新失敗* — ${prNumber} のスレッドTSが解決できませんでした\nアクション: ${action}（${operatorName}）\nGASデータのスレッドTSを確認してください`,
+      );
+    } catch { /* Slack通知失敗は無視 */ }
+    return;
+  }
+
+  const client = getSlackClient();
+
+  // GASデータからブロック用infoを構築
+  const totalAmount = Number(purchaseData["合計額（税込）"] || purchaseData["合計額（税抜）"] || 0);
+  const info = {
+    itemName: String(purchaseData["品目名"] || ""),
+    amount: totalAmount > 0 ? `¥${totalAmount.toLocaleString()}` : "",
+    applicant: String(purchaseData["申請者"] || ""),
+    department: String(purchaseData["部門"] || ""),
+    supplierName: String(purchaseData["購入先名"] || purchaseData["購入先"] || ""),
+    paymentMethod: String(purchaseData["支払方法"] || ""),
+  };
+
+  // actionValueを構築（ボタンの次アクション用）
+  const applicantSlackId = String(purchaseData["申請者SlackID"] || purchaseData["申請者"] || "");
+  const approverSlackId = String(purchaseData["承認者SlackID"] || purchaseData["承認者"] || "");
+  const inspectorSlackId = String(purchaseData["検収者"] || "");
+  const unitPrice = String(purchaseData["単価（税込・円）"] || purchaseData["単価"] || "0");
+  const actionValue = [
+    prNumber, applicantSlackId, approverSlackId, inspectorSlackId,
+    String(totalAmount), info.paymentMethod, unitPrice,
+  ].join("|");
+
+  let blocks: Record<string, unknown>[] | undefined;
+  let text = "";
+
+  switch (action) {
+    case "approve":
+      blocks = buildApprovedBlocks(prNumber, operatorName, actionValue, info);
+      text = `承認済（${operatorName}・Web経由）`;
+      break;
+    case "reject":
+      blocks = buildRejectedBlocks(prNumber, operatorName, info);
+      text = `差戻し（${operatorName}・Web経由）`;
+      break;
+    case "order_complete":
+      blocks = buildOrderedBlocks(prNumber, operatorName, actionValue, info);
+      text = `発注済（${operatorName}・Web経由）`;
+      break;
+    case "inspection_complete": {
+      const { isEcLinkedSite: isEc } = await import("@/lib/ec-sites");
+      blocks = buildInspectedBlocks(prNumber, operatorName, info, actionValue, isEc(info?.supplierName || ""));
+      text = `検収済（${operatorName}・Web経由）`;
+    }
+      break;
+    case "cancel":
+      // 取消は専用ブロックなし → contextでステータスのみ更新
+      blocks = [
+        { type: "header", text: { type: "plain_text", text: `📋 購買申請 ${prNumber}` } },
+        { type: "section", fields: [
+          { type: "mrkdwn", text: `*品目:* ${info.itemName}` },
+          { type: "mrkdwn", text: `*金額:* ${info.amount}` },
+          { type: "mrkdwn", text: `*申請者:* ${info.applicant}` },
+          { type: "mrkdwn", text: `*部門:* ${info.department}` },
+        ]},
+        { type: "context", elements: [
+          { type: "mrkdwn", text: `⛔ ステータス: *取消* （${operatorName} が取消）` },
+        ]},
+      ];
+      text = `取消（${operatorName}・Web経由）`;
+      break;
+    default:
+      return;
+  }
+
+  if (!blocks) return;
+
+  try {
+    await client.chat.update({
+      channel: channelId,
+      ts: threadTs,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      blocks: blocks as any,
+      text,
+    });
+    console.log(`[slack-update] ${prNumber} → ${action} (Web: ${operatorName})`);
+  } catch (e) {
+    console.error(`[slack-update] Failed to update ${prNumber}:`, e);
   }
 }

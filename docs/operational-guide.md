@@ -1,9 +1,15 @@
 # 購買管理・出張管理 想定運用ガイド
 
 **作成日**: 2026-03-26
-**最終更新**: 2026-03-31
-**対象システム**: next-procurement-poc + Procurement-Assistant GAS
-**運用方針**: 全機能完成後に旧WFから一括移行
+**最終更新**: 2026-04-12（DB移行・認証追加を反映）
+**対象システム**: next-procurement-poc（開発中）+ Procurement-Assistant（本番稼働中、将来廃止）
+**運用方針**: next-procurement-pocが完成後、本番を段階的に置換
+
+> 📘 **最新のアーキテクチャは `docs/architecture-2026-04.md` を参照**
+> DBスキーマは `docs/db-schema.md` を参照
+>
+> 2026-04-11: GAS→Supabase Postgres（Tokyo）への移行完了
+> 2026-04-10: Google OAuth認証（NextAuth v5）、Upstash Redis共有キャッシュを導入
 
 ---
 
@@ -207,19 +213,24 @@ Bot: 証憑確認 → MF経費に証憑アップロード（自動）
 
 ### セキュリティ対策
 
-- **API認証**: 管理系APIはBearer token(`CRON_SECRET`)認証、ブラウザ向けAPIは`INTERNAL_API_KEY`認証
+- **Web UIログイン**: Google OAuth (NextAuth v5) / 内部ユーザータイプで `@futurestandard.co.jp` ドメインに制限
+- **セッション管理**: NextAuth JWTセッション / 未認証時は `/auth/signin` にリダイレクト
+- **API認証（管理系）**: Bearer token (`CRON_SECRET`) 認証
+- **API認証（ブラウザ向け）**: `INTERNAL_API_KEY` 認証
 - **Slack署名検証**: HMAC-SHA256 + タイミングセーフ比較 + 5分リプレイ防止
 - **OAuth CSRF防止**: MF会計Plus OAuthコールバックでstateパラメータをcookieと照合
 - **外部APIタイムアウト**: 全外部API呼出しに10-30秒のタイムアウト設定
-- **GASリトライ**: タイムアウト時は最大2回リトライ（指数バックオフ: 1s→2s）
-- **Slack障害耐性**: 購買申請時にSlack投稿が失敗してもGAS登録済みデータは保全
+- **DBリトライ**: Supabase接続失敗時はDrizzleが自動リトライ（PgBouncer経由）
+- **Slack障害耐性**: 購買申請時にSlack投稿が失敗してもDB登録済みデータは保全
+- **承認順序逆転対応**: Slackメッセージ更新前にDB更新を実行、失敗時はephemeralエラー（データ整合性）
 - **ファイル制限**: 証憑アップロード上限10MB、対応形式: PDF/JPEG/PNG/HEIC/WebP/TIFF
-- **トークン保護**: リフレッシュトークン値はログに出力しない
+- **トークン保護**: リフレッシュトークンは `mf_oauth_tokens` テーブルに保存、ログ出力なし
 - **認証バイパス防止**: 環境変数未設定時はAPI認証をスキップせず500エラーを返す（localhostのみ例外）
+- **承認権限チェック強化**: 承認者未設定時でもバイパスしない（管理者のみ承認可）
 - **Slack署名必須化**: SIGNING_SECRET未設定時は全リクエストを拒否（スキップしない）
-- **入力サニタイズ**: HTMLタグ除去、GAS数式インジェクション防止（先頭`=+\-@`）、500文字制限
+- **入力サニタイズ**: HTMLタグ除去、SQLインジェクションはDrizzle ORMで自動防止、500文字制限
 - **数値バリデーション**: 金額1〜1億円、数量1〜10,000の範囲チェック
-- **GAS更新検証**: ステータス更新失敗時にSlackスレッドに警告投稿（データ整合性確保）
+- **Slackイベント冪等性**: `slack_event_log` テーブルで重複処理防止（GAS時代は不可能だった）
 - **仕訳冪等性**: PO番号による重複チェックで二重仕訳を防止
 - **OAuth失敗アラート**: MF会計Plusトークン更新失敗時にOPSチャネルへ自動通知
 - **カード情報警告**: カード下4桁が未登録の従業員の承認時にOPSへ警告
@@ -449,30 +460,59 @@ Bot → 申請者DM: 確認通知 + MF経費ID
 
 ## 11. 環境変数一覧（運用開始前に設定必須）
 
+### データストア (Supabase Postgres, Tokyo)
 | 変数名 | 用途 | 設定元 |
 |--------|------|--------|
-| `SLACK_BOT_TOKEN` | Slack API | Slack App管理画面 |
-| `SLACK_SIGNING_SECRET` | リクエスト署名検証 | Slack App管理画面 |
-| `SLACK_PURCHASE_CHANNEL` | #purchase-request チャンネルID | Slack |
-| `SLACK_OPS_CHANNEL` | #purchase-ops チャンネルID | Slack |
-| `SLACK_TRIP_CHANNEL` | #出張チャンネルID | Slack |
-| `SLACK_DEFAULT_APPROVER` | フォールバック承認者SlackID | 従業員マスタ |
-| `SLACK_ADMIN_APPROVER` | 管理本部承認者SlackID | 従業員マスタ |
-| `SLACK_ADMIN_MEMBERS` | 管理本部メンバーSlackID（カンマ区切り） | 従業員マスタ |
-| `CRON_SECRET` | Cron認証用シークレット | 任意生成 |
-| `GAS_WEB_APP_URL` | GAS Web App URL | GASデプロイ |
-| `GAS_API_KEY` | GAS APIキー | GAS設定 |
-| `MF_CLIENT_ID` | MF会計Plus OAuth | MF開発者画面 |
-| `MF_CLIENT_SECRET` | MF会計Plus OAuth | MF開発者画面 |
-| `MF_REDIRECT_URI` | OAuthコールバックURL | Vercel URL + `/api/mf/callback` |
-| `MF_REFRESH_TOKEN` | コールドスタート用 | 初回認証後にログから取得 |
-| `MF_EXPENSE_ACCESS_TOKEN` | MF経費API | MF経費管理画面 |
-| `MF_EXPENSE_OFFICE_ID` | MF経費事業者ID | MF経費管理画面 |
-| `GOOGLE_SERVICE_ACCOUNT_KEY` | Google Drive API（Base64エンコード済みJSON鍵） | GCPコンソール |
-| `GOOGLE_DRIVE_ROOT_FOLDER_ID` | 証憑保存先フォルダID | Google Drive |
-| `GEMINI_API_KEY` | OCR金額照合 | Google AI Studio |
-| `INTERNAL_API_KEY` | ブラウザ→API認証キー | 任意生成（ランダム文字列） |
-| `NEXT_PUBLIC_INTERNAL_API_KEY` | クライアント側APIキー | `INTERNAL_API_KEY`と同じ値 |
+| `POSTGRES_URL` | PgBouncer経由接続（通常クエリ用） | Vercel Marketplace (Supabase) 自動 |
+| `POSTGRES_URL_NON_POOLING` | 直接接続（マイグレーション・トランザクション用） | Vercel Marketplace (Supabase) 自動 |
+| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase Admin UI用 | 同上 |
+
+### キャッシュ (Upstash Redis, Tokyo)
+| 変数名 | 用途 | 設定元 |
+|--------|------|--------|
+| `KV_REST_API_URL` | Upstash Redis URL | Vercel Marketplace (Upstash) 自動 |
+| `KV_REST_API_TOKEN` | Upstash Redis トークン | 同上 |
+
+### 認証 (NextAuth v5 + Google OAuth)
+| 変数名 | 用途 | 設定元 |
+|--------|------|--------|
+| `AUTH_SECRET` | セッション暗号化キー | `openssl rand -base64 32` |
+| `GOOGLE_CLIENT_ID` | Google OAuth | Google Cloud Console |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth | 同上 |
+| `GOOGLE_ALLOWED_DOMAIN` | ドメイン制限（任意、例: `futurestandard.co.jp`） | 任意 |
+
+### Slack
+| 変数名 | 用途 |
+|--------|------|
+| `SLACK_BOT_TOKEN` | Slack API |
+| `SLACK_SIGNING_SECRET` | リクエスト署名検証 |
+| `SLACK_PURCHASE_CHANNEL` / `SLACK_OPS_CHANNEL` / `SLACK_TRIP_CHANNEL` | 各チャンネルID |
+| `SLACK_DEFAULT_APPROVER` / `SLACK_ADMIN_APPROVER` | 承認者SlackID |
+| `SLACK_ADMIN_MEMBERS` | 管理本部メンバーSlackID（カンマ区切り） |
+| `TEST_MODE` | `true` で全DMをテストチャンネルへリダイレクト |
+
+### MF会計Plus / MF経費
+| 変数名 | 用途 |
+|--------|------|
+| `MF_CLIENT_ID` / `MF_CLIENT_SECRET` | MF会計Plus OAuth |
+| `MF_REDIRECT_URI` | OAuthコールバックURL |
+| `MF_REFRESH_TOKEN` | コールドスタート用フォールバック |
+| `MF_EXPENSE_ACCESS_TOKEN` / `MF_EXPENSE_OFFICE_ID` | MF経費API |
+
+### その他
+| 変数名 | 用途 |
+|--------|------|
+| `CRON_SECRET` | Cron認証用シークレット（任意生成） |
+| `INTERNAL_API_KEY` / `NEXT_PUBLIC_INTERNAL_API_KEY` | ブラウザ→API認証 |
+| `GEMINI_API_KEY` | OCR金額照合 |
+| `GOOGLE_SERVICE_ACCOUNT_KEY` | Google Drive API |
+| `GOOGLE_DRIVE_ROOT_FOLDER_ID` | 証憑保存先 |
+
+### 非推奨（DB移行後は不要）
+| 変数名 | 状態 |
+|--------|------|
+| `GAS_WEB_APP_URL` | データ移行スクリプト時のみ使用 |
+| `GAS_API_KEY` | 同上 |
 
 ---
 
@@ -480,12 +520,34 @@ Bot → 申請者DM: 確認通知 + MF経費ID
 
 運用開始前に以下を順に実施してください。
 
-### GAS側
+### データベース (Supabase Postgres)
 
-- [ ] 従業員マスタシートにG列 `card_last4`、H列 `card_holder_name` を追加
-- [ ] 各従業員のMFビジネスカード下4桁と券面名義を入力
-- [ ] `clasp push` でGAS Web Appをデプロイ
-- [ ] GAS Web App URL をコピーして `GAS_WEB_APP_URL` に設定
+- [ ] Vercel Marketplace から Supabase を **Tokyo region (hnd1)** で追加
+- [ ] プロジェクト `next-procurement-poc` に接続（全Environment）
+- [ ] `npx vercel env pull .env.development.local` で環境変数取得
+- [ ] `npx drizzle-kit generate` でマイグレーション生成（必要時）
+- [ ] `npx tsx scripts/apply-migration.ts` でDB適用
+- [ ] 既存GASからのデータ移行: `npx tsx scripts/migrate-from-gas.ts --dry-run` → 実行
+- [ ] 従業員マスタの `card_last4`, `card_holder_name`, `mf_office_member_id`, `email` を登録
+
+### キャッシュ (Upstash Redis)
+
+- [ ] Vercel Marketplace から Upstash Redis を **Tokyo region** で追加
+- [ ] プロジェクトに接続
+
+### 認証 (Google OAuth)
+
+- [ ] Google Cloud Console で OAuth 2.0 クライアント作成
+- [ ] 承認済みリダイレクトURI: `https://{your-domain}/api/auth/callback/google`
+- [ ] 承認済みJavaScript生成元: `https://{your-domain}`
+- [ ] OAuth同意画面: **内部ユーザータイプ** を選択（社内ドメインのみ）
+- [ ] `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` を環境変数に設定
+- [ ] `AUTH_SECRET` を `openssl rand -base64 32` で生成して設定
+
+### 旧GAS（非推奨、廃止予定）
+
+- ~~従業員マスタシートにG/H列追加~~ → DB `employees` テーブルに移行済み
+- ~~`clasp push` でGAS Web Appデプロイ~~ → 不要（DB直接接続）
 
 ### MF会計Plus
 

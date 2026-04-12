@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSlackClient } from "@/lib/slack";
+import { getSlackClient, safeDmChannel } from "@/lib/slack";
 import { getRecentRequests } from "@/lib/gas-client";
 import { resolveApprovalRoute } from "@/lib/approval-router";
 
@@ -35,6 +35,7 @@ export async function GET(request: NextRequest) {
 
     const pending = result.data.requests.filter(
       (r) => r.voucherStatus === "要取得" && r.inspectionStatus === "検収済"
+      // "MF自動取得"はEC連携サイトでMF会計Plusが自動取得するため催促しない
     );
 
     let reminded = 0;
@@ -54,7 +55,7 @@ export async function GET(request: NextRequest) {
         const route = await resolveApprovalRoute(req.applicant, applicantSlackId, 0);
         if (route.primaryApprover) {
           await client.chat.postMessage({
-            channel: route.primaryApprover,
+            channel: safeDmChannel(route.primaryApprover),
             text: `🚨 *証憑未提出エスカレーション*\n${req.applicant} の案件が証憑待ちで *${days}日間* 停止しています。\n• ${req.prNumber}: ${req.itemName}\n経理処理・支払が進められない状態です。ご確認をお願いします。`,
           });
           reminded++;
@@ -92,7 +93,7 @@ export async function GET(request: NextRequest) {
       } else if (days >= 1 && applicantSlackId) {
         // Day1: 申請者にDM
         await client.chat.postMessage({
-          channel: applicantSlackId,
+          channel: safeDmChannel(applicantSlackId),
           text: `📎 証憑の添付をお願いします\n• ${req.prNumber}: ${req.itemName}（${days}日経過）\nSlackスレッドに納品書・領収書を添付してください。`,
         });
         reminded++;
@@ -114,7 +115,7 @@ export async function GET(request: NextRequest) {
         const route = await resolveApprovalRoute(req.applicant, applicantSlackId, 0);
         if (route.primaryApprover) {
           await client.chat.postMessage({
-            channel: route.primaryApprover,
+            channel: safeDmChannel(route.primaryApprover),
             text: `⏳ *承認待ちリマインド*（${days}日経過）\n• ${req.prNumber}: ${req.itemName}（${req.applicant}）\n#purchase-request で承認をお願いします。`,
           });
           approvalReminded++;
@@ -136,7 +137,7 @@ export async function GET(request: NextRequest) {
         const applicantSlackId = slackIdMatch?.[1] || "";
         if (applicantSlackId) {
           await client.chat.postMessage({
-            channel: applicantSlackId,
+            channel: safeDmChannel(applicantSlackId),
             text: `🛒 *発注完了の確認*（${days}日経過）\n• ${req.prNumber}: ${req.itemName}\n購入済みであれば #purchase-request で [発注完了] ボタンを押してください。`,
           });
           orderReminded++;
