@@ -49,7 +49,7 @@
 | **ステータス** | **本番稼働中** | 開発中・テスト環境 |
 | **実体** | Google Apps Script（GAS） | Next.js + Vercel |
 | **データストア** | Google Sheets「購買管理」 | **Supabase Postgres（Tokyo）** |
-| **Slack自動取込** | `main.js` が毎日稼働中 | 未実装（将来移植） |
+| **Slack自動取込** | `main.js` が5分ポーリング | **イベントドリブンで実装済み**（移植不要） |
 | **Web UI** | なし | あり |
 | **将来方針** | 廃止予定 | 本番置換 |
 
@@ -294,11 +294,11 @@ Vercel Cron Jobs (`vercel.json`):
 
 | 項目 | 優先度 |
 |------|-------|
-| Slack自動取込機能（main.js移植） | 低（本番置換時まで不要） |
+| ~~Slack自動取込機能（main.js移植）~~ | ~~完了~~ イベントドリブンで実装済み（ポーリング不要） |
 | 出張バーチャルカード統合（B案） | 中 |
-| 立替精算のWebアプリ完結 | 中 |
-| Procurement-Assistant廃止 | 将来 |
-| 既存ドキュメントの完全再生成 | 低 |
+| ~~立替精算のWebアプリ完結~~ | ~~完了~~ /expense/new 実装済み |
+| 仕訳Stage2/3自動化 | 完了（カード照合確定・引落消込で自動仕訳作成） |
+| Procurement-Assistant廃止 | 将来（本番切替時） |
 
 ---
 
