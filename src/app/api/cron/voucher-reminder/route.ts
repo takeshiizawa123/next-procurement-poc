@@ -75,7 +75,7 @@ export async function GET(request: NextRequest) {
           }
         }
       } else if (days >= 3) {
-        // Day3: スレッドに公開投稿
+        // Day3: スレッドに公開投稿（reply_broadcastでチャンネルにも表示→同僚の目で抑止）
         if (req.slackLink) {
           const tsMatch = req.slackLink.match(/\/p(\d+)$/);
           const threadTs = tsMatch ? tsMatch[1].slice(0, 10) + "." + tsMatch[1].slice(10) : "";
@@ -86,6 +86,7 @@ export async function GET(request: NextRequest) {
               channel: ch,
               thread_ts: threadTs,
               text: `⏰ 証憑待ち（${days}日経過）— ${req.applicant} さん、納品書をこのスレッドに添付してください。`,
+              reply_broadcast: true, // チャンネルトップにも表示（抑止統制）
             });
             reminded++;
           }

@@ -16,6 +16,7 @@ function Nav() {
     { href: "/dashboard", label: "ダッシュボード" },
     { href: "/purchase/new", label: "購買申請" },
     { href: "/trip/new", label: "出張予約" },
+    { href: "/expense/new", label: "立替精算" },
     { href: "/purchase/my", label: "マイ申請" },
   ];
 
