@@ -450,6 +450,55 @@ export const slackEventLog = pgTable(
 );
 
 // ========================================================================
+// 監査ログ（audit_log）— 変更履歴の追跡
+// ========================================================================
+
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: serial("id").primaryKey(),
+    tableName: varchar("table_name", { length: 50 }).notNull(),
+    recordId: varchar("record_id", { length: 50 }).notNull(), // PO番号等
+    action: varchar("action", { length: 20 }).notNull(), // created, updated, deleted
+    changedBy: varchar("changed_by", { length: 100 }), // Slack ID or name
+    fieldName: varchar("field_name", { length: 100 }), // 変更フィールド名
+    oldValue: text("old_value"),
+    newValue: text("new_value"),
+    metadata: jsonb("metadata"), // 追加コンテキスト
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("audit_log_table_record_idx").on(t.tableName, t.recordId),
+    index("audit_log_created_at_idx").on(t.createdAt),
+    index("audit_log_changed_by_idx").on(t.changedBy),
+  ],
+);
+
+export type AuditLogEntry = typeof auditLog.$inferSelect;
+
+// ========================================================================
+// Dead Letter Queue（DLQ）— 失敗タスクの記録
+// ========================================================================
+
+export const deadLetterQueue = pgTable(
+  "dead_letter_queue",
+  {
+    id: serial("id").primaryKey(),
+    taskId: varchar("task_id", { length: 100 }).notNull(),
+    taskType: varchar("task_type", { length: 50 }).notNull(),
+    errorMessage: text("error_message").notNull(),
+    retryCount: integer("retry_count").notNull(),
+    payload: jsonb("payload"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("dlq_task_type_idx").on(t.taskType),
+    index("dlq_created_at_idx").on(t.createdAt),
+  ],
+);
+
+// ========================================================================
 // 型エクスポート
 // ========================================================================
 

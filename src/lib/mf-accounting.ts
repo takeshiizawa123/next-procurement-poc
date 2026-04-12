@@ -7,6 +7,7 @@
 
 import { getValidAccessToken, forceRefreshToken } from "./mf-oauth";
 import { estimateTaxPrefix } from "./account-estimator";
+import { retryWithBackoff } from "./retry";
 
 const API_BASE = "https://api-enterprise-accounting.moneyforward.com/api/v3";
 
@@ -315,9 +316,12 @@ export async function getJournals(params: {
     end_date: params.to,
     ...(params.enteredBy ? { entered_by: params.enteredBy } : {}),
   });
-  const data = await authenticatedRequest<{ journals: JournalListItem[] }>(
-    "GET",
-    `/journals?${query.toString()}`,
+  const data = await retryWithBackoff(
+    () => authenticatedRequest<{ journals: JournalListItem[] }>(
+      "GET",
+      `/journals?${query.toString()}`,
+    ),
+    { maxRetries: 2, taskName: "MF getJournals" },
   );
   return data.journals || [];
 }
@@ -348,7 +352,10 @@ export async function createJournal(request: CreateJournalRequest): Promise<Jour
     }
   }
   // APIはリクエストボディを { journal: { ... } } でラップする必要がある
-  return authenticatedRequest<JournalResponse>("POST", "/journals", { journal: request });
+  return retryWithBackoff(
+    () => authenticatedRequest<JournalResponse>("POST", "/journals", { journal: request }),
+    { maxRetries: 2, taskName: "MF createJournal" },
+  );
 }
 
 /**

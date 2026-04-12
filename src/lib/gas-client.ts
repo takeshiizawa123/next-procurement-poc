@@ -67,4 +67,6 @@ export {
   loadPurchaseDraft,
   clearPurchaseDraft,
   getAccountCorrections,
+  writeAuditLog,
+  getAuditLog,
 } from "./db-client";

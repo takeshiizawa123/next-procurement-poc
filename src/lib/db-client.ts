@@ -27,8 +27,10 @@ import {
   journalStats,
   journalRows,
   accountCorrections,
+  auditLog,
   type PurchaseRequest,
   type NewPurchaseRequest,
+  type AuditLogEntry,
 } from "@/db/schema";
 import { cachedFetch, sharedCacheDeleteByPrefix } from "./shared-cache";
 
@@ -476,6 +478,13 @@ export async function updateStatus(
       }
     }
 
+    // 監査ログ用に更新前の値を取得
+    const [oldRow] = await db
+      .select({ status: purchaseRequests.status })
+      .from(purchaseRequests)
+      .where(eq(purchaseRequests.poNumber, prNumber))
+      .limit(1);
+
     const result = await db
       .update(purchaseRequests)
       .set(mapped)
@@ -484,6 +493,19 @@ export async function updateStatus(
 
     if (result.length === 0) {
       return ng(`PO番号 ${prNumber} が見つかりません`, 404);
+    }
+
+    // 監査ログ記録（ステータス変更時）
+    if (mapped.status && oldRow && oldRow.status !== mapped.status) {
+      writeAuditLog([{
+        tableName: "purchase_requests",
+        recordId: prNumber,
+        action: "updated",
+        fieldName: "status",
+        oldValue: oldRow.status ?? undefined,
+        newValue: mapped.status,
+        metadata: { updatedFields, source: "updateStatus" },
+      }]).catch(() => {}); // fire-and-forget
     }
 
     // キャッシュ無効化
@@ -1323,6 +1345,62 @@ export async function getAccountCorrections(
     return rows;
   } catch (e) {
     console.warn("[db-client] getAccountCorrections failed:", e);
+    return [];
+  }
+}
+
+// ===========================================
+// 監査ログ
+// ===========================================
+
+/**
+ * 監査ログを記録
+ */
+export async function writeAuditLog(entries: {
+  tableName: string;
+  recordId: string;
+  action: string;
+  changedBy?: string;
+  fieldName?: string;
+  oldValue?: string;
+  newValue?: string;
+  metadata?: Record<string, unknown>;
+}[]): Promise<void> {
+  if (entries.length === 0) return;
+  try {
+    await db.insert(auditLog).values(
+      entries.map((e) => ({
+        tableName: e.tableName,
+        recordId: e.recordId,
+        action: e.action,
+        changedBy: e.changedBy || null,
+        fieldName: e.fieldName || null,
+        oldValue: e.oldValue || null,
+        newValue: e.newValue || null,
+        metadata: e.metadata || null,
+      })),
+    );
+  } catch (e) {
+    console.warn("[db-client] writeAuditLog failed:", e);
+  }
+}
+
+/**
+ * 監査ログを取得（特定レコードの変更履歴）
+ */
+export async function getAuditLog(
+  tableName: string,
+  recordId: string,
+): Promise<AuditLogEntry[]> {
+  try {
+    return await db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.tableName, tableName), eq(auditLog.recordId, recordId)))
+      .orderBy(desc(auditLog.createdAt))
+      .limit(100);
+  } catch (e) {
+    console.warn("[db-client] getAuditLog failed:", e);
     return [];
   }
 }
