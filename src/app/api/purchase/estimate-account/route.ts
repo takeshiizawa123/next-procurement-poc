@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { estimateAccountFromHistory } from "@/lib/account-estimator";
 import { getStatus, updateStatus } from "@/lib/gas-client";
 import { requireApiKey } from "@/lib/api-auth";
+import { getSlackClient, notifyOps } from "@/lib/slack";
 
 /**
  * 勘定科目再推定API（経理向け）
@@ -46,6 +47,19 @@ export async function POST(request: NextRequest) {
 
     // GASに推定結果を保存
     await updateStatus(prNumber, { "勘定科目": estimation.account });
+
+    // 低信頼度の場合はOPSチャンネルに通知（管理本部レビュー必須）
+    if (estimation.confidence === "low") {
+      try {
+        const client = getSlackClient();
+        await notifyOps(client, [
+          `⚠️ *勘定科目推定: 低信頼度* — ${prNumber}`,
+          `  品目: ${itemName}`,
+          `  推定: ${estimation.account}（${estimation.reason}）`,
+          `  → 仕訳管理画面で確認・修正をお願いします`,
+        ].join("\n"));
+      } catch { /* 通知失敗は無視 */ }
+    }
 
     return NextResponse.json({
       prNumber,

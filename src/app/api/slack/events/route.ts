@@ -222,6 +222,52 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // /ask — 対話型AIアシスタント
+      if (command === "/ask") {
+        const appUrl = process.env.NEXT_PUBLIC_VERCEL_URL || process.env.VERCEL_URL || "localhost:3000";
+        const baseUrl = appUrl.startsWith("http") ? appUrl : `https://${appUrl}`;
+        const query = (typeof payload.text === "string" ? payload.text : "").trim();
+        if (!query) {
+          return NextResponse.json({
+            response_type: "ephemeral",
+            text: "質問を入力してください。\n例: `/ask 過去にモニター買った？` `/ask Amazon先月いくら？` `/ask 消耗品費の上位は？`",
+          });
+        }
+
+        // 非同期でAI応答を生成（3秒以内にSlackに200を返す必要がある）
+        after(async () => {
+          const slackClient = getSlackClient();
+          try {
+            const res = await fetch(`${baseUrl}/api/ai/ask`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${process.env.CRON_SECRET || ""}`,
+              },
+              body: JSON.stringify({ query, userId }),
+            });
+            const data = await res.json();
+            const answer = data.answer || "回答を生成できませんでした。";
+
+            await slackClient.chat.postMessage({
+              channel: userId,
+              text: `🤖 *AIアシスタント*\n\n> ${query}\n\n${answer}`,
+            });
+          } catch (e) {
+            console.error("[/ask] Error:", e);
+            await slackClient.chat.postMessage({
+              channel: userId,
+              text: `⚠️ AIアシスタントでエラーが発生しました: ${e instanceof Error ? e.message : String(e)}`,
+            });
+          }
+        });
+
+        return NextResponse.json({
+          response_type: "ephemeral",
+          text: "🤖 考え中... DMで回答をお送りします。",
+        });
+      }
+
       return NextResponse.json({
         response_type: "ephemeral",
         text: `Unknown command: ${command}`,

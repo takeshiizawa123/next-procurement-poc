@@ -468,3 +468,41 @@ export type MfAccount = typeof mfAccounts.$inferSelect;
 export type MfTax = typeof mfTaxes.$inferSelect;
 export type MfSubAccount = typeof mfSubAccounts.$inferSelect;
 export type MfProject = typeof mfProjects.$inferSelect;
+
+// ========================================================================
+// 勘定科目修正履歴（account_corrections）— 仕訳推定の学習ループ用
+// ========================================================================
+
+export const accountCorrections = pgTable(
+  "account_corrections",
+  {
+    id: serial("id").primaryKey(),
+
+    // 対象
+    poNumber: varchar("po_number", { length: 30 }).notNull(),
+    itemName: varchar("item_name", { length: 500 }).notNull(),
+    supplierName: varchar("supplier_name", { length: 200 }),
+    department: varchar("department", { length: 100 }),
+    totalAmount: integer("total_amount"),
+
+    // 修正前（AI推定値）
+    estimatedAccount: varchar("estimated_account", { length: 100 }).notNull(),
+    estimatedTaxType: varchar("estimated_tax_type", { length: 50 }),
+    estimatedConfidence: varchar("estimated_confidence", { length: 10 }),
+
+    // 修正後（ユーザー確定値）
+    correctedAccount: varchar("corrected_account", { length: 100 }).notNull(),
+    correctedTaxType: varchar("corrected_tax_type", { length: 50 }),
+
+    // メタ
+    correctedBy: varchar("corrected_by", { length: 100 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("account_corrections_supplier_idx").on(t.supplierName),
+    index("account_corrections_item_idx").on(t.itemName),
+    index("account_corrections_created_at_idx").on(t.createdAt),
+  ],
+);
+
+export type AccountCorrection = typeof accountCorrections.$inferSelect;

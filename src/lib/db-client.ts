@@ -26,6 +26,7 @@ import {
   purchaseDrafts,
   journalStats,
   journalRows,
+  accountCorrections,
   type PurchaseRequest,
   type NewPurchaseRequest,
 } from "@/db/schema";
@@ -1278,5 +1279,50 @@ export async function clearPurchaseDraft(userId: string): Promise<void> {
     await db.delete(purchaseDrafts).where(eq(purchaseDrafts.userId, userId));
   } catch (e) {
     console.warn("[db-client] clearPurchaseDraft failed:", e);
+  }
+}
+
+// ===========================================
+// 勘定科目修正履歴
+// ===========================================
+
+export interface CorrectionRecord {
+  itemName: string;
+  supplierName: string | null;
+  estimatedAccount: string;
+  correctedAccount: string;
+  correctedTaxType: string | null;
+}
+
+/**
+ * 取引先・品目名に関連する過去の修正履歴を取得（RAGコンテキスト用）
+ */
+export async function getAccountCorrections(
+  supplier: string,
+  keyword: string,
+): Promise<CorrectionRecord[]> {
+  try {
+    const conditions = [];
+    if (supplier) conditions.push(like(accountCorrections.supplierName, `%${supplier}%`));
+    if (keyword) conditions.push(like(accountCorrections.itemName, `%${keyword}%`));
+    if (conditions.length === 0) return [];
+
+    const rows = await db
+      .select({
+        itemName: accountCorrections.itemName,
+        supplierName: accountCorrections.supplierName,
+        estimatedAccount: accountCorrections.estimatedAccount,
+        correctedAccount: accountCorrections.correctedAccount,
+        correctedTaxType: accountCorrections.correctedTaxType,
+      })
+      .from(accountCorrections)
+      .where(or(...conditions))
+      .orderBy(desc(accountCorrections.createdAt))
+      .limit(20);
+
+    return rows;
+  } catch (e) {
+    console.warn("[db-client] getAccountCorrections failed:", e);
+    return [];
   }
 }

@@ -153,7 +153,7 @@ export function estimateAccount(
 
 // --- 過去仕訳ベースの推定 ---
 
-import { getJournalStats, getGasAccounts, getGasTaxes, searchJournalRows } from "./gas-client";
+import { getJournalStats, getGasAccounts, getGasTaxes, searchJournalRows, getAccountCorrections } from "./gas-client";
 import type { CounterpartyAccountStat, DeptAccountTaxStat, JournalRow, JournalRowsResult, GasAccount, GasTax } from "./gas-client";
 
 /** 費用科目のみフィルタ（貸方科目の普通預金・未払金・売掛金等を除外） */
@@ -192,6 +192,7 @@ function buildContext(
   deptStats: DeptAccountTaxStat[],
   supplierName: string,
   department?: string,
+  corrections?: { itemName: string; supplierName: string | null; estimatedAccount: string; correctedAccount: string }[],
 ): string {
   const lines: string[] = [];
 
@@ -221,6 +222,14 @@ function buildContext(
       for (const s of filtered) {
         lines.push(`  ${s.account} (${s.taxType}) — ${s.count}件`);
       }
+    }
+  }
+
+  // 過去の修正履歴（AIが誤推定→ユーザーが修正したケース）
+  if (corrections && corrections.length > 0) {
+    lines.push(`【過去の推定修正履歴（重要: 同じ間違いを繰り返さないこと）】`);
+    for (const c of corrections) {
+      lines.push(`  「${c.itemName}」(${c.supplierName || "不明"}) — AI推定:${c.estimatedAccount} → 正解:${c.correctedAccount}`);
     }
   }
 
@@ -346,12 +355,13 @@ export async function estimateAccountFromHistory(
   ocrTaxCategory?: string,
   unitPrice?: number,
 ): Promise<RagEstimation> {
-  // 過去仕訳原票検索 + 統計 + MFマスタを並列取得
-  const [journalRows, stats, acctResult, taxResult] = await Promise.all([
+  // 過去仕訳原票検索 + 統計 + MFマスタ + 修正履歴を並列取得
+  const [journalRows, stats, acctResult, taxResult, corrections] = await Promise.all([
     searchJournalRows(supplierName, itemName).catch(() => null),
     getJournalStats(),
     getGasAccounts().catch(() => null),
     getGasTaxes().catch(() => null),
+    getAccountCorrections(supplierName, itemName).catch(() => []),
   ]);
 
   const accounts = (acctResult?.success && acctResult.data?.accounts || []).filter((a: GasAccount) => a.available);
@@ -362,7 +372,7 @@ export async function estimateAccountFromHistory(
   // RAG推定を試行（原票 + 部門統計をコンテキストに）
   const deptStats = stats?.deptAccountTax || [];
   if (ANTHROPIC_API_KEY && accountNames.length > 0) {
-    const context = buildContext(journalRows, deptStats, supplierName, department);
+    const context = buildContext(journalRows, deptStats, supplierName, department, corrections);
     const ragResult = await callClaudeForEstimation(
       itemName, supplierName, totalAmount, department, context,
       accountNames, taxNames, ocrTaxCategory, unitPrice,
