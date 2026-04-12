@@ -13,7 +13,8 @@ import { Readable } from "stream";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 const BACKUP_FOLDER_ID = process.env.GOOGLE_DRIVE_BACKUP_FOLDER_ID || process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID || "";
-const BACKUP_RETENTION_DAYS = 7;
+// 0 = 永久保持（削除しない）、正の数 = N日後に自動削除
+const BACKUP_RETENTION_DAYS = parseInt(process.env.BACKUP_RETENTION_DAYS || "0", 10);
 
 /**
  * 日次DBバックアップ（Google Drive保存）
@@ -106,7 +107,10 @@ export async function GET(request: NextRequest) {
     console.log(`[db-backup] Uploaded: ${fileName} (${sizeKB}KB) → ${uploadRes.data.id}`);
 
     // --- 3. 古いバックアップを削除 ---
-    const deletedCount = await cleanupOldBackups(drive, backupFolderId);
+    // 古いバックアップの自動削除（BACKUP_RETENTION_DAYS=0 なら永久保持）
+    const deletedCount = BACKUP_RETENTION_DAYS > 0
+      ? await cleanupOldBackups(drive, backupFolderId)
+      : 0;
 
     const durationMs = Date.now() - startTime;
 
