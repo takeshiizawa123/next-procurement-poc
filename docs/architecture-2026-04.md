@@ -1,6 +1,6 @@
 # システムアーキテクチャ — 2026-04 時点の現状
 
-**最終更新**: 2026-04-12
+**最終更新**: 2026-04-13
 **対象**: next-procurement-poc
 **ステータス**: 開発中、本番未稼働（本番はProcurement-Assistant）
 
@@ -34,7 +34,7 @@
         │ Postgres       │   │ ──────────         │
         │ (Tokyo)        │   │ - Slack API        │
         │ ──────────     │   │ - MF会計Plus       │
-        │ 15テーブル     │   │ - MF経費           │
+        │ 18テーブル     │   │ - MF経費           │
         └────────────────┘   │ - Gemini Vision    │
                              │ - Google Drive     │
                              └────────────────────┘
@@ -71,7 +71,7 @@
 | ORM | Drizzle ORM 0.45 |
 | マイグレーション管理 | Drizzle Kit |
 
-### テーブル一覧（15テーブル）
+### テーブル一覧（18テーブル）
 
 詳細は `docs/db-schema.md` を参照。
 
@@ -92,6 +92,9 @@
 | `purchase_drafts` | 下書き保存 |
 | `mf_oauth_tokens` | MF OAuthトークン |
 | `slack_event_log` | Slackイベント冪等性管理 |
+| `audit_log` | 監査ログ（ステータス変更履歴の追跡） |
+| `dead_letter_queue` | DLQ（外部API失敗タスクの記録・リトライ管理） |
+| `account_corrections` | 勘定科目修正履歴（AI推定の学習ループ用） |
 
 ---
 
@@ -194,14 +197,18 @@ Supabase Postgres
 
 Vercel Cron Jobs (`vercel.json`):
 
-| Cron | スケジュール (JST) | 機能 |
-|------|------------------|------|
-| `cache-warm` | 4分毎 | Redis キャッシュ先読み |
-| `daily-summary` | 09:00 | 日次サマリをOpsチャンネルに投稿 |
-| `voucher-reminder` | 10:00 | 証憑未提出リマインダー（Day1/3/7エスカレーション） |
-| `weekly-reminder` | 月曜 09:00 | 承認待ちの週次まとめ |
-| `card-reconciliation` | 月曜 11:00 | カード明細照合 |
-| `daily-variance` | 12:00 | 金額乖離検知 |
+> **注**: vercel.jsonのスケジュールはUTC表記。JST = UTC + 9時間。
+
+| Cron | UTC | JST | 機能 |
+|------|-----|-----|------|
+| `cache-warm` | */4 * * * * | 4分毎 | Redis キャッシュ先読み |
+| `daily-summary` | 0 0 * * * | 09:00 | 日次サマリをOpsチャンネルに投稿 |
+| `voucher-reminder` | 0 1 * * * | 10:00 | 証憑未提出リマインダー（Day1/3/7エスカレーション） |
+| `weekly-reminder` | 0 0 * * 1 | 月曜 09:00 | 承認待ちの週次まとめ |
+| `card-reconciliation` | 0 2 * * 1 | 月曜 11:00 | カード明細照合 |
+| `daily-variance` | 0 3 * * * | 12:00 | 金額乖離検知 |
+| `trip-controls` | 0 1 1 * * | 毎月1日 10:00 | 出張統制レポート（差異検知・未申請・重複・部門別コスト） |
+| `db-backup` | 0 18 * * * | 翌03:00 | 日次DBバックアップ（Google Drive永久保持） |
 
 全cronは `CRON_SECRET` Bearer token認証。
 
@@ -217,18 +224,29 @@ Vercel Cron Jobs (`vercel.json`):
 - `POST /api/purchase/upload-voucher` — 証憑添付
 - `POST /api/purchase/check-duplicate` — 重複チェック
 - `POST /api/purchase/estimate-account` — 勘定科目推定（RAG）
+- `GET /api/purchase/search` — 全文検索（pg_trgm + GIN）
 
 ### マスタ・検索
 - `GET /api/employees` — 従業員一覧
 - `GET /api/suppliers` — 購入先一覧
 - `GET /api/mf/masters` — MFマスタ一括
 - `POST /api/mf/masters/sync` — MFマスタ再同期
+- `GET /api/katana/purchase-orders` — KATANA ERP PO検索
 
 ### 管理
 - `GET /api/admin/card-matching/execute` — カード照合実行
-- `POST /api/admin/card-matching/confirm` — 照合確定
+- `POST /api/admin/card-matching/confirm` — 照合確定（+ Stage 2仕訳自動作成）
+- `POST /api/admin/card-matching/withdrawal` — 引落消込（+ Stage 3仕訳自動作成）
 - `GET /api/admin/approval-routes` — 承認ルート
 - `GET /api/admin/spending` — 支出分析
+- `POST /api/admin/account-correction` — 勘定科目修正記録（学習ループ用）
+- `GET /api/admin/amazon-matching/summary` — Amazon照合サマリ
+- `GET /api/admin/amazon-matching/notify` — Amazon未申請通知
+
+### AI・Slack
+- `POST /api/ai/ask` — Slack対話型AIアシスタント（/askコマンド、Claude Haiku + RAG）
+- `POST /api/trip/ai-assist` — 出張AIアシスタント（Gemini解析 + フォーム自動入力）
+- `POST /api/trip/import-csv` — じゃらんCSV一括取込
 
 ### MF連携
 - `GET /api/mf/auth` — OAuth開始
@@ -243,6 +261,8 @@ Vercel Cron Jobs (`vercel.json`):
 - `GET /api/cron/weekly-reminder`
 - `GET /api/cron/card-reconciliation`
 - `GET /api/cron/daily-variance`
+- `GET /api/cron/trip-controls`
+- `GET /api/cron/db-backup`
 
 ---
 
@@ -272,6 +292,8 @@ Vercel Cron Jobs (`vercel.json`):
 | `GAS_WEB_APP_URL` / `GAS_API_KEY` | GAS接続（移行スクリプト用、通常運用では不要） |
 | `TEST_MODE` | true時はDMをテストチャンネルにリダイレクト |
 | `GOOGLE_ALLOWED_DOMAIN` | Google OAuthドメイン制限 |
+| `GOOGLE_DRIVE_BACKUP_FOLDER_ID` | DBバックアップ保存先GDriveフォルダID |
+| `ANTHROPIC_API_KEY` | Slack AIアシスタント（Claude Haiku） |
 
 ---
 
@@ -286,7 +308,7 @@ Vercel Cron Jobs (`vercel.json`):
 - Amazon CSV照合機能
 - EC連携サイト証憑催促スキップ
 - RAG勘定科目推定（93.3%正答率）
-- Supabase Postgres移行（15テーブル、Tokyo region）
+- Supabase Postgres移行（18テーブル、Tokyo region）
 - Drizzle ORM統合（gas-client互換ラッパー経由）
 - データ移行スクリプト（GAS → Postgres）
 
@@ -298,6 +320,12 @@ Vercel Cron Jobs (`vercel.json`):
 | 出張バーチャルカード統合（B案） | 中 |
 | ~~立替精算のWebアプリ完結~~ | ~~完了~~ /expense/new 実装済み |
 | 仕訳Stage2/3自動化 | 完了（カード照合確定・引落消込で自動仕訳作成） |
+| 全文検索（pg_trgm + GIN） | 完了（マイページ検索バー + `/api/purchase/search`） |
+| Slack対話型AIアシスタント | 完了（`/ask`コマンド + Claude Haiku RAG応答） |
+| 監査ログ + リトライ/DLQ | 完了（audit_log, dead_letter_queue テーブル + OPS通知） |
+| 日次DBバックアップ | 完了（Google Drive永久保持、cron JST 03:00） |
+| 仕訳学習ループ | 完了（account_corrections + RAGコンテキスト注入） |
+| 出張統制ダッシュボード | 完了（/admin/trip-controls + 月次cronレポート） |
 | Procurement-Assistant廃止 | 将来（本番切替時） |
 
 ---

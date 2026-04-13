@@ -1,6 +1,6 @@
 # 障害復旧手順書（Disaster Recovery Runbook）
 
-**最終更新**: 2026-04-12
+**最終更新**: 2026-04-13
 **対象**: next-procurement-poc (Vercel + Supabase)
 **担当**: 管理本部 + 開発チーム
 
@@ -59,10 +59,13 @@
    - #purchase-ops に「DB障害中、復旧待ち」と投稿
    - Slackでの承認操作は手動運用に切替
 
-**データ復旧（Proプラン）**:
+**データ復旧**:
 ```bash
+# 方法1: Google Driveバックアップからリストア（Free tier）
+# → §4.1のリストア手順を参照
+
+# 方法2: Supabase PITR（Proプラン昇格後のみ）
 # Supabase Dashboard → Backups → Point-in-Time Recovery
-# 障害発生前のタイムスタンプを指定してリストア
 # 注意: PITRは上書きリストア（現在のデータが消える）
 ```
 
@@ -152,6 +155,14 @@
    # キャッシュウォーム
    curl -H "Authorization: Bearer $CRON_SECRET" \
      https://next-procurement-poc-tau.vercel.app/api/cron/cache-warm
+
+   # DBバックアップ
+   curl -H "Authorization: Bearer $CRON_SECRET" \
+     https://next-procurement-poc-tau.vercel.app/api/cron/db-backup
+
+   # 出張統制レポート
+   curl -H "Authorization: Bearer $CRON_SECRET" \
+     https://next-procurement-poc-tau.vercel.app/api/cron/trip-controls
    ```
 3. 環境変数 `CRON_SECRET` が正しいか確認
 
@@ -163,11 +174,26 @@
 
 | 項目 | 設定 |
 |------|------|
-| 方式 | Supabase自動バックアップ（Proプラン） |
-| 頻度 | 日次（自動） |
-| 保持期間 | 7日間（Proプラン標準） |
-| PITR | 有効（Proプラン、秒単位のリストア可能） |
-| リストア方法 | Supabase Dashboard → Backups → Restore |
+| 方式 | **日次cronバックアップ → Google Drive保存** |
+| 頻度 | 毎日 JST 03:00（UTC 18:00） |
+| 保持期間 | **永久保持**（BACKUP_RETENTION_DAYS=0） |
+| 実装 | `/api/cron/db-backup` |
+| 保存先 | Google Drive（`GOOGLE_DRIVE_BACKUP_FOLDER_ID`） |
+| フォーマット | JSON（全テーブルのフルダンプ） |
+
+**手動バックアップ実行**:
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  https://next-procurement-poc-tau.vercel.app/api/cron/db-backup
+```
+
+**リストア手順**:
+1. Google Driveからバックアップファイルをダウンロード
+2. JSONデータをパースし、各テーブルにINSERT
+3. 既存データとの競合に注意（UPSERT推奨）
+
+> **注**: Supabase Free tierのためPITR（秒単位リストア）は利用不可。
+> Proプラン（$25/月）に昇格すればSupabase自動バックアップ + PITRが利用可能。
 
 ### 4.2 コードバックアップ
 

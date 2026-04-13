@@ -1,7 +1,7 @@
 # 内部テスト計画 — 購買管理システム
 
 **作成日**: 2026-03-26
-**最終更新**: 2026-04-12（DB・OAuth・Redisテスト追加）
+**最終更新**: 2026-04-13（監査ログ・DLQ・バックアップ・全文検索・科目修正テスト追加、GAS参照を修正）
 **テスト環境**: Vercel + Supabase Postgres (Tokyo) + Upstash Redis (Tokyo) + NextAuth
 **テスト担当**: 管理本部 + 開発者
 
@@ -119,10 +119,10 @@ curl "https://next-procurement-poc-tau.vercel.app/api/employees" \
 | GAS_WEB_APP_URL | (GASデプロイURL) | [ ] |
 | GAS_API_KEY | (GAS APIキー) | [ ] |
 
-### T-1.2: GASスプレッドシート列追加
-- [ ] 従業員マスタシートに `SlackID` 列を追加
-- [ ] 従業員マスタシートに `部門長SlackID` 列を追加
-- [ ] テスト用従業員を2名以上登録（申請者 + 部門長）
+### T-1.2: 従業員マスタ設定（Supabase DB）
+- [ ] `employees` テーブルにテスト用従業員を2名以上登録（申請者 + 部門長）
+- [ ] `slack_id`, `dept_head_slack_id`, `email` が正しく設定されていること
+- [ ] `card_last4`, `mf_office_member_id` が登録されていること（カード照合に必要）
 
 ### T-1.3: Vercel再デプロイ
 ```bash
@@ -174,8 +174,8 @@ npx vercel --prod --yes
    - [ ] 「あなたの作業は完了です」メッセージが表示される
    - [ ] #purchase-ops に証憑添付通知が投稿される
 
-6. **GAS確認**
-   - [ ] スプレッドシートにPR番号の行が存在する
+6. **DB確認**
+   - [ ] `purchase_requests` テーブルにPO番号のレコードが存在する
    - [ ] ステータスが「添付済」に更新されている
 
 **所要時間目安**: 15分
@@ -452,7 +452,8 @@ W001,,2026-03-20,2026-03-20,MFビジネスカード 2月利用分,1245800,HIROSH
 | Phase 4 | 2 | | | |
 | Phase 5 | 4 | | | |
 | Phase 6 | 5シナリオ (カード照合) + 3 (DBレイテンシ) | | | |
-| **合計** | **35** | | | |
+| Phase 7 | 7 (監査ログ・DLQ・バックアップ・検索・科目修正・AI・出張統制) | | | |
+| **合計** | **42** | | | |
 
 ---
 
@@ -480,6 +481,57 @@ curl "https://next-procurement-poc-tau.vercel.app/api/employees" \
   -H "x-api-key: $INTERNAL_API_KEY" -w "time: %{time_total}s\n"
 ```
 - [ ] 2回目以降のリクエストが `< 100ms`（Redisから取得）
+
+---
+
+## Phase 7: 新機能確認（監査ログ・DLQ・バックアップ・検索・AI）
+
+### T-7.1: 監査ログ
+- [ ] 購買申請のステータスを変更（承認等）
+- [ ] `audit_log` テーブルに変更記録が作成されていること
+- [ ] `table_name`, `record_id`, `field_name`, `old_value`, `new_value` が正しいこと
+
+### T-7.2: DLQリトライ
+- [ ] MF会計Plus API障害時（または意図的にトークン無効化）に仕訳登録を試行
+- [ ] リトライログが出力されること（最大4回）
+- [ ] 全リトライ失敗後に `dead_letter_queue` にレコードが記録されること
+- [ ] OPSチャンネルにDLQ通知が投稿されること
+
+### T-7.3: DBバックアップ
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  https://next-procurement-poc-tau.vercel.app/api/cron/db-backup
+```
+- [ ] 200 OK が返ること
+- [ ] Google Driveの指定フォルダにJSONファイルが保存されること
+- [ ] バックアップファイルに全テーブルのデータが含まれること
+
+### T-7.4: 全文検索
+```bash
+curl "https://next-procurement-poc-tau.vercel.app/api/purchase/search?q=モニター" \
+  -H "x-api-key: $INTERNAL_API_KEY"
+```
+- [ ] 品目名に「モニター」を含む申請が返ること
+- [ ] マイページ（/purchase/my）の検索バーからも検索できること
+
+### T-7.5: 勘定科目修正記録
+- [ ] `/admin/journals` で仕訳詳細を展開
+- [ ] AI推定科目と異なる科目に変更して「保存」
+- [ ] `account_corrections` テーブルに修正記録が作成されること
+- [ ] `estimated_account` と `corrected_account` が正しいこと
+
+### T-7.6: Slack AIアシスタント（/ask）
+- [ ] Slack App管理画面で `/ask` コマンドが登録されていること
+- [ ] Slackで `/ask 先月のモニター購入は？` を実行
+- [ ] 購買データに基づいた回答が返ること
+
+### T-7.7: 出張統制レポート
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  https://next-procurement-poc-tau.vercel.app/api/cron/trip-controls
+```
+- [ ] 200 OK が返ること
+- [ ] 差異検知・未申請検出・重複検出の結果が返ること
 
 ---
 

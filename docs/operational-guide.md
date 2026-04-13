@@ -1,7 +1,7 @@
 # 購買管理・出張管理 想定運用ガイド
 
 **作成日**: 2026-03-26
-**最終更新**: 2026-04-12（DB移行・出張予約完了申請・AIアシスタント・立替精算ページ・出張統制を反映）
+**最終更新**: 2026-04-13（監査ログ・DLQ・DBバックアップ・科目修正学習ループ・全文検索・Slack AIを反映）
 **対象システム**: next-procurement-poc（開発中）+ Procurement-Assistant（本番稼働中、将来廃止）
 **運用方針**: next-procurement-pocが完成後、本番を段階的に置換
 
@@ -439,8 +439,10 @@ Bot → #出張チャンネルに投稿（実額ベース）
 
 | 時刻 | 実行者 | 内容 |
 |------|--------|------|
+| 03:00 | Bot自動 | DBバックアップ → Google Drive永久保持 |
 | 09:00 | Bot自動 | #purchase-ops に日次サマリ投稿 |
 | 10:00 | Bot自動 | 証憑未提出者にDMダイジェスト送信 |
+| 12:00 | Bot自動 | 金額乖離検知アラート |
 | 随時 | 部門長 | DM承認依頼の処理 |
 | 随時 | 管理本部 | 証憑確認・仕訳待ちの処理 |
 
@@ -457,6 +459,7 @@ Bot → #出張チャンネルに投稿（実額ベース）
 | タスク | 実行者 | 内容 |
 |--------|--------|------|
 | カード明細照合 | 管理本部 | 照合UI（§8参照）で利用明細CSV → 4タブ処理 → 全件解消 |
+| 出張統制レポート | Bot自動 | 毎月1日 10:00に自動実行（差異検知・未申請・重複検出） |
 | 引落照合 | 管理本部 | 照合UI「引落照合」タブで入出金履歴CSV → 未払金突合 |
 | 宿泊CSV取込 | 管理本部 | じゃらんCSV → MF経費一括登録 |
 | 仕訳一括処理 | 管理本部 | 仕訳管理UI（`/admin/journals`）で仕訳待ち案件を確認・編集・一括登録 |
@@ -614,3 +617,87 @@ Bot → #出張チャンネルに投稿（実額ベース）
 - [ ] `/purchase` でテスト申請（カード払い）→ 承認 → GAS「予測カード明細」シートにレコードが生成されることを確認
 - [ ] MF会計Plus APIで `GET /masters/sub_accounts` → 「MFカード:未請求」が返ることを確認
 - [ ] 照合UI（`/admin/card-matching`）でテストCSVを読込 → 照合結果が表示されることを確認
+
+---
+
+## 13. 障害対策基盤
+
+### 13.1 監査ログ（audit_log）
+
+ステータス変更時に自動記録される変更履歴。データ不整合調査に使用。
+
+**確認方法**:
+```sql
+-- 特定PO番号の変更履歴
+SELECT field_name, old_value, new_value, changed_by, created_at
+FROM audit_log
+WHERE table_name = 'purchase_requests' AND record_id = 'PO-XXXXXX-XXXX'
+ORDER BY created_at DESC;
+```
+
+### 13.2 リトライ + DLQ（dead_letter_queue）
+
+外部API呼出し失敗時に指数バックオフでリトライ（最大4回）。全リトライ失敗でDLQに記録し、OPSチャンネルに自動通知。
+
+**未解決タスクの確認**:
+```sql
+SELECT id, task_type, task_id, error_message, retry_count, created_at
+FROM dead_letter_queue WHERE resolved_at IS NULL ORDER BY created_at DESC;
+```
+
+**復旧後の手動解決**:
+```sql
+UPDATE dead_letter_queue SET resolved_at = NOW() WHERE id = <DLQ_ID>;
+```
+
+詳細手順は `docs/disaster-recovery.md` §7 を参照。
+
+### 13.3 日次DBバックアップ
+
+毎日JST 03:00にSupabase全テーブルをJSON形式でGoogle Driveに保存。永久保持。
+
+| 項目 | 設定 |
+|------|------|
+| cron | `/api/cron/db-backup`（UTC 18:00 = JST 03:00） |
+| 保存先 | Google Drive（`GOOGLE_DRIVE_BACKUP_FOLDER_ID`） |
+| 保持期間 | 永久（BACKUP_RETENTION_DAYS=0） |
+| 手動実行 | `curl -H "Authorization: Bearer $CRON_SECRET" https://{url}/api/cron/db-backup` |
+
+### 13.4 勘定科目修正学習ループ
+
+仕訳管理画面（`/admin/journals`）でAI推定科目と異なる科目に変更して保存すると、修正履歴が`account_corrections`テーブルに自動記録される。
+
+この修正履歴は次回のAI勘定科目推定時にRAGコンテキストとして注入され、同様の品目・仕入先に対する推定精度が向上する。
+
+**修正履歴の確認**:
+```sql
+SELECT po_number, item_name, estimated_account, corrected_account, corrected_by, created_at
+FROM account_corrections ORDER BY created_at DESC LIMIT 20;
+```
+
+---
+
+## 14. Slack AIアシスタント（/ask）
+
+`/ask` コマンドでSlackから購買・出張に関する質問ができる対話型AIアシスタント。
+
+| 項目 | 設定 |
+|------|------|
+| エンドポイント | `POST /api/ai/ask` |
+| LLM | Claude Haiku（Anthropic API） |
+| コンテキスト | 購買データ + 仕訳統計 + 従業員情報をRAGで注入 |
+| 環境変数 | `ANTHROPIC_API_KEY` |
+
+**Slack App設定が必要**: Slack App管理画面で `/ask` スラッシュコマンドを追加し、Request URLに `/api/slack/events` を設定する。
+
+---
+
+## 15. 全文検索
+
+マイページ（`/purchase/my`）に検索バーがあり、購買申請を全文検索できる。
+
+| 項目 | 設定 |
+|------|------|
+| エンドポイント | `GET /api/purchase/search?q=キーワード` |
+| 検索エンジン | PostgreSQL pg_trgm + GINインデックス |
+| 検索対象 | 品目名、仕入先名、備考 |

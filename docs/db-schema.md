@@ -1,6 +1,6 @@
 # データベーススキーマ — Supabase Postgres
 
-**最終更新**: 2026-04-12
+**最終更新**: 2026-04-13
 **対象DB**: Supabase Postgres (Tokyo, 17.6)
 **ORM**: Drizzle ORM
 **スキーマ定義ファイル**: `src/db/schema.ts`
@@ -13,7 +13,7 @@
 
 ## 1. 全体構成
 
-15テーブル + 8個のPostgres enum型
+18テーブル + 8個のPostgres enum型
 
 ### Enum型
 
@@ -295,7 +295,73 @@
 
 ---
 
-## 5. 外部キー参照（論理的、実FK制約は未設定）
+## 5. 運用・監査テーブル
+
+### audit_log — 監査ログ（変更履歴追跡）
+
+| 列 | 型 | NULL | 備考 |
+|---|---|---|---|
+| id | serial | NO | **PK** |
+| table_name | varchar(50) | NO | 対象テーブル名 |
+| record_id | varchar(50) | NO | PO番号等のレコード識別子 |
+| action | varchar(20) | NO | created / updated / deleted |
+| changed_by | varchar(100) | YES | Slack ID or ユーザー名 |
+| field_name | varchar(100) | YES | 変更フィールド名 |
+| old_value | text | YES | 変更前の値 |
+| new_value | text | YES | 変更後の値 |
+| metadata | jsonb | YES | 追加コンテキスト |
+| created_at | timestamptz | NO | default: now() |
+
+**インデックス**: (table_name, record_id), created_at, changed_by
+
+**用途**: purchase_requestsのステータス更新時に自動記録。障害時のデータ不整合調査に使用。
+
+---
+
+### dead_letter_queue — 失敗タスクキュー（DLQ）
+
+| 列 | 型 | NULL | 備考 |
+|---|---|---|---|
+| id | serial | NO | **PK** |
+| task_id | varchar(100) | NO | 対象レコードID（PO番号等） |
+| task_type | varchar(50) | NO | mf_journal_create / slack_notify 等 |
+| error_message | text | NO | エラー内容 |
+| retry_count | integer | NO | リトライ回数 |
+| payload | jsonb | YES | リトライ用パラメータ |
+| resolved_at | timestamptz | YES | 解決済み日時（NULLなら未解決） |
+| created_at | timestamptz | NO | default: now() |
+
+**インデックス**: task_type, created_at
+
+**用途**: MF会計API等の外部API呼出し失敗時に記録。指数バックオフでリトライ後、失敗確定でOPSチャンネルに通知。
+
+---
+
+### account_corrections — 勘定科目修正履歴（学習ループ用）
+
+| 列 | 型 | NULL | 備考 |
+|---|---|---|---|
+| id | serial | NO | **PK** |
+| po_number | varchar(30) | NO | 対象PO番号 |
+| item_name | varchar(500) | NO | 品目名 |
+| supplier_name | varchar(200) | YES | 仕入先 |
+| department | varchar(100) | YES | 部門 |
+| total_amount | integer | YES | 金額（円） |
+| estimated_account | varchar(100) | NO | AI推定の勘定科目 |
+| estimated_tax_type | varchar(50) | YES | AI推定の税区分 |
+| estimated_confidence | varchar(10) | YES | 推定信頼度（high/medium/low） |
+| corrected_account | varchar(100) | NO | ユーザーが確定した勘定科目 |
+| corrected_tax_type | varchar(50) | YES | ユーザーが確定した税区分 |
+| corrected_by | varchar(100) | YES | 修正者名 |
+| created_at | timestamptz | NO | default: now() |
+
+**インデックス**: supplier_name, item_name, created_at
+
+**用途**: 仕訳管理画面で科目を変更した際に自動記録。AI勘定科目推定時にRAGコンテキストとして注入し、推定精度を向上させる学習ループの基盤。
+
+---
+
+## 6. 外部キー参照（論理的、実FK制約は未設定）
 
 ```
 purchase_requests.applicant_slack_id → employees.slack_id
@@ -317,7 +383,7 @@ predicted_transactions.applicant_slack_id     → employees.slack_id
 
 ---
 
-## 6. GAS時代との主な差分
+## 7. GAS時代との主な差分
 
 | 項目 | GAS時代 | 現行 |
 |------|--------|------|
@@ -336,7 +402,7 @@ predicted_transactions.applicant_slack_id     → employees.slack_id
 
 ---
 
-## 7. マイグレーション管理
+## 8. マイグレーション管理
 
 ### 適用方法
 
@@ -364,7 +430,7 @@ npx tsx scripts/migrate-from-gas.ts              # 実行
 
 ---
 
-## 8. 接続方法
+## 9. 接続方法
 
 ### アプリケーション内
 
