@@ -360,6 +360,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
       {ocr && (ocr.voucherAmount || ocr.verifiedSupplierName || ocr.voucherDate || ocr.voucherItems) && (
         <div className="mb-3 border rounded bg-white p-3">
           <div className="font-medium text-gray-700 mb-2">発注データ / 証憑データ比較</div>
+          <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-gray-50">
@@ -443,6 +444,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
               )}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -561,6 +563,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
         <div className="flex flex-col gap-3">
           <div>
             <div className="font-medium text-gray-700 mb-2">仕訳プレビュー</div>
+            <div className="overflow-x-auto">
             <table className="w-full border text-xs">
               <thead><tr className="bg-gray-100"><th className="px-2 py-1.5 text-left">区分</th><th className="px-2 py-1.5 text-left">勘定科目</th><th className="px-2 py-1.5 text-left">補助</th><th className="px-2 py-1.5 text-right">金額</th><th className="px-2 py-1.5 text-right">消費税</th></tr></thead>
               <tbody>
@@ -583,6 +586,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                 </tr>
               </tbody>
             </table>
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -605,6 +609,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                         const newTax = resolveAccountTax(e.target.value, masters);
                         onEdit("taxCategory", newTax);
                       }}
+                      aria-label="借方科目"
                       className="flex-1 px-2 py-1.5 border rounded text-xs bg-white">
                       {accountNames.map((a) => <option key={a} value={a}>{a}</option>)}
                     </select>
@@ -624,7 +629,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                 </div>
                 {estimation && (
                   <div className="mt-0.5 text-[10px] text-gray-400">
-                    {estimation.confidence === "high" ? "🟢" : estimation.confidence === "medium" ? "🟡" : "🔴"} {estimation.reason}
+                    <span role="img" aria-label={estimation.confidence === "high" ? "高信頼度" : estimation.confidence === "medium" ? "中信頼度" : "低信頼度"}>{estimation.confidence === "high" ? "🟢" : estimation.confidence === "medium" ? "🟡" : "🔴"}</span> {estimation.reason}
                   </div>
                 )}
               </label>
@@ -636,6 +641,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                     onEdit("creditAccount", acc);
                     onEdit("creditSubAccount", sub || "");
                   }}
+                  aria-label="貸方科目"
                   className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
                   {creditOptions.map((o) => (
                     <option key={`${o.account}|${o.sub}`} value={`${o.account}|${o.sub}`}>
@@ -651,6 +657,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                 <span className="text-gray-500 text-xs">税区分</span>
                 {taxNames ? (
                   <select value={taxCat} onChange={(e) => onEdit("taxCategory", e.target.value)}
+                    aria-label="税区分"
                     className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
                     {taxNames.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
@@ -663,6 +670,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                 <span className="text-gray-500 text-xs">部門</span>
                 {deptNames ? (
                   <select value={dept} onChange={(e) => onEdit("department", e.target.value)}
+                    aria-label="部門"
                     className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
                     {deptNames.map((d) => <option key={d} value={d}>{d}</option>)}
                   </select>
@@ -678,6 +686,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                 <span className="text-gray-500 text-xs">プロジェクト</span>
                 {masters && masters.projects.length > 0 ? (
                   <select value={hubspot} onChange={(e) => onEdit("hubspotDealId", e.target.value)}
+                    aria-label="プロジェクト"
                     className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
                     <option value="">（なし）</option>
                     {masters.projects.map((p) => (
@@ -696,6 +705,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                 {masters && masters.counterparties.length > 0 ? (
                   <select value={edits.counterpartyCode ?? journalSupplierCode}
                     onChange={(e) => onEdit("counterpartyCode", e.target.value)}
+                    aria-label="取引先"
                     className="w-full mt-0.5 px-2 py-1.5 border rounded text-xs bg-white">
                     <option value="">（なし）</option>
                     {masters.counterparties.map((c) => (

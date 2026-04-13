@@ -65,12 +65,13 @@ export default function TripControlsPage() {
   const [data, setData] = useState<ControlData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [month, setMonth] = useState("");
+  const [month, setMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const now = new Date();
-    setMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
     setMounted(true);
   }, []);
 
@@ -113,7 +114,7 @@ export default function TripControlsPage() {
         {data && (
           <div className="space-y-6">
             {/* サマリカード */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-white rounded-lg border p-4">
                 <div className="text-2xl font-bold text-gray-800">{data.summary.totalTripCount}</div>
                 <div className="text-xs text-gray-500">出張件数</div>
@@ -205,6 +206,7 @@ export default function TripControlsPage() {
               {data.departmentCosts.length === 0 ? (
                 <div className="p-4 text-sm text-gray-500">データなし</div>
               ) : (
+                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50">
                     <tr>
@@ -235,6 +237,7 @@ export default function TripControlsPage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
             </section>
 

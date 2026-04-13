@@ -219,19 +219,19 @@ function MyPageInner() {
         const actions = requests.map((r) => {
           const s = overallStatus(r);
           if (s.label === "完了" || s.label === "差戻し") return null;
-          let icon = ""; let action = ""; let urgency: "high" | "medium" | "low" = "low";
+          let icon = ""; let iconLabel = ""; let action = ""; let urgency: "high" | "medium" | "low" = "low";
           if (r.approvalStatus === "承認待ち") {
-            icon = "⏳"; action = "部門長の承認を待っています"; urgency = "low";
+            icon = "⏳"; iconLabel = "承認待ち"; action = "部門長の承認を待っています"; urgency = "low";
           } else if (r.orderStatus === "未発注") {
-            icon = "🛒"; action = "購入後に [発注完了] を押してください"; urgency = "high";
+            icon = "🛒"; iconLabel = "発注待ち"; action = "購入後に [発注完了] を押してください"; urgency = "high";
           } else if (r.inspectionStatus === "未検収") {
-            icon = "📦"; action = "届いたら [検収完了] を押してください"; urgency = "medium";
+            icon = "📦"; iconLabel = "検収待ち"; action = "届いたら [検収完了] を押してください"; urgency = "medium";
           } else if (r.voucherStatus === "要取得") {
-            icon = "📎"; action = "証憑（納品書・領収書）を提出してください"; urgency = "high";
+            icon = "📎"; iconLabel = "証憑待ち"; action = "証憑（納品書・領収書）を提出してください"; urgency = "high";
           }
           if (!action) return null;
-          return { ...r, icon, action, urgency, statusLabel: s.label };
-        }).filter(Boolean) as Array<PurchaseRequest & { icon: string; action: string; urgency: string; statusLabel: string }>;
+          return { ...r, icon, iconLabel, action, urgency, statusLabel: s.label };
+        }).filter(Boolean) as Array<PurchaseRequest & { icon: string; iconLabel: string; action: string; urgency: string; statusLabel: string }>;
 
         if (actions.length === 0) return null;
         // urgency high first
@@ -252,7 +252,7 @@ function MyPageInner() {
                   a.urgency === "medium" ? "bg-amber-50 border border-amber-100" :
                   "bg-white border border-gray-100"
                 }`}>
-                  <span className="text-xl flex-shrink-0">{a.icon}</span>
+                  <span className="text-xl flex-shrink-0" role="img" aria-label={a.iconLabel}>{a.icon}</span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-xs text-gray-500">{a.prNumber}</span>
