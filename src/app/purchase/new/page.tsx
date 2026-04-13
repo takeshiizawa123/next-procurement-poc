@@ -656,10 +656,11 @@ function PurchaseFormInner() {
 
   // 金額入力ハンドラー（カンマフォーマット）
   const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value.replace(/[,，\s¥]/g, "");
-    const num = parseInt(raw) || 0;
+    const raw = e.target.value.replace(/[,，\s¥\-−]/g, "");
+    const num = Math.max(0, parseInt(raw) || 0);
     setAmount(num);
     setAmountDisplay(raw);
+    if (num > 0) setStepErrors((prev) => { const { amount: _, ...rest } = prev; return rest; });
   };
 
   const handleAmountBlur = () => {
@@ -728,18 +729,48 @@ function PurchaseFormInner() {
       .finally(() => setKatanaLoading(false));
   }, []);
 
+  // バリデーションエラー state
+  const [stepErrors, setStepErrors] = useState<Record<string, string>>({});
+
   // ステップ進行バリデーション
   const canProceedStep1 = requestType !== "" && (userId || selectedEmployee);
   const extraItemsValid = extraItems.every((e) => e.itemName && e.amount > 0);
-  const canProceedStep2 = itemName && amount > 0 && supplierName && extraItemsValid;
-  const canProceedStep3 = paymentMethod !== "" && (!isHighValue || (assetUsage && notes));
+  const canProceedStep2 = itemName && amount > 0 && quantity >= 1 && supplierName && paymentMethod !== "" && extraItemsValid;
+  const canProceedStep3 = !isHighValue || (assetUsage && notes);
+
+  // ステップ2のバリデーション（エラーメッセージ付き）
+  const validateStep2 = (): boolean => {
+    const errors: Record<string, string> = {};
+    if (!itemName.trim()) errors.itemName = "品目名を入力してください";
+    if (amount <= 0) errors.amount = "単価は1円以上で入力してください";
+    if (quantity < 1) errors.quantity = "数量は1以上で入力してください";
+    if (!supplierName.trim()) errors.supplierName = "購入先名を入力してください";
+    if (!paymentMethod) errors.paymentMethod = "支払方法を選択してください";
+    extraItems.forEach((e, i) => {
+      if (!e.itemName.trim()) errors[`extra_${i}_itemName`] = "追加品目の品目名を入力してください";
+      if (e.amount <= 0) errors[`extra_${i}_amount`] = "追加品目の単価は1円以上で入力してください";
+    });
+    setStepErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  // ステップ3のバリデーション（エラーメッセージ付き）
+  const validateStep3 = (): boolean => {
+    const errors: Record<string, string> = {};
+    if (isHighValue && !assetUsage) errors.assetUsage = "10万円以上のため用途の選択が必要です";
+    if (isHighValue && !notes.trim()) errors.notes = "10万円以上のため購入理由の入力が必要です";
+    setStepErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const goNextStep = () => {
-    if (step < 3) {
-      setStep(step + 1);
-    } else if (step === 3) {
-      // Step 3 → 確認画面（Step 4）
-      setStep(4);
+    if (step === 1 && canProceedStep1) {
+      setStepErrors({});
+      setStep(2);
+    } else if (step === 2) {
+      if (validateStep2()) {
+        setStep(3);
+      }
     }
   };
 
@@ -749,6 +780,7 @@ function PurchaseFormInner() {
 
   // Step 3→4遷移時に重複チェックを実行（勘定科目推定は証憑添付時に実行）
   const goToConfirm = async () => {
+    if (!validateStep3()) return;
     setIsConfirming(true);
     try {
       const dupParams = new URLSearchParams({ itemName });
@@ -1137,10 +1169,14 @@ function PurchaseFormInner() {
                 name="item_name"
                 required
                 value={itemName}
-                onChange={(e) => setItemName(e.target.value)}
+                onChange={(e) => {
+                  setItemName(e.target.value);
+                  if (e.target.value.trim()) setStepErrors((prev) => { const { itemName: _, ...rest } = prev; return rest; });
+                }}
                 placeholder="例: ノートPC、モニター等"
-                className="w-full border rounded-lg px-3 py-2"
+                className={`w-full border rounded-lg px-3 py-2 ${stepErrors.itemName ? "border-red-500" : ""}`}
               />
+              {stepErrors.itemName && <p className="text-xs text-red-500 mt-1">{stepErrors.itemName}</p>}
             </fieldset>
 
             {/* 金額・数量・合計 */}
@@ -1159,8 +1195,9 @@ function PurchaseFormInner() {
                     onBlur={handleAmountBlur}
                     onFocus={handleAmountFocus}
                     placeholder="165,000"
-                    className="w-full border rounded-lg px-3 py-2"
+                    className={`w-full border rounded-lg px-3 py-2 ${stepErrors.amount ? "border-red-500" : ""}`}
                   />
+                  {stepErrors.amount && <p className="text-xs text-red-500 mt-1">{stepErrors.amount}</p>}
                 </fieldset>
                 <fieldset>
                   <legend className="block text-sm font-medium mb-1">
@@ -1175,8 +1212,9 @@ function PurchaseFormInner() {
                     onChange={(e) =>
                       setQuantity(parseInt(e.target.value) || 1)
                     }
-                    className="w-full border rounded-lg px-3 py-2"
+                    className={`w-full border rounded-lg px-3 py-2 ${stepErrors.quantity ? "border-red-500" : ""}`}
                   />
+                  {stepErrors.quantity && <p className="text-xs text-red-500 mt-1">{stepErrors.quantity}</p>}
                 </fieldset>
               </div>
               {totalAmount > 0 && (
@@ -1241,8 +1279,8 @@ function PurchaseFormInner() {
                 name="payment_method"
                 required
                 value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 bg-white"
+                onChange={(e) => { setPaymentMethod(e.target.value); if (e.target.value) setStepErrors((prev) => { const { paymentMethod: _, ...rest } = prev; return rest; }); }}
+                className={`w-full border rounded-lg px-3 py-2 bg-white ${stepErrors.paymentMethod ? "border-red-500" : ""}`}
               >
                 <option value="">選択してください</option>
                 <option value="MFカード">MFカード</option>
@@ -1250,6 +1288,7 @@ function PurchaseFormInner() {
                 <option value="請求書払い（前払い）">請求書払い（前払い）</option>
                 <option value="立替">立替</option>
               </select>
+              {stepErrors.paymentMethod && <p className="text-xs text-red-500 mt-1">{stepErrors.paymentMethod}</p>}
             </fieldset>
 
             {/* 検収者 */}
@@ -1288,10 +1327,11 @@ function PurchaseFormInner() {
                 required
                 list="supplier-list"
                 value={supplierName}
-                onChange={(e) => setSupplierName(e.target.value)}
+                onChange={(e) => { setSupplierName(e.target.value); if (e.target.value.trim()) setStepErrors((prev) => { const { supplierName: _, ...rest } = prev; return rest; }); }}
                 placeholder="例: Amazon、モノタロウ、ASKUL等"
-                className="w-full border rounded-lg px-3 py-2"
+                className={`w-full border rounded-lg px-3 py-2 ${stepErrors.supplierName ? "border-red-500" : ""}`}
               />
+              {stepErrors.supplierName && <p className="text-xs text-red-500 mt-1">{stepErrors.supplierName}</p>}
               {(supplierSuggestions.length > 0 || mfCounterparties.length > 0) && (
                 <datalist id="supplier-list">
                   {mfCounterparties.map((c) => (

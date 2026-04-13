@@ -275,42 +275,55 @@ function MyPageInner() {
 
       {/* 検索バー */}
       <div className="mb-4">
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => {
-            const q = e.target.value;
-            setSearchQuery(q);
-            if (searchTimer.current) clearTimeout(searchTimer.current);
-            if (!q.trim()) { setSearchResults(null); return; }
-            searchTimer.current = setTimeout(async () => {
-              setSearching(true);
-              try {
-                const res = await apiFetch(`/api/purchase/search?q=${encodeURIComponent(q.trim())}&limit=30`);
-                const data = await res.json();
-                if (data.ok) {
-                  setSearchResults(data.results.map((r: Record<string, unknown>) => ({
-                    prNumber: r.poNumber,
-                    itemName: r.itemName,
-                    totalAmount: r.totalAmount,
-                    supplierName: r.supplierName,
-                    applicant: r.applicantName,
-                    department: r.department,
-                    approvalStatus: r.status,
-                    orderStatus: "",
-                    inspectionStatus: "",
-                    voucherStatus: "",
-                    type: "",
-                    applicationDate: r.applicationDate,
-                  })));
-                }
-              } catch { /* ignore */ }
-              setSearching(false);
-            }, 300);
-          }}
-          placeholder="品目名・購入先・申請者で検索..."
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-        />
+        <div className="relative">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => {
+              const q = e.target.value;
+              setSearchQuery(q);
+              if (searchTimer.current) clearTimeout(searchTimer.current);
+              if (!q.trim()) { setSearchResults(null); return; }
+              searchTimer.current = setTimeout(async () => {
+                setSearching(true);
+                try {
+                  const res = await apiFetch(`/api/purchase/search?q=${encodeURIComponent(q.trim())}&limit=30`);
+                  const data = await res.json();
+                  if (data.ok) {
+                    setSearchResults(data.results.map((r: Record<string, unknown>) => ({
+                      prNumber: r.poNumber,
+                      itemName: r.itemName,
+                      totalAmount: r.totalAmount,
+                      supplierName: r.supplierName,
+                      applicant: r.applicantName,
+                      department: r.department,
+                      approvalStatus: r.status,
+                      orderStatus: "",
+                      inspectionStatus: "",
+                      voucherStatus: "",
+                      type: "",
+                      applicationDate: r.applicationDate,
+                    })));
+                  }
+                } catch { /* ignore */ }
+                setSearching(false);
+              }, 300);
+            }}
+            placeholder="品目名・購入先・申請者で検索..."
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-8 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => { setSearchQuery(""); setSearchResults(null); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              aria-label="検索をクリア"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 011.414-1.414L10 8.586z" clipRule="evenodd" />
+              </svg>
+            </button>
+          )}
+        </div>
         {searching && <p className="text-xs text-gray-400 mt-1">検索中...</p>}
       </div>
 
@@ -319,7 +332,7 @@ function MyPageInner() {
         {(["all", "active", "completed"] as const).map((f) => (
           <button
             key={f}
-            onClick={() => setFilter(f)}
+            onClick={() => { setFilter(f); setSearchQuery(""); setSearchResults(null); }}
             className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
               filter === f
                 ? "bg-blue-600 text-white"
@@ -339,7 +352,17 @@ function MyPageInner() {
         <div className="text-center text-gray-500 py-10 animate-pulse">読み込み中...</div>
       ) : displayList.length === 0 ? (
         <div className="text-center text-gray-400 py-10">
-          {isSearch ? `「${searchQuery}」に一致する申請がありません` : filter === "all" ? "申請がありません" : `${filter === "active" ? "進行中" : "完了済み"}の申請がありません`}
+          {isSearch ? (
+            <>
+              <p>{`「${searchQuery}」に一致する申請がありません`}</p>
+              <button
+                onClick={() => { setSearchQuery(""); setSearchResults(null); }}
+                className="mt-3 text-sm text-blue-600 hover:text-blue-800 underline"
+              >
+                検索をクリア
+              </button>
+            </>
+          ) : filter === "all" ? "申請がありません" : `${filter === "active" ? "進行中" : "完了済み"}の申請がありません`}
         </div>
       ) : (
         <div className="space-y-3">
