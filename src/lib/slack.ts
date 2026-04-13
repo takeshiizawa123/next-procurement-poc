@@ -74,26 +74,44 @@ let client: WebClient | null = null;
  */
 const FORCE_TEST_MODE = true; // ★ 本番切替まで絶対に変更禁止
 const TEST_MODE = FORCE_TEST_MODE || process.env.TEST_MODE === "true";
-const TEST_REDIRECT_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
+// テスト専用プライベートチャンネル（自分だけが見える）
+const TEST_PRIVATE_CHANNEL = "C0A2HJ6S19P";
+// テスト中に許可するユーザー（自分のみ）
+const TEST_ALLOWED_USER = "U04FBAX6MEK"; // 伊澤
 
 /**
- * DM送信先を安全なチャンネルにリダイレクトする。
- * テスト環境ではユーザーID宛（U始まり）のDMを全てテストチャンネルにリダイレクトし、
- * 本番ユーザーにテスト通知が届くのを防止する。
+ * 全Slack送信先を安全なチャンネルにリダイレクトする。
+ * テスト環境では:
+ * - ユーザーID宛DM: 自分以外は全てテストチャンネルにリダイレクト
+ * - 公開チャンネル投稿: 全てテストプライベートチャンネルにリダイレクト
  *
- * ★ この関数を経由しないDM送信は禁止。新規DM送信箇所を追加する場合は必ずこの関数を使うこと。
+ * ★ この関数を経由しないSlack送信は禁止。
  */
 export function safeDmChannel(channel: string): string {
   if (!TEST_MODE) return channel;
+
+  // ユーザーID宛DM（U始まり）
   if (channel.startsWith("U")) {
-    if (TEST_REDIRECT_CHANNEL) return TEST_REDIRECT_CHANNEL;
-    // リダイレクト先未設定でも絶対にユーザーに送らない
-    console.error("[slack] CRITICAL: TEST_MODE but no redirect channel — blocking DM to", channel);
-    return "BLOCKED";
+    // 自分宛のDMはそのまま許可
+    if (channel === TEST_ALLOWED_USER) return channel;
+    // それ以外は全てテストチャンネルにリダイレクト
+    console.log(`[slack] TEST_MODE: redirecting DM ${channel} → ${TEST_PRIVATE_CHANNEL}`);
+    return TEST_PRIVATE_CHANNEL;
   }
+
+  // チャンネル投稿（C始まり）— テストプライベートチャンネル以外はリダイレクト
+  if (channel.startsWith("C") && channel !== TEST_PRIVATE_CHANNEL) {
+    console.log(`[slack] TEST_MODE: redirecting channel ${channel} → ${TEST_PRIVATE_CHANNEL}`);
+    return TEST_PRIVATE_CHANNEL;
+  }
+
   return channel;
 }
 
+/**
+ * Slackクライアントを取得する。
+ * TEST_MODE時は chat.postMessage / chat.postEphemeral の channel を自動リダイレクトする。
+ */
 export function getSlackClient(): WebClient {
   if (client) return client;
 
@@ -102,7 +120,31 @@ export function getSlackClient(): WebClient {
     throw new Error("SLACK_BOT_TOKEN must be set");
   }
 
-  client = new WebClient(botToken);
+  const rawClient = new WebClient(botToken);
+
+  if (TEST_MODE) {
+    // TEST_MODE: 全Slack API呼出しのchannelを自動リダイレクト
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chat = rawClient.chat as any;
+    const origPostMessage = chat.postMessage.bind(chat);
+    chat.postMessage = async (args: { channel?: string; [k: string]: unknown }) => {
+      if (args.channel) args.channel = safeDmChannel(args.channel);
+      return origPostMessage(args);
+    };
+    const origPostEphemeral = chat.postEphemeral.bind(chat);
+    chat.postEphemeral = async (args: { channel?: string; [k: string]: unknown }) => {
+      if (args.channel) args.channel = safeDmChannel(args.channel);
+      return origPostEphemeral(args);
+    };
+    const origUpdate = chat.update.bind(chat);
+    chat.update = async (args: { channel?: string; [k: string]: unknown }) => {
+      if (args.channel) args.channel = safeDmChannel(args.channel);
+      return origUpdate(args);
+    };
+    console.log("[slack] TEST_MODE: client wrapped — all channels auto-redirected to", TEST_PRIVATE_CHANNEL);
+  }
+
+  client = rawClient;
   return client;
 }
 
@@ -2145,7 +2187,7 @@ export async function notifyOps(
   }
   try {
     await slackClient.chat.postMessage({
-      channel: OPS_CHANNEL,
+      channel: safeDmChannel(OPS_CHANNEL),
       text,
       ...(blocks ? { blocks } : {}),
     });
