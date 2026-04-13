@@ -55,21 +55,41 @@ async function safeUpdateStatus(
 
 let client: WebClient | null = null;
 
-/** テストモード: 全DM送信をテストチャンネルにリダイレクト */
-// HOTFIX: 本番切替まで強制TEST_MODE — 従業員へのDM送信を防止
-const TEST_MODE = true; // process.env.TEST_MODE === "true";
+/**
+ * テストモード安全装置（多重防御）
+ *
+ * このシステムはテスト環境です。本番切替が完了するまで、
+ * 従業員への直接DM送信は絶対に行いません。
+ *
+ * 防御レイヤー:
+ * 1. FORCE_TEST_MODE = true（コード内ハードコード、本番切替時のみ解除）
+ * 2. 環境変数 TEST_MODE=true（Vercel設定、フォールバック）
+ * 3. safeDmChannel() が全DM送信箇所に適用済み
+ *
+ * 本番切替時の手順:
+ * 1. ユーザーの明示的な指示を受ける
+ * 2. FORCE_TEST_MODE を false に変更
+ * 3. Vercel環境変数 TEST_MODE を false に変更
+ * 4. 段階的に特定ユーザーのみ解除してテスト
+ */
+const FORCE_TEST_MODE = true; // ★ 本番切替まで絶対に変更禁止
+const TEST_MODE = FORCE_TEST_MODE || process.env.TEST_MODE === "true";
 const TEST_REDIRECT_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
 
 /**
  * DM送信先を安全なチャンネルにリダイレクトする。
- * TEST_MODE=true の場合、ユーザーID宛（U始まり）のDMを全てテストチャンネルにリダイレクトし、
+ * テスト環境ではユーザーID宛（U始まり）のDMを全てテストチャンネルにリダイレクトし、
  * 本番ユーザーにテスト通知が届くのを防止する。
+ *
+ * ★ この関数を経由しないDM送信は禁止。新規DM送信箇所を追加する場合は必ずこの関数を使うこと。
  */
 export function safeDmChannel(channel: string): string {
   if (!TEST_MODE) return channel;
-  // ユーザーIDへのDM（U始まり）をリダイレクト
-  if (channel.startsWith("U") && TEST_REDIRECT_CHANNEL) {
-    return TEST_REDIRECT_CHANNEL;
+  if (channel.startsWith("U")) {
+    if (TEST_REDIRECT_CHANNEL) return TEST_REDIRECT_CHANNEL;
+    // リダイレクト先未設定でも絶対にユーザーに送らない
+    console.error("[slack] CRITICAL: TEST_MODE but no redirect channel — blocking DM to", channel);
+    return "BLOCKED";
   }
   return channel;
 }

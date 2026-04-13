@@ -14,12 +14,22 @@
 - `clasp deploy`の実行（権限破壊でAPI全停止。`clasp push`のみ使用）
 - `WEBAPI_SHEET`を`'購買管理'`に変更（テストデータが本番混入）
 - 本番Slackチャンネルへの投稿（テストは`C0A2HJ6S19P`プライベートチャンネルのみ）
+- **`FORCE_TEST_MODE`を`false`に変更すること（ユーザーの明示的指示なしに絶対禁止）**
+- **`safeDmChannel()`を経由しないDM送信コードの追加（全DMは必ずこの関数を経由すること）**
 
 ## GASデプロイ手順
 1. `clasp push`でコード反映
 2. ユーザーにGASエディタから手動で新デプロイを依頼
 3. 新URLをVercelの`GAS_WEB_APP_URL`に設定 → `npx vercel --prod`
 
-## テスト安全装置
-- `TEST_MODE=true`（Vercel環境変数）: 全DM送信をプライベートチャンネルにリダイレクト
-- `safeDmChannel()`関数: ユーザーID宛DMを自動リダイレクト
+## テスト安全装置（多重防御 — 過去にDM誤送信インシデント発生）
+1. **`FORCE_TEST_MODE = true`**（`src/lib/slack.ts`にハードコード）: コードレベルで強制有効。環境変数に依存しない
+2. **`TEST_MODE=true`**（Vercel環境変数）: 第2防御レイヤー
+3. **`safeDmChannel()`関数**: ユーザーID宛DMを全てテストチャンネルにリダイレクト。リダイレクト先未設定時はDMをブロック
+4. **デプロイ前チェック**: `FORCE_TEST_MODE = true` がslack.tsに存在することを目視確認
+
+## 本番切替時の手順（ユーザーの明示的指示が必須）
+1. `FORCE_TEST_MODE` を `false` に変更
+2. Vercel環境変数 `TEST_MODE` を `false` に変更
+3. 特定ユーザーのみで段階テスト
+4. 全社展開
