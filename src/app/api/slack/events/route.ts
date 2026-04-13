@@ -20,7 +20,7 @@ import {
   loadPurchaseDraft,
   clearPurchaseDraft,
 } from "@/lib/slack";
-import { registerPurchase, updateStatus, getStatus, getRecentRequests, getEmployees } from "@/lib/gas-client";
+import { registerPurchase, updateStatus, getStatus, getRecentRequests, getEmployees, checkSlackEventProcessed } from "@/lib/gas-client";
 import { resolveApprovalRoute } from "@/lib/approval-router";
 import { createTripExpense } from "@/lib/mf-expense";
 import { generateTripPredictions } from "@/lib/prediction";
@@ -93,6 +93,24 @@ export async function POST(request: NextRequest) {
     // URL Verification
     if (payload.type === "url_verification") {
       return NextResponse.json({ challenge: payload.challenge });
+    }
+
+    // 冪等性チェック: Slackリトライで重複処理を防止
+    const deliveryId = request.headers.get("x-slack-retry-num")
+      ? `${request.headers.get("x-slack-unique-id") || slackTimestamp}-retry${request.headers.get("x-slack-retry-num")}`
+      : null;
+    // Interactive messages / view submissions はaction_idやview_idで冪等性確保
+    const interactionId = (payload.type === "block_actions" || payload.type === "view_submission")
+      ? (payload as Record<string, unknown>).trigger_id as string || null
+      : null;
+    const idempotencyKey = deliveryId || interactionId;
+    if (idempotencyKey) {
+      const eventType = (payload.type as string) || (payload.command as string) || "unknown";
+      const alreadyProcessed = await checkSlackEventProcessed(idempotencyKey, eventType);
+      if (alreadyProcessed) {
+        console.log(`[slack] Duplicate event skipped: ${idempotencyKey}`);
+        return new NextResponse("", { status: 200 });
+      }
     }
 
     // Slash Commands — 同期的に処理してレスポンスを返す

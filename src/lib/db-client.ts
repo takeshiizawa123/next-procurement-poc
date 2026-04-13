@@ -28,6 +28,7 @@ import {
   journalRows,
   accountCorrections,
   auditLog,
+  slackEventLog,
   type PurchaseRequest,
   type NewPurchaseRequest,
   type AuditLogEntry,
@@ -478,20 +479,30 @@ export async function updateStatus(
       }
     }
 
-    // 監査ログ用に更新前の値を取得
+    // 監査ログ用に更新前の値を取得（楽観的ロックにも使用）
     const [oldRow] = await db
-      .select({ status: purchaseRequests.status })
+      .select({ status: purchaseRequests.status, updatedAt: purchaseRequests.updatedAt })
       .from(purchaseRequests)
       .where(eq(purchaseRequests.poNumber, prNumber))
       .limit(1);
 
+    // 楽観的ロック: updatedAtが一致する行のみ更新（競合検出）
+    const conditions = [eq(purchaseRequests.poNumber, prNumber)];
+    if (oldRow?.updatedAt) {
+      conditions.push(eq(purchaseRequests.updatedAt, oldRow.updatedAt));
+    }
     const result = await db
       .update(purchaseRequests)
       .set(mapped)
-      .where(eq(purchaseRequests.poNumber, prNumber))
+      .where(and(...conditions))
       .returning({ poNumber: purchaseRequests.poNumber });
 
     if (result.length === 0) {
+      // oldRowが存在するなら楽観的ロック競合、存在しないなら未発見
+      if (oldRow) {
+        console.warn(`[db-client] updateStatus: optimistic lock conflict for ${prNumber}`);
+        return ng(`${prNumber} は他の操作で更新されました。再度お試しください`, 409);
+      }
       return ng(`PO番号 ${prNumber} が見つかりません`, 404);
     }
 
@@ -1402,5 +1413,36 @@ export async function getAuditLog(
   } catch (e) {
     console.warn("[db-client] getAuditLog failed:", e);
     return [];
+  }
+}
+
+// ===========================================
+// Slackイベント冪等性チェック
+// ===========================================
+
+/**
+ * Slackイベントが処理済みかチェックし、未処理なら記録して false を返す。
+ * 既に処理済みなら true を返す（呼び出し元はスキップすべき）。
+ */
+export async function checkSlackEventProcessed(
+  eventId: string,
+  eventType?: string,
+): Promise<boolean> {
+  try {
+    const existing = await db
+      .select({ eventId: slackEventLog.eventId })
+      .from(slackEventLog)
+      .where(eq(slackEventLog.eventId, eventId))
+      .limit(1);
+    if (existing.length > 0) return true; // 処理済み
+    // 未処理 → 記録
+    await db.insert(slackEventLog).values({
+      eventId,
+      eventType: eventType ?? null,
+    }).onConflictDoNothing();
+    return false;
+  } catch (e) {
+    console.warn("[db-client] checkSlackEventProcessed failed:", e);
+    return false; // エラー時は処理を続行（安全側に倒す）
   }
 }

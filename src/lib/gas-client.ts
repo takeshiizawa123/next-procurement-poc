@@ -69,4 +69,5 @@ export {
   getAccountCorrections,
   writeAuditLog,
   getAuditLog,
+  checkSlackEventProcessed,
 } from "./db-client";

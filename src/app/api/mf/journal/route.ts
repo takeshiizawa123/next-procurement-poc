@@ -147,10 +147,27 @@ export async function POST(request: NextRequest) {
     const amountSource = voucherAmount ? "証憑" : "発注";
     console.log("[mf-journal] Created:", { prNumber, journalId: journalResult.id, amountSource, amount });
 
-    // GASステータスを「計上済」に更新
-    await updateStatus(prNumber, {
-      "MF仕訳ID": String(journalResult.id),
-    });
+    // DB更新: 仕訳IDを記録。失敗時はDLQに記録（MF側の仕訳は作成済みのため）
+    try {
+      await updateStatus(prNumber, {
+        "MF仕訳ID": String(journalResult.id),
+      });
+    } catch (dbError) {
+      console.error("[mf-journal] DB update failed after journal creation:", { prNumber, journalId: journalResult.id, error: dbError });
+      // DLQに記録して後で手動リカバリ可能にする
+      try {
+        const { executeWithDLQ } = await import("@/lib/retry");
+        await executeWithDLQ(
+          prNumber,
+          "mf_journal_db_update",
+          async () => { await updateStatus(prNumber, { "MF仕訳ID": String(journalResult.id) }); },
+          { maxRetries: 2, payload: { prNumber, journalId: journalResult.id } },
+        );
+      } catch {
+        // DLQ記録も失敗した場合はログに残す（MF仕訳IDはレスポンスで返すのでユーザーは把握可能）
+        console.error("[mf-journal] CRITICAL: Both DB update and DLQ recording failed:", { prNumber, journalId: journalResult.id });
+      }
+    }
 
     // Slack通知
     try {

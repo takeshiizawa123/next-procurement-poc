@@ -1,7 +1,7 @@
 "use client";
 
 import { ReactNode, useState, useEffect } from "react";
-import { SessionProvider } from "next-auth/react";
+import { SessionProvider, signOut } from "next-auth/react";
 import { UserProvider, useUser } from "@/lib/user-context";
 
 function Nav() {
@@ -40,8 +40,11 @@ function Nav() {
           </a>
         ))}
         {mounted && user.loaded && user.name && (
-          <span className="ml-auto text-xs text-gray-400 shrink-0">
+          <span className="ml-auto text-xs text-gray-400 shrink-0 flex items-center gap-2">
             {user.name}{user.isAdmin ? "（管理本部）" : ""}
+            <button onClick={() => signOut({ callbackUrl: "/auth/signin" })} className="text-gray-400 hover:text-red-500 transition-colors" title="ログアウト">
+              ログアウト
+            </button>
           </span>
         )}
       </div>

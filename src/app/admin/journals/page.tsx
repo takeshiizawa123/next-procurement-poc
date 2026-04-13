@@ -741,7 +741,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
                   <button onClick={onRegister} className="text-xs px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 shrink-0">再試行</button>
                 </div>
               ) : (
-                <button onClick={onRegister} disabled={isRegistering || hasEdits}
+                <button onClick={onRegister} disabled={isRegistering || isSaving || hasEdits}
                   className="flex-1 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
                   title={hasEdits ? "先に保存してください" : ""}>
                   {isRegistering ? "登録中..." : `仕訳登録（¥${journalAmount.toLocaleString()}）`}
