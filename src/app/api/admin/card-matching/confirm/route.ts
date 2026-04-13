@@ -6,7 +6,7 @@ import {
   resolveSubAccountCode,
   resolveTaxCode,
 } from "@/lib/mf-accounting";
-import { requireBearerAuth } from "@/lib/api-auth";
+import { requireAdminAuth } from "@/lib/api-auth";
 
 /**
  * カード照合確定API（認証必須）
@@ -28,7 +28,7 @@ import { requireBearerAuth } from "@/lib/api-auth";
  * 差額がある場合は調整仕訳も自動作成する。
  */
 export async function POST(request: NextRequest) {
-  const authError = requireBearerAuth(request);
+  const authError = requireAdminAuth(request);
   if (authError) return authError;
 
   try {

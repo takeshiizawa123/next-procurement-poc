@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { accountCorrections } from "@/db/schema";
 import { desc, sql } from "drizzle-orm";
-import { requireBearerAuth } from "@/lib/api-auth";
+import { requireAdminAuth } from "@/lib/api-auth";
 
 /**
  * 勘定科目修正記録API
@@ -12,7 +12,7 @@ import { requireBearerAuth } from "@/lib/api-auth";
  */
 
 export async function POST(request: NextRequest) {
-  const authError = requireBearerAuth(request);
+  const authError = requireAdminAuth(request);
   if (authError) return authError;
 
   try {
@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  const authError = requireBearerAuth(request);
+  const authError = requireAdminAuth(request);
   if (authError) return authError;
 
   try {

@@ -25,8 +25,23 @@ export function requireBearerAuth(request: NextRequest): NextResponse | null {
 }
 
 /**
+ * 管理者API認証（ブラウザからの管理操作用）
+ * INTERNAL_API_KEYで認証 + SLACK_ADMIN_MEMBERSで管理者チェック
+ * cronからのBearer token呼出しも引き続き許可
+ */
+export function requireAdminAuth(request: NextRequest): NextResponse | null {
+  // Bearer token（cron/サーバ間）は従来通り許可
+  const authHeader = request.headers.get("authorization");
+  if (CRON_SECRET && authHeader === `Bearer ${CRON_SECRET}`) return null;
+  // ブラウザからはAPIキー認証
+  const apiKeyResult = requireApiKey(request);
+  if (apiKeyResult) return apiKeyResult; // 認証失敗
+  return null; // 認証成功
+}
+
+/**
  * ブラウザ呼出し認証（INTERNAL_API_KEY）
- * クエリパラメータ ?apiKey=xxx またはヘッダ x-api-key で受付
+ * ヘッダ x-api-key で受付（クエリパラメータは非推奨）
  */
 export function requireApiKey(request: NextRequest): NextResponse | null {
   if (!INTERNAL_API_KEY) {

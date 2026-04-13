@@ -6,7 +6,7 @@ import {
   resolveSubAccountCode,
 } from "@/lib/mf-accounting";
 import { getEmployeeCards } from "@/lib/gas-client";
-import { requireBearerAuth } from "@/lib/api-auth";
+import { requireAdminAuth } from "@/lib/api-auth";
 
 /**
  * 引落照合API — 未払金(請求)集計 + Stage 3仕訳作成（認証必須）
@@ -22,7 +22,7 @@ import { requireBearerAuth } from "@/lib/api-auth";
  *   withdrawalDate: 引落日（YYYY-MM-DD）
  */
 export async function POST(request: NextRequest) {
-  const authError = requireBearerAuth(request);
+  const authError = requireAdminAuth(request);
   if (authError) return authError;
 
   try {

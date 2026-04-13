@@ -6,7 +6,7 @@ import {
 } from "@/lib/gas-client";
 import { getJournals } from "@/lib/mf-accounting";
 import { executeMatching, type CardStatementInput } from "@/lib/card-matcher";
-import { requireBearerAuth } from "@/lib/api-auth";
+import { requireAdminAuth } from "@/lib/api-auth";
 import { updatePredictionStatus } from "@/lib/gas-client";
 import { createJournal, resolveAccountCode, resolveTaxCode } from "@/lib/mf-accounting";
 
@@ -24,7 +24,7 @@ import { createJournal, resolveAccountCode, resolveTaxCode } from "@/lib/mf-acco
  * 2フェーズ照合を実行、4区分の結果を返す。
  */
 export async function POST(request: NextRequest) {
-  const authError = requireBearerAuth(request);
+  const authError = requireAdminAuth(request);
   if (authError) return authError;
 
   try {
