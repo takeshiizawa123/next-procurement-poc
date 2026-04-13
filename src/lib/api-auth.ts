@@ -36,9 +36,14 @@ export function requireApiKey(request: NextRequest): NextResponse | null {
     console.error("[auth] INTERNAL_API_KEY is not configured — rejecting request");
     return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
   }
-  const fromQuery = request.nextUrl.searchParams.get("apiKey");
   const fromHeader = request.headers.get("x-api-key");
-  if (fromQuery === INTERNAL_API_KEY || fromHeader === INTERNAL_API_KEY) return null;
+  if (fromHeader === INTERNAL_API_KEY) return null;
+  // クエリパラメータは廃止（ログ漏洩リスク）
+  const fromQuery = request.nextUrl.searchParams.get("apiKey");
+  if (fromQuery === INTERNAL_API_KEY) {
+    console.warn("[auth] API key via query parameter is deprecated — use x-api-key header");
+    return null; // 移行期間中は許可するが警告
+  }
   // Bearer tokenも受け付ける（サーバ間呼出し互換）
   const authHeader = request.headers.get("authorization");
   if (CRON_SECRET && authHeader === `Bearer ${CRON_SECRET}`) return null;

@@ -149,6 +149,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: true, pending: pending.length, reminded, approvalReminded, orderReminded });
   } catch (error) {
     console.error("[voucher-reminder] Error:", error);
+    // OPS通知（Cron失敗アラート）
+    try {
+      const client = getSlackClient();
+      const opsChannel = process.env.SLACK_OPS_CHANNEL;
+      if (opsChannel) {
+        await client.chat.postMessage({ channel: opsChannel, text: `🚨 *Cron失敗: voucher-reminder*\nエラー: ${String(error).slice(0, 300)}` });
+      }
+    } catch { /* 通知失敗は無視 */ }
     return NextResponse.json({ ok: false, error: String(error) }, { status: 500 });
   }
 }

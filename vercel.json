@@ -31,6 +31,10 @@
     {
       "path": "/api/cron/db-backup",
       "schedule": "0 18 * * *"
+    },
+    {
+      "path": "/api/cron/data-cleanup",
+      "schedule": "0 19 1 * *"
     }
   ]
 }

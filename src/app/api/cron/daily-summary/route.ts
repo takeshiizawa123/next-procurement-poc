@@ -141,6 +141,13 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error("[daily-summary] Error:", error);
+    // OPS通知（Cron失敗アラート）
+    try {
+      const client = getSlackClient();
+      if (OPS_CHANNEL) {
+        await client.chat.postMessage({ channel: OPS_CHANNEL, text: `🚨 *Cron失敗: daily-summary*\nエラー: ${String(error).slice(0, 300)}` });
+      }
+    } catch { /* 通知失敗は無視 */ }
     return NextResponse.json({ ok: false, error: String(error) }, { status: 500 });
   }
 }

@@ -89,6 +89,15 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (e) {
+    console.error("[trip-controls] Error:", e);
+    // OPS通知（Cron失敗アラート）
+    try {
+      const client = getSlackClient();
+      const opsChannel = process.env.SLACK_OPS_CHANNEL;
+      if (opsChannel) {
+        await client.chat.postMessage({ channel: opsChannel, text: `🚨 *Cron失敗: trip-controls*\nエラー: ${String(e).slice(0, 300)}` });
+      }
+    } catch { /* 通知失敗は無視 */ }
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e) },
       { status: 500 },

@@ -131,6 +131,15 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error("[db-backup] Error:", error);
+    // OPS通知（Cron失敗アラート）
+    try {
+      const { getSlackClient } = await import("@/lib/slack");
+      const client = getSlackClient();
+      const opsChannel = process.env.SLACK_OPS_CHANNEL;
+      if (opsChannel) {
+        await client.chat.postMessage({ channel: opsChannel, text: `🚨 *Cron失敗: db-backup*\nエラー: ${String(error).slice(0, 300)}` });
+      }
+    } catch { /* 通知失敗は無視 */ }
     return NextResponse.json(
       { ok: false, error: error instanceof Error ? error.message : String(error) },
       { status: 500 },
