@@ -56,7 +56,8 @@ async function safeUpdateStatus(
 let client: WebClient | null = null;
 
 /** テストモード: 全DM送信をテストチャンネルにリダイレクト */
-const TEST_MODE = process.env.TEST_MODE === "true";
+// HOTFIX: 本番切替まで強制TEST_MODE — 従業員へのDM送信を防止
+const TEST_MODE = true; // process.env.TEST_MODE === "true";
 const TEST_REDIRECT_CHANNEL = process.env.SLACK_PURCHASE_CHANNEL || "";
 
 /**
