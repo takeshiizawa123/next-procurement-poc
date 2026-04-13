@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
-import { createHmac, timingSafeEqual } from "crypto";
+import { verifySlackSignature } from "@/lib/slack-signature";
 import {
   getSlackClient,
   actionHandlers,
@@ -31,28 +31,6 @@ export const maxDuration = 60;
 
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || "";
 
-/** Slack リクエスト署名を検証（HMAC-SHA256） */
-function verifySlackSignature(
-  body: string,
-  timestamp: string,
-  signature: string,
-): boolean {
-  if (!SIGNING_SECRET) return false;
-  // リプレイ攻撃防止: 5分以上古いリクエストを拒否
-  const now = Math.floor(Date.now() / 1000);
-  const ts = Number(timestamp);
-  if (!Number.isFinite(ts) || Math.abs(now - ts) > 300) return false;
-
-  const sigBasestring = `v0:${timestamp}:${body}`;
-  const mySignature = "v0=" + createHmac("sha256", SIGNING_SECRET).update(sigBasestring).digest("hex");
-
-  try {
-    return timingSafeEqual(Buffer.from(mySignature), Buffer.from(signature));
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Slack Events / Interactive Messages / Slash Commands の統一エンドポイント
  */
@@ -70,7 +48,7 @@ export async function POST(request: NextRequest) {
       console.error("[slack] SLACK_SIGNING_SECRET is not configured — rejecting request");
       return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
     }
-    if (!slackSignature || !verifySlackSignature(body, slackTimestamp, slackSignature)) {
+    if (!slackSignature || !verifySlackSignature(body, slackTimestamp, slackSignature, SIGNING_SECRET)) {
       console.warn("[slack] signature verification failed — missing or invalid signature");
       return NextResponse.json({ error: "invalid signature" }, { status: 401 });
     }
