@@ -155,7 +155,7 @@ type Tab = "pending" | "registered" | "amazon";
 
 // --- 仕訳明細コンポーネント ---
 
-function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onRegister, isRegistering, result }: {
+function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onRegister, isRegistering, result, onEstimation }: {
   r: PurchaseRequest;
   edits: Partial<JournalEdits>;
   onEdit: (field: keyof JournalEdits, value: string) => void;
@@ -166,6 +166,7 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
   onRegister: () => void;
   isRegistering: boolean;
   result?: { ok: boolean; message: string } | null;
+  onEstimation?: (est: { account: string; confidence: string; taxType?: string }) => void;
 }) {
   const accountNames = masters ? masters.accounts.map((a) => a.name) : null;
   const taxNames = masters ? masters.taxes.map((t) => t.name) : null;
@@ -260,11 +261,13 @@ function JournalDetail({ r, edits, onEdit, masters, onSave, isSaving, saved, onR
       .then((res) => res.json())
       .then((json: { account?: string; confidence?: string; reason?: string; taxType?: string }) => {
         if (json.account) {
-          setEstimation(json as { account: string; confidence: string; reason: string; taxType?: string });
+          const est = json as { account: string; confidence: string; reason: string; taxType?: string };
+          setEstimation(est);
+          onEstimation?.(est);
         }
       })
       .catch(() => {});
-  }, [ocr, r.prNumber]);
+  }, [ocr, r.prNumber]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // masters ロード時にスナップ結果を edits に反映（未編集フィールドのみ）
   // rawDebit が空の場合は借方・税区分を書かない（AI推定待ち）
@@ -772,6 +775,7 @@ export default function JournalManagement() {
   const [edits, setEdits] = useState<Record<string, Partial<JournalEdits>>>({});
   const [masters, setMasters] = useState<MfMasters | null>(null);
   const [mastersError, setMastersError] = useState("");
+  const [estimations, setEstimations] = useState<Record<string, { account: string; confidence: string; taxType?: string }>>({});
   const [mfAuth, setMfAuth] = useState<{
     authenticated: boolean;
     cookieDaysRemaining: number | null;
@@ -891,6 +895,34 @@ export default function JournalManagement() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ updates }),
       });
+
+      // 科目変更があれば修正履歴を記録（学習ループ用）
+      if (e.debitAccount) {
+        const r = requests.find((req) => req.prNumber === prNumber);
+        const est = estimations[prNumber];
+        const originalAccount = r?.accountTitle?.split("（")[0]?.trim() || "";
+        const estimatedAccount = est?.account || originalAccount || "";
+        if (estimatedAccount && e.debitAccount !== estimatedAccount) {
+          apiFetch("/api/admin/account-correction", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              poNumber: prNumber,
+              itemName: r?.itemName || "",
+              supplierName: r?.supplierName || "",
+              department: r?.department || "",
+              totalAmount: r?.totalAmount || 0,
+              estimatedAccount,
+              estimatedTaxType: est?.taxType || "",
+              estimatedConfidence: est?.confidence || "",
+              correctedAccount: e.debitAccount,
+              correctedTaxType: e.taxCategory || "",
+              correctedBy: user.name || "admin",
+            }),
+          }).catch(() => {}); // 修正記録の失敗は保存処理に影響させない
+        }
+      }
+
       setSavedEdits((prev) => ({ ...prev, [prNumber]: true }));
       setEdits((prev) => ({ ...prev, [prNumber]: {} }));
     } catch {
@@ -1165,7 +1197,8 @@ export default function JournalManagement() {
                           <td colSpan={12}>
                             <JournalDetail r={r} edits={e} onEdit={(field, value) => handleEdit(r.prNumber, field, value)} masters={masters}
                               onSave={() => saveEdits(r.prNumber)} isSaving={saving[r.prNumber] || false} saved={savedEdits[r.prNumber] || false}
-                              onRegister={() => registerJournal(r.prNumber)} isRegistering={isReg} result={result} />
+                              onRegister={() => registerJournal(r.prNumber)} isRegistering={isReg} result={result}
+                              onEstimation={(est) => setEstimations((prev) => ({ ...prev, [r.prNumber]: est }))} />
                           </td>
                         </tr>
                       )}
