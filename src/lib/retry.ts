@@ -91,6 +91,17 @@ export async function executeWithDLQ<T>(
       }
     } catch { /* 通知失敗は無視 */ }
 
+    // Notionにもエラー記録を試みる（失敗しても無視）
+    try {
+      const { reportError } = await import("@/lib/notion");
+      await reportError({
+        taskType,
+        taskId,
+        errorMessage: errorMessage.slice(0, 500),
+        severity: "high",
+      });
+    } catch { /* Notion同期失敗は無視 */ }
+
     return null;
   }
 }

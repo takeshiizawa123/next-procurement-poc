@@ -11,6 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@notionhq/client": "^5.18.0",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.15.0",
     "@upstash/redis": "^1.37.0",

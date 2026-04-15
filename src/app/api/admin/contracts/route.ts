@@ -124,6 +124,21 @@ export async function POST(request: NextRequest) {
       `[contracts] Created: ${contractNumber} ${supplierName} (${category})`,
     );
 
+    // Notionに非同期で同期（失敗しても契約作成は成功）
+    import("@/lib/notion").then(({ syncContract }) =>
+      syncContract({
+        contractNumber,
+        category,
+        supplierName,
+        monthlyAmount: body.monthlyAmount || 0,
+        accountTitle: body.accountTitle,
+        department: body.department,
+        startDate: body.contractStartDate,
+        endDate: body.contractEndDate || undefined,
+        isActive: true,
+      }),
+    ).catch(() => {});
+
     return NextResponse.json({ ok: true, contract: result });
   } catch (error) {
     console.error("[contracts] POST Error:", error);
