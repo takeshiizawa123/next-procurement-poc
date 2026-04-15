@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { apiFetch, apiFetchSWR, swrInvalidate } from "@/lib/api-client";
 import { useUser } from "@/lib/user-context";
 import AmazonMatchingTab from "./AmazonMatchingTab";
+import ContractJournalTab from "./ContractJournalTab";
 
 const CREDIT_MAP: Record<string, { account: string; sub: string }[]> = {
   "MFカード": [{ account: "未払金", sub: "MFカード:未請求" }, { account: "未払金", sub: "MFカード:請求" }],
@@ -151,7 +152,7 @@ interface JournalEdits {
   memo: string;
 }
 
-type Tab = "pending" | "registered" | "amazon";
+type Tab = "pending" | "registered" | "amazon" | "contracts";
 
 // --- 仕訳明細コンポーネント ---
 
@@ -1090,6 +1091,9 @@ export default function JournalManagement() {
           <button onClick={() => setTab("amazon")} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === "amazon" ? "bg-blue-100 text-blue-800" : "bg-white text-gray-600 hover:bg-gray-100"}`}>
             Amazon照合
           </button>
+          <button onClick={() => setTab("contracts")} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === "contracts" ? "bg-purple-100 text-purple-800" : "bg-white text-gray-600 hover:bg-gray-100"}`}>
+            契約仕訳
+          </button>
         </div>
 
         {tab === "pending" && pending.length > 0 && (
@@ -1101,7 +1105,9 @@ export default function JournalManagement() {
           </div>
         )}
 
-        {tab === "amazon" ? (
+        {tab === "contracts" ? (
+          <ContractJournalTab masters={masters} />
+        ) : tab === "amazon" ? (
           <AmazonMatchingTab requests={requests} />
         ) : loading ? (
           <div className="text-center py-12 text-gray-400">読み込み中...</div>
