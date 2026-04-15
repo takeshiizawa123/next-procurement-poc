@@ -33,3 +33,14 @@
 2. Vercel環境変数 `TEST_MODE` を `false` に変更
 3. 特定ユーザーのみで段階テスト
 4. 全社展開
+
+# Supabaseセキュリティルール（必須）
+
+## RLS（Row Level Security）
+- **`CREATE TABLE`を書いたら必ず`ALTER TABLE ... ENABLE ROW LEVEL SECURITY`を同じマイグレーションに含める**
+- このプロジェクトはservice_role_key経由のバックエンドアクセスのみ（RLSバイパス）なので、ポリシー追加は不要だがRLS有効化は必須
+- anon/authenticatedロールからの直接アクセスを防ぐため
+
+## ビュー
+- `SECURITY DEFINER`ビューは使用禁止。必要な場合は`security_invoker = true`を明示する
+- ビューはマイグレーションファイルで管理し、SQL Editorでの手動作成は禁止
