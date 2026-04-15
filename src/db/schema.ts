@@ -555,3 +555,136 @@ export const accountCorrections = pgTable(
 );
 
 export type AccountCorrection = typeof accountCorrections.$inferSelect;
+
+// ========================================================================
+// 継続契約マスタ（contracts）— 役務提供・SaaS・派遣等の管理
+// ========================================================================
+
+export const contractCategoryEnum = pgEnum("contract_category", [
+  "派遣",
+  "外注",
+  "SaaS",
+  "顧問",
+  "賃貸",
+  "保守",
+  "清掃",
+  "その他",
+]);
+
+export const billingTypeEnum = pgEnum("billing_type", [
+  "固定",
+  "従量",
+  "カード自動",
+]);
+
+export const contractInvoiceStatusEnum = pgEnum("contract_invoice_status", [
+  "未受領",
+  "受領済",
+  "承認済",
+  "仕訳済",
+  "見積計上",
+]);
+
+export const contracts = pgTable(
+  "contracts",
+  {
+    id: serial("id").primaryKey(),
+    contractNumber: varchar("contract_number", { length: 30 }).notNull().unique(),
+
+    // 分類
+    category: contractCategoryEnum("category").notNull(),
+    billingType: billingTypeEnum("billing_type").notNull(),
+
+    // 取引先
+    supplierName: varchar("supplier_name", { length: 200 }).notNull(),
+    supplierContact: varchar("supplier_contact", { length: 200 }),
+
+    // 金額
+    monthlyAmount: integer("monthly_amount"),
+    annualAmount: integer("annual_amount"),
+    budgetAmount: integer("budget_amount"),
+
+    // 契約期間
+    contractStartDate: date("contract_start_date").notNull(),
+    contractEndDate: date("contract_end_date"),
+    renewalType: varchar("renewal_type", { length: 20 }).notNull().default("自動更新"),
+    renewalAlertDays: integer("renewal_alert_days").notNull().default(60),
+
+    // 会計
+    accountTitle: varchar("account_title", { length: 100 }).notNull(),
+    mfAccountCode: varchar("mf_account_code", { length: 20 }),
+    mfTaxCode: varchar("mf_tax_code", { length: 20 }),
+    mfDepartmentCode: varchar("mf_department_code", { length: 20 }),
+    mfCounterpartyCode: varchar("mf_counterparty_code", { length: 20 }),
+
+    // 管理
+    department: varchar("department", { length: 100 }).notNull(),
+    requesterSlackId: varchar("requester_slack_id", { length: 30 }),
+    approverSlackId: varchar("approver_slack_id", { length: 30 }),
+
+    // 自動化
+    autoApprove: boolean("auto_approve").notNull().default(false),
+    autoAccrue: boolean("auto_accrue").notNull().default(true),
+
+    // ステータス
+    isActive: boolean("is_active").notNull().default(true),
+    notes: text("notes"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("contracts_active_idx").on(t.isActive),
+    index("contracts_end_date_idx").on(t.contractEndDate),
+    index("contracts_category_idx").on(t.category),
+    index("contracts_supplier_idx").on(t.supplierName),
+  ],
+);
+
+export type Contract = typeof contracts.$inferSelect;
+export type NewContract = typeof contracts.$inferInsert;
+
+// ========================================================================
+// 月次請求書レコード（contract_invoices）
+// ========================================================================
+
+export const contractInvoices = pgTable(
+  "contract_invoices",
+  {
+    id: serial("id").primaryKey(),
+    contractId: integer("contract_id").notNull(),
+
+    // 請求
+    billingMonth: varchar("billing_month", { length: 7 }).notNull(),
+    invoiceAmount: integer("invoice_amount"),
+    expectedAmount: integer("expected_amount"),
+    amountDiff: integer("amount_diff"),
+
+    // ステータス
+    status: contractInvoiceStatusEnum("status").notNull().default("未受領"),
+
+    // 承認
+    approvedBy: varchar("approved_by", { length: 100 }),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+
+    // 証憑
+    voucherFileUrl: text("voucher_file_url"),
+    voucherUploadedAt: timestamp("voucher_uploaded_at", { withTimezone: true }),
+
+    // 仕訳
+    journalId: integer("journal_id"),
+    accrualJournalId: integer("accrual_journal_id"),
+    reversalJournalId: integer("reversal_journal_id"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("contract_invoices_contract_idx").on(t.contractId),
+    index("contract_invoices_month_idx").on(t.billingMonth),
+    index("contract_invoices_status_idx").on(t.status),
+  ],
+);
+
+export type ContractInvoice = typeof contractInvoices.$inferSelect;
+export type NewContractInvoice = typeof contractInvoices.$inferInsert;
