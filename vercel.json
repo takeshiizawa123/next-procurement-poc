@@ -35,6 +35,18 @@
     {
       "path": "/api/cron/data-cleanup",
       "schedule": "0 19 1 * *"
+    },
+    {
+      "path": "/api/cron/contract-alerts",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/contract-accrual",
+      "schedule": "0 14 28 * *"
+    },
+    {
+      "path": "/api/cron/contract-reversal",
+      "schedule": "0 16 1 * *"
     }
   ]
 }
