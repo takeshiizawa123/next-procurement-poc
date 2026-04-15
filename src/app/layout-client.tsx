@@ -30,6 +30,7 @@ function Nav() {
       { href: "/admin/trip-controls", label: "出張統制" },
       { href: "/admin/approval-routes", label: "承認設定" },
       { href: "/admin/contracts", label: "契約管理" },
+      { href: "/admin/notion-sync", label: "Notion" },
     );
   }
 
