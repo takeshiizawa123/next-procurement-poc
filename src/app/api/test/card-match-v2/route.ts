@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchAllCardStatements } from "@/lib/mf-expense";
-import { matchByOfficeMember } from "@/lib/card-matcher-v2";
+import { matchByOfficeMember, matchContractCards } from "@/lib/card-matcher-v2";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
@@ -11,7 +11,8 @@ const CRON_SECRET = process.env.CRON_SECRET || "";
  * 認証: Bearer CRON_SECRET
  *
  * - MF経費から明細取得
- * - office_member_id ベースで予測テーブルとマッチング
+ * - A) office_member_id ベースで予測テーブルとマッチング
+ * - B) supplierName ベースで契約マスタ(カード自動)とマッチング
  * - 結果をJSON返却（実際のDB更新は行わない dry-run）
  */
 export async function GET(request: NextRequest) {
@@ -30,14 +31,20 @@ export async function GET(request: NextRequest) {
     const t0 = Date.now();
     const statements = await fetchAllCardStatements({ from, to, officeWide });
     const t1 = Date.now();
-    const summary = await matchByOfficeMember(statements);
+    const predictionSummary = await matchByOfficeMember(statements);
     const t2 = Date.now();
+    const contractSummary = await matchContractCards(statements);
+    const t3 = Date.now();
 
     return NextResponse.json({
       ok: true,
       period: { from, to },
       officeWide,
-      timing: { fetchMs: t1 - t0, matchMs: t2 - t1 },
+      timing: {
+        fetchMs: t1 - t0,
+        predictionMatchMs: t2 - t1,
+        contractMatchMs: t3 - t2,
+      },
       sourceCounts: Object.fromEntries(
         Object.entries(
           statements.reduce<Record<string, number>>((acc, s) => {
@@ -46,15 +53,15 @@ export async function GET(request: NextRequest) {
           }, {}),
         ),
       ),
-      summary: {
-        total: summary.total,
-        confident: summary.confident,
-        candidate: summary.candidate,
-        unmatched: summary.unmatched,
-        unreported: summary.unreported,
+      // A) 予測照合
+      predictionMatch: {
+        total: predictionSummary.total,
+        confident: predictionSummary.confident,
+        candidate: predictionSummary.candidate,
+        unmatched: predictionSummary.unmatched,
+        unreported: predictionSummary.unreported,
       },
-      // サンプル結果5件のみ（機密情報を含むため）
-      sampleResults: summary.results.slice(0, 5).map((r) => ({
+      predictionSample: predictionSummary.results.slice(0, 5).map((r) => ({
         statementId: r.statementId,
         predictionId: r.predictionId,
         status: r.status,
@@ -63,6 +70,25 @@ export async function GET(request: NextRequest) {
         memberName: r.statement.memberName,
         amount: r.statement.amount,
         date: r.statement.date,
+      })),
+      // B) 契約照合
+      contractMatch: {
+        total: contractSummary.total,
+        confident: contractSummary.confident,
+        candidate: contractSummary.candidate,
+        unmatched: contractSummary.unmatched,
+      },
+      contractAggregates: contractSummary.aggregates,
+      contractSample: contractSummary.results.slice(0, 5).map((r) => ({
+        statementId: r.statementId,
+        contractId: r.contractId,
+        contractNumber: r.contractNumber,
+        billingMonth: r.billingMonth,
+        status: r.status,
+        score: r.score,
+        reason: r.reason,
+        amount: r.statement.amount,
+        remark: r.statement.remark,
       })),
     });
   } catch (e) {
