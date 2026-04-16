@@ -34,12 +34,13 @@ export function getNotionClient(): Client | null {
 // ページ・DB ID（環境変数から取得）
 // ========================================
 
+// 環境変数の値に改行や空白が混入していても動作するよう防御的にtrim
 const PAGE_IDS = {
-  flowDiagram: process.env.NOTION_FLOW_PAGE_ID || "",
-  promptDb: process.env.NOTION_PROMPT_DB_ID || "",
-  changelogDb: process.env.NOTION_CHANGELOG_DB_ID || "",
-  errorDb: process.env.NOTION_ERROR_DB_ID || "",
-  contractDb: process.env.NOTION_CONTRACT_DB_ID || "",
+  flowDiagram: (process.env.NOTION_FLOW_PAGE_ID || "").trim(),
+  promptDb: (process.env.NOTION_PROMPT_DB_ID || "").trim(),
+  changelogDb: (process.env.NOTION_CHANGELOG_DB_ID || "").trim(),
+  errorDb: (process.env.NOTION_ERROR_DB_ID || "").trim(),
+  contractDb: (process.env.NOTION_CONTRACT_DB_ID || "").trim(),
 };
 
 // ========================================
@@ -206,10 +207,8 @@ export async function recordChangelog(data: {
     console.log(`[notion] Recorded changelog: ${shortHash}`);
     return true;
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error(`[notion] recordChangelog failed for ${shortHash}:`, msg);
-    // 呼出元で詳細を拾えるようにre-throw
-    throw new Error(`recordChangelog(${shortHash}): ${msg}`);
+    console.error("[notion] recordChangelog failed:", e);
+    return false;
   }
 }
 

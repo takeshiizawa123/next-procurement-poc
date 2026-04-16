@@ -55,7 +55,6 @@ export const GET = withCronGuard("changelog-sync", async (_request: NextRequest)
   let recorded = 0;
   let skipped = 0;
   let failed = 0;
-  const errors: string[] = [];
 
   for (const c of commits) {
     // 各コミットの詳細（ファイル変更数）を取得
@@ -73,23 +72,15 @@ export const GET = withCronGuard("changelog-sync", async (_request: NextRequest)
       }
     } catch { /* ファイル数取得失敗は無視 */ }
 
-    try {
-      const ok = await recordChangelog({
-        commitHash: c.sha,
-        message: c.commit.message.split("\n")[0],
-        author: c.commit.author.name,
-        date: c.commit.author.date.split("T")[0],
-        filesChanged,
-      });
-      if (ok) recorded++;
-      else {
-        failed++;
-        errors.push(`${c.sha.slice(0,7)}: returned false`);
-      }
-    } catch (e) {
-      failed++;
-      errors.push(`${c.sha.slice(0,7)}: ${e instanceof Error ? e.message : String(e)}`);
-    }
+    const ok = await recordChangelog({
+      commitHash: c.sha,
+      message: c.commit.message.split("\n")[0],
+      author: c.commit.author.name,
+      date: c.commit.author.date.split("T")[0],
+      filesChanged,
+    });
+    if (ok) recorded++;
+    else failed++;
   }
 
   console.log(`[changelog-sync] commits fetched=${commits.length}, recorded=${recorded}, skipped=${skipped}, failed=${failed}`);
@@ -100,6 +91,5 @@ export const GET = withCronGuard("changelog-sync", async (_request: NextRequest)
     commitsFetched: commits.length,
     recorded,
     failed,
-    errors: errors.slice(0, 3), // 診断用
   });
 });
