@@ -95,36 +95,24 @@ export default function ContractJournalTab({ masters }: Props) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prNumber: contract.contractNumber,
-          overrides: {
-            debitAccount: contract.accountTitle,
-            department: contract.department,
-            memo: `${invoice.billingMonth.replace("-", "/")} ${contract.contractNumber} ${contract.supplierName}`,
-          },
-          // 契約仕訳用の追加フィールド
           contractJournal: {
             contractId: contract.id,
             invoiceId: invoice.id,
             amount,
             supplierName: contract.supplierName,
           },
+          overrides: {
+            debitAccount: contract.accountTitle,
+            department: contract.department,
+            memo: `${invoice.billingMonth.replace("-", "/")} ${contract.contractNumber} ${contract.supplierName}`,
+          },
         }),
       });
       const data = await res.json();
       if (res.ok && data.ok) {
         setResults((prev) => ({ ...prev, [invKey]: { ok: true, message: `MF仕訳ID: ${data.journalId}` } }));
-        // 請求書ステータスを更新
-        await apiFetch(`/api/admin/contracts/${contract.id}/invoices`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            billingMonth: invoice.billingMonth,
-            invoiceAmount: amount,
-            status: "仕訳済",
-            journalId: data.journalId,
-          }),
-        });
-        fetchData(); // リフレッシュ
+        // API側でcontract_invoicesのステータス更新まで完結するためリフレッシュのみ
+        fetchData();
       } else {
         setResults((prev) => ({ ...prev, [invKey]: { ok: false, message: data.error || "登録失敗" } }));
       }

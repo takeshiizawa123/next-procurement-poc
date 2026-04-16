@@ -523,6 +523,87 @@ export async function buildJournalFromPurchase(params: {
   };
 }
 
+/**
+ * 契約マスタ + 請求書データから仕訳リクエストを構築
+ *
+ * buildJournalFromPurchase との違い:
+ * - 契約マスタに設定済みのMFコードを直接使用（AI推定不要）
+ * - 貸方は常に買掛金（契約は請求書払い前提）
+ * - メモに CT- プレフィックスで購買仕訳と区別
+ */
+export async function buildJournalFromContract(params: {
+  transactionDate: string;
+  contractNumber: string;
+  billingMonth: string;
+  amount: number;
+  supplierName: string;
+  accountTitle: string;
+  mfAccountCode?: string | null;
+  mfTaxCode?: string | null;
+  mfDepartmentCode?: string | null;
+  mfCounterpartyCode?: string | null;
+  memo?: string;
+}): Promise<CreateJournalRequest> {
+  const {
+    transactionDate,
+    contractNumber,
+    billingMonth,
+    amount,
+    supplierName,
+    accountTitle,
+    mfAccountCode,
+    mfTaxCode,
+    mfDepartmentCode,
+    mfCounterpartyCode,
+    memo,
+  } = params;
+
+  // 借方: 契約マスタのコードを優先、なければ名前から解決
+  const debitAccountCode = mfAccountCode || (await resolveAccountCode(accountTitle.split("（")[0].trim()));
+
+  // 貸方: 契約は請求書払い前提 → 買掛金
+  const creditAccountCode = await resolveAccountCode("買掛金") || "買掛金";
+
+  // 税区分: 契約マスタのコードを優先、なければ共-課仕 10%
+  const taxCode = mfTaxCode || (await resolveTaxCode("共-課仕 10%"));
+  const taxTypeName = mfTaxCode ? undefined : "共-課仕 10%";
+  const taxRatePercent = taxTypeName ? (TAX_RATE_MAP[taxTypeName] ?? 10) : 10;
+  const taxValue = taxRatePercent > 0 ? Math.floor(amount * taxRatePercent / (100 + taxRatePercent)) : 0;
+
+  // 部門・取引先: 契約マスタのコードを優先
+  const departmentCode = mfDepartmentCode || undefined;
+  const counterpartyCode = mfCounterpartyCode || (supplierName ? await resolveCounterpartyCode(supplierName) : undefined);
+
+  const yearMonth = billingMonth.replace("-", "/");
+  const remark = `${yearMonth} ${contractNumber} ${supplierName}`;
+  const journalMemo = [yearMonth, contractNumber, supplierName, memo].filter(Boolean).join(" ");
+
+  return {
+    status: "draft",
+    transaction_date: transactionDate,
+    journal_type: "journal_entry",
+    tags: [contractNumber],
+    memo: journalMemo,
+    branches: [
+      {
+        remark,
+        debitor: {
+          account_code: debitAccountCode || accountTitle,
+          tax_code: taxCode,
+          department_code: departmentCode,
+          value: amount,
+          tax_value: taxValue,
+        },
+        creditor: {
+          account_code: creditAccountCode,
+          counterparty_code: counterpartyCode,
+          value: amount,
+        },
+      },
+    ],
+  };
+}
+
 // --- 税率マッピング ---
 
 const TAX_RATE_MAP: Record<string, number> = {

@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  createJournal, buildJournalFromPurchase,
+  createJournal, buildJournalFromPurchase, buildJournalFromContract,
   resolveAccountCode, resolveTaxCode, resolveCounterpartyCode, resolveDepartmentCode,
 } from "@/lib/mf-accounting";
 import { getStatus, updateStatus } from "@/lib/gas-client";
 import { getSlackClient, notifyOps } from "@/lib/slack";
 import { requireBearerAuth, requireApiKey } from "@/lib/api-auth";
+import { db } from "@/db";
+import { contracts, contractInvoices } from "@/db/schema";
+import { eq, and } from "drizzle-orm";
 
 /**
  * 仕訳登録API（Bearer認証 or APIキー認証）
@@ -24,7 +27,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = (await request.json()) as {
-      prNumber: string;
+      prNumber?: string;
       overrides?: {
         debitAccount?: string;
         creditAccount?: string;
@@ -35,10 +38,97 @@ export async function POST(request: NextRequest) {
         hubspotDealId?: string;
         memo?: string;
       };
+      contractJournal?: {
+        contractId: number;
+        invoiceId: number;
+        amount: number;
+        supplierName: string;
+      };
     };
-    const { prNumber, overrides } = body;
+    const { prNumber, overrides, contractJournal } = body;
+
+    // ========================================
+    // 契約仕訳パス（contractJournalが存在する場合）
+    // ========================================
+    if (contractJournal) {
+      const { contractId, invoiceId, amount } = contractJournal;
+
+      // 契約マスタ取得
+      const [contract] = await db.select().from(contracts).where(eq(contracts.id, contractId));
+      if (!contract) {
+        return NextResponse.json({ error: `契約ID ${contractId} が見つかりません` }, { status: 404 });
+      }
+
+      // 請求書レコード取得+ステータス検証
+      const [invoice] = await db.select().from(contractInvoices).where(
+        and(eq(contractInvoices.id, invoiceId), eq(contractInvoices.contractId, contractId)),
+      );
+      if (!invoice) {
+        return NextResponse.json({ error: `請求書ID ${invoiceId} が見つかりません` }, { status: 404 });
+      }
+      if (invoice.status !== "承認済" && invoice.status !== "見積計上") {
+        return NextResponse.json({ error: `請求書のステータスが「${invoice.status}」のため仕訳登録できません（承認済 or 見積計上が必要）` }, { status: 400 });
+      }
+
+      // 仕訳リクエスト構築
+      const journalRequest = await buildJournalFromContract({
+        transactionDate: new Date().toISOString().split("T")[0],
+        contractNumber: contract.contractNumber,
+        billingMonth: invoice.billingMonth,
+        amount,
+        supplierName: contract.supplierName,
+        accountTitle: contract.accountTitle,
+        mfAccountCode: contract.mfAccountCode,
+        mfTaxCode: contract.mfTaxCode,
+        mfDepartmentCode: contract.mfDepartmentCode,
+        mfCounterpartyCode: contract.mfCounterpartyCode,
+        memo: overrides?.memo,
+      });
+
+      // overridesの借方科目・税区分を反映
+      if (overrides && journalRequest.branches?.[0]) {
+        const branch = journalRequest.branches[0];
+        if (overrides.debitAccount) {
+          const code = await resolveAccountCode(overrides.debitAccount);
+          if (code) branch.debitor.account_code = code;
+        }
+        if (overrides.department) {
+          const code = await resolveDepartmentCode(overrides.department);
+          if (code) branch.debitor.department_code = code;
+        }
+      }
+
+      // MF会計Plusに仕訳登録
+      const journalResult = await createJournal(journalRequest);
+      console.log("[mf-journal] Contract journal created:", { contractNumber: contract.contractNumber, invoiceId, journalId: journalResult.id, amount });
+
+      // contract_invoicesを更新（journalId + status=仕訳済）
+      await db.update(contractInvoices).set({
+        journalId: journalResult.id,
+        status: "仕訳済",
+        updatedAt: new Date(),
+      }).where(eq(contractInvoices.id, invoiceId));
+
+      // Slack通知
+      try {
+        const client = getSlackClient();
+        await notifyOps(client, `✅ *契約仕訳登録* ${contract.contractNumber} ${invoice.billingMonth} — MF仕訳ID: ${journalResult.id} / ¥${amount.toLocaleString()}`);
+      } catch { /* 通知失敗は無視 */ }
+
+      return NextResponse.json({
+        ok: true,
+        contractNumber: contract.contractNumber,
+        invoiceId,
+        journalId: journalResult.id,
+        journalUrl: journalResult.url,
+      });
+    }
+
+    // ========================================
+    // 購買仕訳パス（既存ロジック）
+    // ========================================
     if (!prNumber) {
-      return NextResponse.json({ error: "prNumber is required" }, { status: 400 });
+      return NextResponse.json({ error: "prNumber or contractJournal is required" }, { status: 400 });
     }
 
     // GASから購買申請情報を取得
