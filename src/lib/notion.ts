@@ -206,8 +206,10 @@ export async function recordChangelog(data: {
     console.log(`[notion] Recorded changelog: ${shortHash}`);
     return true;
   } catch (e) {
-    console.error("[notion] recordChangelog failed:", e);
-    return false;
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[notion] recordChangelog failed for ${shortHash}:`, msg);
+    // 呼出元で詳細を拾えるようにre-throw
+    throw new Error(`recordChangelog(${shortHash}): ${msg}`);
   }
 }
 
