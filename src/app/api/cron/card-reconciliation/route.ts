@@ -3,6 +3,7 @@ import { getSlackClient, notifyOps, safeDmChannel } from "@/lib/slack";
 import { getRecentRequests } from "@/lib/gas-client";
 import { reconcile, generateAlerts, type CardStatement } from "@/lib/reconciliation";
 import { fetchAllCardStatements, type NormalizedCardStatement } from "@/lib/mf-expense";
+import { matchContractCards, applyContractMatches } from "@/lib/card-matcher-v2";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
@@ -62,6 +63,24 @@ export async function GET(request: NextRequest) {
     const result = reconcile(statements, requests);
     const alerts = generateAlerts(result);
 
+    // 4. 契約マスタ(billing_type="カード自動")との自動マッチング
+    let contractMatchCreated = 0;
+    let contractMatchUpdated = 0;
+    let contractMatchConfident = 0;
+    try {
+      const contractSummary = await matchContractCards(enrichedStatements);
+      contractMatchConfident = contractSummary.confident;
+      if (contractSummary.aggregates.length > 0) {
+        const applyResult = await applyContractMatches(contractSummary);
+        contractMatchCreated = applyResult.created;
+        contractMatchUpdated = applyResult.updated;
+        console.log(`[card-reconciliation] Contract match: confident=${contractSummary.confident}, created=${applyResult.created}, updated=${applyResult.updated}`);
+      }
+    } catch (e) {
+      console.error("[card-reconciliation] Contract match failed:", e);
+      // 契約マッチング失敗は全体処理を止めない
+    }
+
     // 4. Slack通知
     if (alerts.length > 0) {
       const client = getSlackClient();
@@ -74,6 +93,15 @@ export async function GET(request: NextRequest) {
         `🟡 承認前購入: ${result.preApproval.length}件`,
         `🟠 金額不一致: ${result.amountMismatch.length}件`,
       ];
+
+      // 契約マスタ自動マッチの結果
+      if (contractMatchConfident > 0 || contractMatchCreated > 0 || contractMatchUpdated > 0) {
+        lines.push(
+          "",
+          `📋 *契約(カード自動)マッチ: ${contractMatchConfident}件 confident*`,
+          `   → 請求書 新規作成: ${contractMatchCreated}件 / 更新: ${contractMatchUpdated}件`,
+        );
+      }
 
       // Amazon関連注記
       if (result.amazonRelated.count > 0) {
@@ -153,6 +181,11 @@ export async function GET(request: NextRequest) {
       noRequest: result.noRequest.length,
       preApproval: result.preApproval.length,
       amountMismatch: result.amountMismatch.length,
+      contractMatch: {
+        confident: contractMatchConfident,
+        created: contractMatchCreated,
+        updated: contractMatchUpdated,
+      },
     });
   } catch (error) {
     console.error("[card-reconciliation] Error:", error);

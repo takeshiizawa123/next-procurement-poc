@@ -463,8 +463,16 @@ function PurchaseFormInner() {
   const [myTasksLoading, setMyTasksLoading] = useState(false);
 
   const isPurchased = requestType === "購入済";
-  const totalAmount = amount * quantity;
+  const isService = requestType === "役務";
+  const totalAmount = isService ? amount : amount * quantity;
   const isHighValue = amount >= 100000; // 単価ベースで固定資産判定（会計基準）
+
+  // 役務選択時は数量を1に固定
+  useEffect(() => {
+    if (isService && quantity !== 1) {
+      setQuantity(1);
+    }
+  }, [isService, quantity]);
 
   // 未処理タスクを取得する共通関数（name省略時は全社）
   const fetchMyTasks = useCallback((name?: string) => {
@@ -1164,10 +1172,10 @@ function PurchaseFormInner() {
             {/* Step 2: 商品情報 */}
             {step === 2 && (
               <>
-            {/* 品目名 */}
+            {/* 品目名 / サービス内容 */}
             <fieldset>
               <legend className="block text-sm font-medium mb-1">
-                品目名 <span className="text-red-500">*</span>
+                {requestType === "役務" ? "サービス内容" : "品目名"} <span className="text-red-500">*</span>
               </legend>
               <input
                 type="text"
@@ -1178,7 +1186,7 @@ function PurchaseFormInner() {
                   setItemName(e.target.value);
                   if (e.target.value.trim()) setStepErrors((prev) => { const { itemName: _, ...rest } = prev; return rest; });
                 }}
-                placeholder="例: ノートPC、モニター等"
+                placeholder={requestType === "役務" ? "例: 月次コンサルティング、清掃業務、派遣" : "例: ノートPC、モニター等"}
                 className={`w-full border rounded-lg px-3 py-2 ${stepErrors.itemName ? "border-red-500" : ""}`}
               />
               {stepErrors.itemName && <p className="text-xs text-red-500 mt-1">{stepErrors.itemName}</p>}
@@ -1186,10 +1194,10 @@ function PurchaseFormInner() {
 
             {/* 金額・数量・合計 */}
             <div>
-              <div className="grid grid-cols-2 gap-3 sm:gap-4">
+              <div className={requestType === "役務" ? "" : "grid grid-cols-2 gap-3 sm:gap-4"}>
                 <fieldset>
                   <legend className="block text-sm font-medium mb-1">
-                    単価（税込・円） <span className="text-red-500">*</span>
+                    {requestType === "役務" ? "金額（税込・円）" : "単価（税込・円）"} <span className="text-red-500">*</span>
                   </legend>
                   <input
                     type="text"
@@ -1204,23 +1212,26 @@ function PurchaseFormInner() {
                   />
                   {stepErrors.amount && <p className="text-xs text-red-500 mt-1">{stepErrors.amount}</p>}
                 </fieldset>
-                <fieldset>
-                  <legend className="block text-sm font-medium mb-1">
-                    数量 <span className="text-red-500">*</span>
-                  </legend>
-                  <input
-                    type="number"
-                    name="quantity"
-                    required
-                    min="1"
-                    value={quantity}
-                    onChange={(e) =>
-                      setQuantity(parseInt(e.target.value) || 1)
-                    }
-                    className={`w-full border rounded-lg px-3 py-2 ${stepErrors.quantity ? "border-red-500" : ""}`}
-                  />
-                  {stepErrors.quantity && <p className="text-xs text-red-500 mt-1">{stepErrors.quantity}</p>}
-                </fieldset>
+                {/* 役務では数量フィールドを非表示（内部的にquantity=1で固定） */}
+                {requestType !== "役務" && (
+                  <fieldset>
+                    <legend className="block text-sm font-medium mb-1">
+                      数量 <span className="text-red-500">*</span>
+                    </legend>
+                    <input
+                      type="number"
+                      name="quantity"
+                      required
+                      min="1"
+                      value={quantity}
+                      onChange={(e) =>
+                        setQuantity(parseInt(e.target.value) || 1)
+                      }
+                      className={`w-full border rounded-lg px-3 py-2 ${stepErrors.quantity ? "border-red-500" : ""}`}
+                    />
+                    {stepErrors.quantity && <p className="text-xs text-red-500 mt-1">{stepErrors.quantity}</p>}
+                  </fieldset>
+                )}
               </div>
               {totalAmount > 0 && (
                 <div
