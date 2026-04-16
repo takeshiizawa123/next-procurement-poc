@@ -285,17 +285,17 @@ export async function syncContract(data: {
   if (!notion || !PAGE_IDS.contractDb) return false;
 
   try {
-    // 既存レコードを検索（契約番号で重複チェック）
-    const existing = await notion.search({
-      query: data.contractNumber,
-      filter: { property: "object", value: "page" },
-      page_size: 5,
+    // 既存レコードを検索（契約番号のtitleフィルタで正確な重複チェック）
+    // Notion SDK v5: databases.query廃止 → dataSources.query を使用
+    const queryResult = await notion.dataSources.query({
+      data_source_id: PAGE_IDS.contractDb,
+      filter: {
+        property: "契約番号",
+        title: { equals: data.contractNumber },
+      },
+      page_size: 1,
     });
-    // 検索結果から該当DB内のページのみに絞る
-    const matchedPages = existing.results.filter((r) =>
-      "parent" in r && r.parent && "type" in r.parent && r.parent.type === "database_id" &&
-      "database_id" in r.parent && r.parent.database_id === PAGE_IDS.contractDb,
-    );
+    const matchedPages = queryResult.results;
 
     const properties: Record<string, unknown> = {
       "契約番号": { title: [{ text: { content: data.contractNumber } }] },
