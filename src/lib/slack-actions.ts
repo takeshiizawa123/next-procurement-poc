@@ -122,12 +122,33 @@ export const handleApprove: SlackActionHandler = async ({
       await notifyOps(client, `⚠️ *カード情報未登録* ${poNumber} — <@${applicantSlackId}> の従業員マスタにカード下4桁が未設定のため、照合用予測レコードを生成できませんでした。`);
     }
   }
-  // 購入済（立替）判定: メッセージのヘッダーに「購買報告」があるか
+  // 申請区分判定: メッセージのヘッダーから判定
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const headerBlock = (message?.blocks as any[])?.find((b) => b.type === "header");
-  const isPurchased = headerBlock?.text?.text?.includes("購買報告") || headerBlock?.text?.text?.includes("購入済") || false;
+  const headerText = headerBlock?.text?.text || "";
+  const isPurchased = headerText.includes("購買報告") || headerText.includes("購入済");
+  const isService = headerText.includes("役務申請") || headerText.includes("役務");
 
-  if (isPurchased) {
+  if (isService) {
+    // 役務: 承認=役務開始 → 即「発注済」にして役務完了確認ボタンを表示
+    if (applicantSlackId) {
+      await client.chat.postMessage({
+        channel: safeDmChannel(applicantSlackId),
+        text: `✅ 役務申請 ${poNumber} が承認されました。役務完了後、チャンネルの [役務完了確認] ボタンを押してください。`,
+      });
+    }
+    await safeUpdateStatus(client, channelId, messageTs, poNumber, {
+      "発注ステータス": "発注済",
+      "申請区分": "役務",
+    }, "approve-service");
+    // メッセージブロックを役務モードで再描画（役務完了確認ボタンを表示）
+    await client.chat.update({
+      channel: channelId,
+      ts: messageTs,
+      blocks: buildOrderedBlocks(poNumber, userName, actionValue, info, true),
+      text: `役務承認済（${userName}）`,
+    });
+  } else if (isPurchased) {
     // 購入済（立替）: 発注・検収不要 → 即「証憑待ち」
     if (applicantSlackId) {
       await client.chat.postMessage({
@@ -358,6 +379,12 @@ export const handleInspectionComplete: SlackActionHandler = async ({
   const message = (body as { message?: { blocks?: Array<{ type: string; fields?: Array<{ text: string }> }> } }).message;
   const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
 
+  // 役務判定
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const inspHeaderBlock = (message?.blocks as any[])?.find((b) => b.type === "header");
+  const inspHeaderText = inspHeaderBlock?.text?.text || "";
+  const isServiceCompletion = inspHeaderText.includes("役務");
+
   // EC連携サイト判定
   const { isEcLinkedSite, VOUCHER_STATUS_MF_AUTO } = await import("@/lib/ec-sites");
   const supplierName = info?.supplierName || "";
@@ -366,9 +393,9 @@ export const handleInspectionComplete: SlackActionHandler = async ({
   // GASステータス更新を先に実行
   const todayStr = new Date().toLocaleDateString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" });
   const inspectionUpdates: Record<string, string> = {
-    "検収ステータス": "検収済",
+    "検収ステータス": isServiceCompletion ? "役務完了" : "検収済",
     "検収日": todayStr,
-    "証憑対応": ecLinked ? VOUCHER_STATUS_MF_AUTO : "要取得",
+    "証憑対応": isServiceCompletion ? "要取得" : (ecLinked ? VOUCHER_STATUS_MF_AUTO : "要取得"),
   };
   const inspGasOk = await safeUpdateStatus(client, channelId, messageTs, poNumber, inspectionUpdates, "inspection");
   if (!inspGasOk) {
@@ -379,15 +406,21 @@ export const handleInspectionComplete: SlackActionHandler = async ({
   await client.chat.update({
     channel: channelId,
     ts: messageTs,
-    blocks: buildInspectedBlocks(poNumber, userName, info, actionValue, ecLinked),
-    text: `検収済（${userName}）`,
+    blocks: buildInspectedBlocks(poNumber, userName, info, actionValue, ecLinked, isServiceCompletion),
+    text: isServiceCompletion ? `役務完了（${userName}）` : `検収済（${userName}）`,
   });
 
-  // スレッドに検収完了メッセージ投稿
+  // スレッドに完了メッセージ投稿
   await client.chat.postMessage({
     channel: channelId,
     thread_ts: messageTs,
-    text: ecLinked
+    text: isServiceCompletion
+      ? [
+          `✅ 役務完了を確認しました（${userName}）`,
+          `📎 証憑（請求書）をこのスレッドに添付してください。`,
+          `⏸️ 請求書が添付されるまで、経理処理は保留されます。`,
+        ].join("\n")
+      : ecLinked
       ? [
           `✅ 検収記録しました（${userName}）`,
           `🔄 証憑（適格請求書）はMF会計Plusが自動取得します。`,
@@ -401,9 +434,12 @@ export const handleInspectionComplete: SlackActionHandler = async ({
         ].join("\n"),
   });
 
-  await notifyOps(client, ecLinked
-    ? `📦 *検収完了* ${poNumber}（${userName} が検収）— EC連携（${supplierName}）証憑MF自動取得`
-    : `📦 *検収完了* ${poNumber}（${userName} が検収）— 証憑待ち`);
+  await notifyOps(client,
+    isServiceCompletion
+      ? `📋 *役務完了* ${poNumber}（${userName} が完了確認）— 請求書待ち`
+      : ecLinked
+      ? `📦 *検収完了* ${poNumber}（${userName} が検収）— EC連携（${supplierName}）証憑MF自動取得`
+      : `📦 *検収完了* ${poNumber}（${userName} が検収）— 証憑待ち`);
 
   // 固定資産通知（単価10万円以上の場合）
   const unitPriceForAsset = parseInt(unitPriceStr, 10);
@@ -1189,6 +1225,7 @@ function buildPurchaseModal(channelId: string, draft?: Partial<PurchaseFormData>
           options: [
             { text: { type: "plain_text", text: "購入前" }, value: "購入前" },
             { text: { type: "plain_text", text: "購入済" }, value: "購入済" },
+            { text: { type: "plain_text", text: "📋 役務（サービス）" }, value: "役務" },
             { text: { type: "plain_text", text: "🚨 緊急事後報告" }, value: "緊急事後報告" },
           ],
         },

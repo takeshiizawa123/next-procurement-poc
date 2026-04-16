@@ -1109,7 +1109,7 @@ function PurchaseFormInner() {
                 申請区分 <span className="text-red-500">*</span>
               </legend>
               <div className="flex gap-3 sm:gap-4">
-                {["購入前", "購入済"].map((v) => (
+                {["購入前", "購入済", "役務"].map((v) => (
                   <label
                     key={v}
                     className={`flex-1 text-center py-3 rounded-lg border-2 cursor-pointer transition-colors text-sm sm:text-base ${
@@ -1127,7 +1127,7 @@ function PurchaseFormInner() {
                       className="sr-only"
                       onChange={(e) => setRequestType(e.target.value)}
                     />
-                    {v === "購入前" ? "🛒 購入前" : "📦 購入済"}
+                    {v === "購入前" ? "🛒 購入前" : v === "購入済" ? "📦 購入済" : "📋 役務"}
                   </label>
                 ))}
               </div>
@@ -1135,6 +1135,11 @@ function PurchaseFormInner() {
                 <p className="text-sm text-amber-600 mt-2">
                   ⚡
                   購入済のため承認・発注ステップはスキップされます。証憑の添付が必須です。
+                </p>
+              )}
+              {requestType === "役務" && (
+                <p className="text-sm text-blue-600 mt-2">
+                  📋 役務（サービス契約）: 承認後、役務完了時に「役務完了確認」ボタンを押してください。証憑は<strong>請求書</strong>をスレッドに添付してください。
                 </p>
               )}
             </fieldset>

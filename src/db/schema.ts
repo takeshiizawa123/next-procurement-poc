@@ -41,7 +41,7 @@ export const purchaseStatusEnum = pgEnum("purchase_status", [
   "取消",
 ]);
 
-export const requestTypeEnum = pgEnum("request_type", ["購入前", "購入済"]);
+export const requestTypeEnum = pgEnum("request_type", ["購入前", "購入済", "役務"]);
 
 export const paymentMethodEnum = pgEnum("payment_method", [
   "会社カード",

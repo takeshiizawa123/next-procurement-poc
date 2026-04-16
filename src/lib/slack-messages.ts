@@ -24,6 +24,8 @@ export interface RequestInfo {
   approverSlackId: string;
   inspectorSlackId: string;
   paymentDueDate?: string; // 支払期日 YYYY-MM-DD（請求書払い用）
+  /** 申請区分: "購入前" | "購入済" | "役務" | "緊急事後報告" */
+  requestType?: string;
 }
 
 /**
@@ -49,10 +51,12 @@ export function buildActionValue(info: RequestInfo): string {
 
 export function buildNewRequestBlocks(info: RequestInfo) {
   const av = buildActionValue(info);
+  const isService = info.requestType === "役務";
+  const headerText = isService ? `📋 役務申請 ${info.poNumber}` : `📋 購買申請 ${info.poNumber}`;
   return [
     {
       type: "header",
-      text: { type: "plain_text", text: `📋 購買申請 ${info.poNumber}` },
+      text: { type: "plain_text", text: headerText },
     },
     {
       type: "section",
@@ -193,6 +197,7 @@ export function buildOrderedBlocks(
   orderer: string,
   actionValue: string,
   info: { itemName: string; amount: string; applicant: string; department: string; supplierName: string; paymentMethod: string } | null,
+  isService = false,
 ) {
   const fields = info
     ? [
@@ -219,7 +224,9 @@ export function buildOrderedBlocks(
       elements: [
         {
           type: "mrkdwn",
-          text: `🟡 ステータス: *発注済* （${orderer} が発注完了）`,
+          text: isService
+            ? `🟡 ステータス: *役務開始* （${orderer} が発注）`
+            : `🟡 ステータス: *発注済* （${orderer} が発注完了）`,
         },
       ],
     },
@@ -227,21 +234,31 @@ export function buildOrderedBlocks(
     {
       type: "actions",
       block_id: "inspection_actions",
-      elements: [
-        {
-          type: "button",
-          text: { type: "plain_text", text: "✅ 全数検収" },
-          style: "primary",
-          value: actionValue,
-          action_id: "inspection_complete_button",
-        },
-        {
-          type: "button",
-          text: { type: "plain_text", text: "📦 部分検収" },
-          value: actionValue,
-          action_id: "partial_inspection_button",
-        },
-      ],
+      elements: isService
+        ? [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "✅ 役務完了確認" },
+              style: "primary",
+              value: actionValue,
+              action_id: "inspection_complete_button",
+            },
+          ]
+        : [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "✅ 全数検収" },
+              style: "primary",
+              value: actionValue,
+              action_id: "inspection_complete_button",
+            },
+            {
+              type: "button",
+              text: { type: "plain_text", text: "📦 部分検収" },
+              value: actionValue,
+              action_id: "partial_inspection_button",
+            },
+          ],
     },
   ];
 }
@@ -252,6 +269,7 @@ export function buildInspectedBlocks(
   info: { itemName: string; amount: string; applicant: string; department: string; supplierName: string; paymentMethod: string } | null,
   actionValue?: string,
   ecLinked = false,
+  isService = false,
 ) {
   const fields = info
     ? [
@@ -278,7 +296,9 @@ export function buildInspectedBlocks(
       elements: [
         {
           type: "mrkdwn",
-          text: ecLinked
+          text: isService
+            ? `🟢 ステータス: *役務完了・請求書待ち* （${inspector} が完了確認）`
+            : ecLinked
             ? `🟢 ステータス: *検収済・証憑MF自動取得* （${inspector} が検収）`
             : `🟠 ステータス: *検収済・証憑待ち* （${inspector} が検収）`,
         },
@@ -288,7 +308,9 @@ export function buildInspectedBlocks(
       type: "section",
       text: {
         type: "mrkdwn",
-        text: ecLinked
+        text: isService
+          ? "📎 *証憑（請求書）をこのスレッドに添付してください*\n⏸️ 請求書が揃うまで経理処理は保留されます"
+          : ecLinked
           ? "🔄 *証憑はMF会計Plusが自動取得します*\n📄 納品書がある場合はスレッドに添付してください"
           : "📎 *証憑（領収書・請求書）をこのスレッドに添付してください*\n⏸️ 証憑が揃うまで経理処理は保留されます",
       },
