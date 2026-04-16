@@ -33,6 +33,9 @@ interface Invoice {
   difference: number | null;
   status: "未受領" | "受領済" | "承認済" | "仕訳済";
   voucher_url: string | null;
+  hours: string | null;
+  units: string | null;
+  report_notes: string | null;
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -58,6 +61,9 @@ export default function ContractDetailPage() {
   const [newMonth, setNewMonth] = useState("");
   const [newAmount, setNewAmount] = useState("");
   const [newFile, setNewFile] = useState<File | null>(null);
+  const [newHours, setNewHours] = useState("");
+  const [newUnits, setNewUnits] = useState("");
+  const [newReportNotes, setNewReportNotes] = useState("");
   const [invoiceSubmitting, setInvoiceSubmitting] = useState(false);
 
   useEffect(() => {
@@ -161,9 +167,13 @@ export default function ContractDetailPage() {
     setActionResult(null);
     try {
       const formData = new FormData();
-      formData.append("invoice_month", newMonth);
-      if (newAmount) formData.append("actual_amount", newAmount);
+      formData.append("billingMonth", newMonth);
+      if (newAmount) formData.append("invoiceAmount", newAmount);
       if (newFile) formData.append("file", newFile);
+      if (newHours) formData.append("hours", newHours);
+      if (newUnits) formData.append("units", newUnits);
+      if (newReportNotes) formData.append("reportNotes", newReportNotes);
+      formData.append("status", "受領済");
 
       const res = await apiFetch(`/api/admin/contracts/${contractId}/invoices`, {
         method: "POST",
@@ -175,6 +185,9 @@ export default function ContractDetailPage() {
       setNewMonth("");
       setNewAmount("");
       setNewFile(null);
+      setNewHours("");
+      setNewUnits("");
+      setNewReportNotes("");
       setActionResult({ type: "success", message: "請求を登録しました" });
     } catch (e) {
       setActionResult({ type: "error", message: e instanceof Error ? e.message : "通信エラー" });
@@ -265,51 +278,108 @@ export default function ContractDetailPage() {
       <div className="bg-white border rounded-xl p-4 sm:p-6">
         <h2 className="font-bold text-gray-800 mb-4">月次請求</h2>
 
-        {/* New invoice form */}
-        <form onSubmit={handleAddInvoice} className="bg-gray-50 rounded-lg p-4 mb-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">請求月</label>
-              <input
-                type="month"
-                value={newMonth}
-                onChange={(e) => setNewMonth(e.target.value)}
-                className="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">請求額</label>
-              <div className="relative">
-                <span className="absolute left-3 top-2 text-sm text-gray-400">&yen;</span>
+        {/* New invoice form — billing_type別 */}
+        {contract.billing_type === "カード自動" ? (
+          /* カード自動: フォームなし、マッチング状況を表示 */
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+            <p className="text-sm text-blue-800 font-medium mb-1">カード明細マッチング</p>
+            <p className="text-xs text-blue-600">この契約はカード明細から自動で請求書を生成します。</p>
+            <a href="/admin/journals" className="mt-2 inline-block text-xs text-blue-700 hover:underline">仕訳管理画面で確認 &rarr;</a>
+          </div>
+        ) : (
+          <form onSubmit={handleAddInvoice} className="bg-gray-50 rounded-lg p-4 mb-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">請求月</label>
                 <input
-                  type="number"
-                  value={newAmount}
-                  onChange={(e) => setNewAmount(e.target.value)}
-                  className="border rounded-lg pl-7 pr-3 py-2 text-sm w-36 focus:outline-none focus:ring-2 focus:ring-blue-300"
-                  placeholder="0"
-                  min="0"
+                  type="month"
+                  value={newMonth}
+                  onChange={(e) => setNewMonth(e.target.value)}
+                  className="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  required
                 />
               </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">請求額</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2 text-sm text-gray-400">&yen;</span>
+                  <input
+                    type="number"
+                    value={newAmount}
+                    onChange={(e) => setNewAmount(e.target.value)}
+                    className="border rounded-lg pl-7 pr-3 py-2 text-sm w-36 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    placeholder="0"
+                    min="0"
+                  />
+                </div>
+              </div>
+
+              {/* 従量系: 稼働時間・数量・報告メモ */}
+              {contract.billing_type === "従量" && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">稼働時間</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={newHours}
+                      onChange={(e) => setNewHours(e.target.value)}
+                      className="border rounded-lg px-3 py-2 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                      placeholder="0"
+                      min="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">数量</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={newUnits}
+                      onChange={(e) => setNewUnits(e.target.value)}
+                      className="border rounded-lg px-3 py-2 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                      placeholder="0"
+                      min="0"
+                    />
+                  </div>
+                </>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  {contract.billing_type === "従量" ? "稼働報告書/タイムシート" : "証憑ファイル"}
+                </label>
+                <input
+                  type="file"
+                  onChange={(e) => setNewFile(e.target.files?.[0] || null)}
+                  className="text-sm text-gray-600"
+                  accept=".pdf,.png,.jpg,.jpeg,.csv,.xlsx"
+                  required={contract.billing_type === "従量"}
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={invoiceSubmitting || !newMonth}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                {invoiceSubmitting ? "登録中..." : "請求登録"}
+              </button>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">証憑ファイル</label>
-              <input
-                type="file"
-                onChange={(e) => setNewFile(e.target.files?.[0] || null)}
-                className="text-sm text-gray-600"
-                accept=".pdf,.png,.jpg,.jpeg"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={invoiceSubmitting || !newMonth}
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-            >
-              {invoiceSubmitting ? "登録中..." : "請求登録"}
-            </button>
-          </div>
-        </form>
+
+            {/* 従量系: 報告メモ */}
+            {contract.billing_type === "従量" && (
+              <div className="mt-3">
+                <label className="block text-xs font-medium text-gray-600 mb-1">報告メモ</label>
+                <textarea
+                  value={newReportNotes}
+                  onChange={(e) => setNewReportNotes(e.target.value)}
+                  className="border rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  rows={2}
+                  placeholder="作業内容の概要等"
+                />
+              </div>
+            )}
+          </form>
+        )}
 
         {/* Invoice table */}
         <div className="overflow-x-auto">
@@ -319,7 +389,15 @@ export default function ContractDetailPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">請求月</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-gray-500">予定額</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-gray-500">請求額</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-gray-500">差額</th>
+                {contract.billing_type === "固定" && (
+                  <th className="text-center px-4 py-3 text-xs font-medium text-gray-500">定額一致</th>
+                )}
+                {contract.billing_type === "従量" && (
+                  <th className="text-right px-4 py-3 text-xs font-medium text-gray-500">時間/数量</th>
+                )}
+                {contract.billing_type !== "固定" && contract.billing_type !== "従量" && (
+                  <th className="text-right px-4 py-3 text-xs font-medium text-gray-500">差額</th>
+                )}
                 <th className="text-center px-4 py-3 text-xs font-medium text-gray-500">ステータス</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-gray-500">操作</th>
               </tr>
@@ -330,13 +408,30 @@ export default function ContractDetailPage() {
                   <td className="px-4 py-3 text-gray-700">{inv.invoice_month}</td>
                   <td className="px-4 py-3 text-right text-gray-600">{formatAmount(inv.expected_amount)}</td>
                   <td className="px-4 py-3 text-right text-gray-800">{formatAmount(inv.actual_amount)}</td>
-                  <td className={`px-4 py-3 text-right ${
-                    inv.difference != null && inv.difference !== 0
-                      ? inv.difference > 0 ? "text-red-600" : "text-green-600"
-                      : "text-gray-400"
-                  }`}>
-                    {inv.difference != null ? `${inv.difference > 0 ? "+" : ""}${formatAmount(inv.difference)}` : "-"}
-                  </td>
+                  {contract.billing_type === "固定" ? (
+                    <td className="px-4 py-3 text-center">
+                      {inv.actual_amount != null && inv.expected_amount != null ? (
+                        inv.actual_amount === inv.expected_amount
+                          ? <span className="text-green-600 font-medium">&#10003;</span>
+                          : <span className="text-red-600 font-medium" title={`差額: ${formatAmount((inv.actual_amount || 0) - (inv.expected_amount || 0))}`}>&#10007;</span>
+                      ) : <span className="text-gray-400">-</span>}
+                    </td>
+                  ) : contract.billing_type === "従量" ? (
+                    <td className="px-4 py-3 text-right text-gray-600 text-xs">
+                      {inv.hours ? `${inv.hours}h` : ""}
+                      {inv.hours && inv.units ? " / " : ""}
+                      {inv.units ? `${inv.units}` : ""}
+                      {!inv.hours && !inv.units ? "-" : ""}
+                    </td>
+                  ) : (
+                    <td className={`px-4 py-3 text-right ${
+                      inv.difference != null && inv.difference !== 0
+                        ? inv.difference > 0 ? "text-red-600" : "text-green-600"
+                        : "text-gray-400"
+                    }`}>
+                      {inv.difference != null ? `${inv.difference > 0 ? "+" : ""}${formatAmount(inv.difference)}` : "-"}
+                    </td>
+                  )}
                   <td className="px-4 py-3 text-center">
                     <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_STYLES[inv.status] || "bg-gray-100 text-gray-600"}`}>
                       {inv.status}

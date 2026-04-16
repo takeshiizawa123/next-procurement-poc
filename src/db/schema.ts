@@ -22,6 +22,7 @@ import {
   index,
   primaryKey,
   pgEnum,
+  numeric,
 } from "drizzle-orm/pg-core";
 
 // ========================================================================
@@ -670,6 +671,11 @@ export const contractInvoices = pgTable(
     // 証憑
     voucherFileUrl: text("voucher_file_url"),
     voucherUploadedAt: timestamp("voucher_uploaded_at", { withTimezone: true }),
+
+    // 従量系（billing_type="従量" の場合に使用）
+    hours: numeric("hours", { precision: 8, scale: 2 }),
+    units: numeric("units", { precision: 10, scale: 2 }),
+    reportNotes: text("report_notes"),
 
     // 仕訳
     journalId: integer("journal_id"),

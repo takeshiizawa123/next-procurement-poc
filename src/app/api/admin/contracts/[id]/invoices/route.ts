@@ -76,14 +76,75 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: "Contract not found" }, { status: 404 });
     }
 
-    const body = await request.json();
-    const { billingMonth, invoiceAmount } = body;
+    // FormData（ファイルアップロード）またはJSON（API呼出し）の両方に対応
+    const contentType = request.headers.get("content-type") || "";
+    let billingMonth: string | undefined;
+    let invoiceAmount: number | null = null;
+    let status: "未受領" | "受領済" | "承認済" | "仕訳済" | "見積計上" | undefined;
+    let voucherFileUrl: string | undefined;
+    let hours: string | undefined;
+    let units: string | undefined;
+    let reportNotes: string | undefined;
+    let journalId: number | undefined;
+    let file: File | null = null;
+
+    if (contentType.includes("multipart/form-data")) {
+      const formData = await request.formData();
+      billingMonth = formData.get("billingMonth") as string || undefined;
+      const amountStr = formData.get("invoiceAmount") as string;
+      invoiceAmount = amountStr ? parseInt(amountStr, 10) : null;
+      const rawStatus = formData.get("status") as string;
+      if (rawStatus && ["未受領", "受領済", "承認済", "仕訳済", "見積計上"].includes(rawStatus)) {
+        status = rawStatus as typeof status;
+      }
+      hours = formData.get("hours") as string || undefined;
+      units = formData.get("units") as string || undefined;
+      reportNotes = formData.get("reportNotes") as string || undefined;
+      file = formData.get("file") as File | null;
+    } else {
+      const body = await request.json();
+      billingMonth = body.billingMonth;
+      invoiceAmount = body.invoiceAmount ?? null;
+      if (body.status && ["未受領", "受領済", "承認済", "仕訳済", "見積計上"].includes(body.status)) {
+        status = body.status as typeof status;
+      }
+      voucherFileUrl = body.voucherFileUrl;
+      hours = body.hours;
+      units = body.units;
+      reportNotes = body.reportNotes;
+      journalId = body.journalId;
+    }
 
     if (!billingMonth) {
       return NextResponse.json(
         { error: "billingMonth は必須です" },
         { status: 400 },
       );
+    }
+
+    // ファイルアップロード → Slack OPSチャンネルに投稿してpermalinkを取得
+    if (file && file.size > 0) {
+      try {
+        const { getSlackClient, safeDmChannel } = await import("@/lib/slack");
+        const client = getSlackClient();
+        const opsChannel = process.env.SLACK_OPS_CHANNEL;
+        if (opsChannel) {
+          const buffer = Buffer.from(await file.arrayBuffer());
+          const uploadResult = await client.filesUploadV2({
+            channel_id: safeDmChannel(opsChannel),
+            file: buffer,
+            filename: file.name,
+            title: `${contract.contractNumber} ${billingMonth} 証憑`,
+            initial_comment: `📎 契約 ${contract.contractNumber}（${contract.supplierName}）${billingMonth} の証憑`,
+          });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const fileObj = (uploadResult as any)?.files?.[0];
+          voucherFileUrl = fileObj?.permalink || fileObj?.url_private || undefined;
+        }
+      } catch (uploadErr) {
+        console.error("[contracts/invoices] File upload failed:", uploadErr);
+        // アップロード失敗でもinvoice作成は続行
+      }
     }
 
     const expectedAmount = contract.monthlyAmount ?? null;
@@ -113,9 +174,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
           invoiceAmount: invoiceAmount ?? existing.invoiceAmount,
           expectedAmount,
           amountDiff,
-          status: body.status ?? existing.status,
-          voucherFileUrl: body.voucherFileUrl ?? existing.voucherFileUrl,
-          voucherUploadedAt: body.voucherFileUrl ? new Date() : existing.voucherUploadedAt,
+          status: status ?? existing.status,
+          voucherFileUrl: voucherFileUrl ?? existing.voucherFileUrl,
+          voucherUploadedAt: voucherFileUrl ? new Date() : existing.voucherUploadedAt,
+          hours: hours ?? existing.hours,
+          units: units ?? existing.units,
+          reportNotes: reportNotes ?? existing.reportNotes,
           updatedAt: new Date(),
         })
         .where(eq(contractInvoices.id, existing.id))
@@ -134,9 +198,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
           invoiceAmount: invoiceAmount ?? null,
           expectedAmount,
           amountDiff,
-          status: body.status ?? "未受領",
-          voucherFileUrl: body.voucherFileUrl || null,
-          voucherUploadedAt: body.voucherFileUrl ? new Date() : null,
+          status: status ?? "未受領",
+          voucherFileUrl: voucherFileUrl || null,
+          voucherUploadedAt: voucherFileUrl ? new Date() : null,
+          hours: hours || null,
+          units: units || null,
+          reportNotes: reportNotes || null,
         })
         .returning();
 
