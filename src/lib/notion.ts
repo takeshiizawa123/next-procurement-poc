@@ -158,6 +158,7 @@ export async function syncPrompt(data: {
 
 /**
  * コミット情報をNotion DBに記録
+ * 同一コミットhashが既存の場合はスキップ（重複防止）
  */
 export async function recordChangelog(data: {
   commitHash: string;
@@ -169,11 +170,32 @@ export async function recordChangelog(data: {
   const notion = getNotionClient();
   if (!notion || !PAGE_IDS.changelogDb) return false;
 
+  const shortHash = data.commitHash.slice(0, 7);
+
   try {
+    // 重複チェック: 同じコミットhashのレコードが既にあればスキップ
+    try {
+      const existing = await notion.dataSources.query({
+        data_source_id: PAGE_IDS.changelogDb,
+        filter: {
+          property: "コミット",
+          title: { equals: shortHash },
+        },
+        page_size: 1,
+      });
+      if (existing.results.length > 0) {
+        console.log(`[notion] Changelog already exists, skipping: ${shortHash}`);
+        return true; // 既存をスキップしたが正常扱い
+      }
+    } catch (dupErr) {
+      // 重複チェック失敗時は念のため記録続行
+      console.warn("[notion] Dup check failed, proceeding with insert:", dupErr);
+    }
+
     await notion.pages.create({
       parent: { database_id: PAGE_IDS.changelogDb },
       properties: {
-        "コミット": { title: [{ text: { content: data.commitHash.slice(0, 7) } }] },
+        "コミット": { title: [{ text: { content: shortHash } }] },
         "メッセージ": { rich_text: [{ text: { content: data.message.slice(0, 200) } }] },
         "作成者": { rich_text: [{ text: { content: data.author } }] },
         "日付": { date: { start: data.date } },
@@ -181,7 +203,7 @@ export async function recordChangelog(data: {
       },
     });
 
-    console.log(`[notion] Recorded changelog: ${data.commitHash.slice(0, 7)}`);
+    console.log(`[notion] Recorded changelog: ${shortHash}`);
     return true;
   } catch (e) {
     console.error("[notion] recordChangelog failed:", e);
@@ -399,5 +421,39 @@ export const FLOW_DEFINITIONS = {
     G --> H[Stage 1: 費用/未払金]
     H --> I[カード照合確定: Stage 2]
     I --> J[引落消込: Stage 3]`,
+  },
+
+  serviceFlow: {
+    title: "役務申請フロー（スポット役務）",
+    description: "単発コンサル・修繕等、purchase_requests(type=役務)での申請→役務完了確認→請求書→仕訳",
+    mermaid: `graph TD
+    A[申請者: /purchase 役務を選択] --> B[サービス内容・金額・取引先を入力]
+    B --> C{部門長: 承認/差戻し}
+    C -->|承認| D[ステータス: 発注済・役務実施中]
+    C -->|差戻し| A
+    D --> E[役務実施・納品]
+    E --> F[申請者/検収者: 役務完了確認ボタン]
+    F --> G[ステータス: 役務完了・請求書待ち]
+    G --> H[申請者: 請求書をSlackスレッドに添付]
+    H --> I[OCR読取+金額照合]
+    I --> J[管理本部: 仕訳管理で確認]
+    J --> K[MF会計Plus: 仕訳登録]`,
+  },
+
+  cardAutoMatchFlow: {
+    title: "カード自動マッチフロー（SaaS・クラウドサービス）",
+    description: "契約マスタ(billing_type=カード自動)とMF経費カード明細を自動マッチ→contract_invoice生成→仕訳",
+    mermaid: `graph TD
+    A[管理本部: /admin/contracts で契約登録] --> B[billing_type=カード自動 を選択]
+    B --> C[取引先名・月額/予算額を設定]
+    C --> D[毎週月曜: card-reconciliation cron]
+    D --> E[MF経費からカード明細取得]
+    E --> F[matchContractCards: 加盟店名×契約マスタ突合]
+    F --> G{スコア ≥75?}
+    G -->|confident| H[applyContractMatches: contract_invoice 自動生成]
+    G -->|candidate| I[手動確認待ち]
+    H --> J[ステータス: 受領済]
+    J --> K[管理本部: 承認 → 仕訳登録]
+    K --> L[ContractJournalTab: MF仕訳登録]`,
   },
 };
