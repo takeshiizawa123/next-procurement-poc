@@ -44,16 +44,40 @@ export async function POST(request: NextRequest) {
   if (authError) return authError;
 
   try {
-    const body = await request.json();
+    // FormData（ファイルアップロード付き）とJSON両対応
+    const contentType = request.headers.get("content-type") || "";
+    let body: Record<string, unknown>;
+    let file: File | null = null;
 
-    const {
-      category,
-      billingType,
-      supplierName,
-      accountTitle,
-      department,
-      contractStartDate,
-    } = body;
+    if (contentType.includes("multipart/form-data")) {
+      const formData = await request.formData();
+      body = {};
+      for (const [key, value] of formData.entries()) {
+        if (key === "file") {
+          file = value as File;
+        } else if (key === "autoApprove" || key === "autoAccrue" || key === "isActive") {
+          body[key] = value === "true";
+        } else if (
+          key === "monthlyAmount" ||
+          key === "annualAmount" ||
+          key === "budgetAmount" ||
+          key === "renewalAlertDays"
+        ) {
+          body[key] = value ? Number(value) : null;
+        } else {
+          body[key] = value;
+        }
+      }
+    } else {
+      body = await request.json();
+    }
+
+    const category = body.category as string;
+    const billingType = body.billingType as string;
+    const supplierName = body.supplierName as string;
+    const accountTitle = body.accountTitle as string;
+    const department = body.department as string;
+    const contractStartDate = body.contractStartDate as string;
 
     if (
       !category ||
@@ -70,6 +94,33 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 },
       );
+    }
+
+    // 重複検知: 同じ取引先+開始日の既存契約
+    const duplicateCheck = body.skipDuplicateCheck === true || body.skipDuplicateCheck === "true";
+    if (!duplicateCheck) {
+      const existing = await db
+        .select()
+        .from(contracts)
+        .where(
+          and(
+            eq(contracts.supplierName, supplierName),
+            eq(contracts.contractStartDate, contractStartDate),
+            eq(contracts.isActive, true),
+          ),
+        )
+        .limit(1);
+
+      if (existing.length > 0) {
+        return NextResponse.json(
+          {
+            error: "duplicate",
+            message: `同じ取引先+開始日の有効契約が既に存在します: ${existing[0].contractNumber}`,
+            existing: existing[0],
+          },
+          { status: 409 },
+        );
+      }
     }
 
     // 契約番号の自動採番: CT-YYYYMM-NNNN
@@ -94,29 +145,30 @@ export async function POST(request: NextRequest) {
       .insert(contracts)
       .values({
         contractNumber,
-        category: body.category,
-        billingType: body.billingType,
-        supplierName: body.supplierName,
-        supplierContact: body.supplierContact || null,
-        monthlyAmount: body.monthlyAmount ?? null,
-        annualAmount: body.annualAmount ?? null,
-        budgetAmount: body.budgetAmount ?? null,
-        contractStartDate: body.contractStartDate,
-        contractEndDate: body.contractEndDate || null,
-        renewalType: body.renewalType || "自動更新",
-        renewalAlertDays: body.renewalAlertDays ?? 60,
-        accountTitle: body.accountTitle,
-        mfAccountCode: body.mfAccountCode || null,
-        mfTaxCode: body.mfTaxCode || null,
-        mfDepartmentCode: body.mfDepartmentCode || null,
-        mfCounterpartyCode: body.mfCounterpartyCode || null,
-        department: body.department,
-        requesterSlackId: body.requesterSlackId || null,
-        approverSlackId: body.approverSlackId || null,
-        autoApprove: body.autoApprove ?? false,
-        autoAccrue: body.autoAccrue ?? true,
-        isActive: body.isActive ?? true,
-        notes: body.notes || null,
+        category: body.category as "派遣" | "外注" | "SaaS" | "顧問" | "賃貸" | "保守" | "清掃" | "その他",
+        billingType: body.billingType as "固定" | "従量" | "カード自動",
+        supplierName: supplierName,
+        supplierContact: (body.supplierContact as string) || null,
+        monthlyAmount: (body.monthlyAmount as number) ?? null,
+        annualAmount: (body.annualAmount as number) ?? null,
+        budgetAmount: (body.budgetAmount as number) ?? null,
+        contractStartDate,
+        contractEndDate: (body.contractEndDate as string) || null,
+        renewalType: (body.renewalType as string) || "自動更新",
+        renewalAlertDays: (body.renewalAlertDays as number) ?? 60,
+        accountTitle,
+        mfAccountCode: (body.mfAccountCode as string) || null,
+        mfTaxCode: (body.mfTaxCode as string) || null,
+        mfDepartmentCode: (body.mfDepartmentCode as string) || null,
+        mfCounterpartyCode: (body.mfCounterpartyCode as string) || null,
+        department,
+        requesterSlackId: (body.requesterSlackId as string) || null,
+        approverSlackId: (body.approverSlackId as string) || null,
+        autoApprove: (body.autoApprove as boolean) ?? false,
+        autoAccrue: (body.autoAccrue as boolean) ?? true,
+        isActive: (body.isActive as boolean) ?? true,
+        notes: (body.notes as string) || null,
+        contractFileName: file ? file.name : null,
       })
       .returning();
 
@@ -124,22 +176,48 @@ export async function POST(request: NextRequest) {
       `[contracts] Created: ${contractNumber} ${supplierName} (${category})`,
     );
 
-    // Notionに非同期で同期（失敗しても契約作成は成功）
-    import("@/lib/notion").then(({ syncContract }) =>
-      syncContract({
+    // Notion同期+ファイルアップロード（同期実行、失敗しても契約作成は保持）
+    let notionUrl: string | null = null;
+    try {
+      const { uploadFileToNotion, syncContract } = await import("@/lib/notion");
+
+      // ファイルアップロード（ある場合のみ）
+      let fileUploadId: string | undefined;
+      if (file && file.size > 0) {
+        const buffer = Buffer.from(await file.arrayBuffer());
+        const uploaded = await uploadFileToNotion(buffer, file.name, file.type);
+        if (uploaded) fileUploadId = uploaded;
+      }
+
+      notionUrl = await syncContract({
         contractNumber,
         category,
         supplierName,
-        monthlyAmount: body.monthlyAmount || 0,
-        accountTitle: body.accountTitle,
-        department: body.department,
-        startDate: body.contractStartDate,
-        endDate: body.contractEndDate || undefined,
+        monthlyAmount: (body.monthlyAmount as number) || 0,
+        accountTitle,
+        department,
+        startDate: contractStartDate,
+        endDate: (body.contractEndDate as string) || undefined,
         isActive: true,
-      }),
-    ).catch(() => {});
+        fileUploadId,
+        fileName: file?.name,
+      });
 
-    return NextResponse.json({ ok: true, contract: result });
+      // DB更新: 契約書URL（Notionページへのリンク）を保存
+      if (notionUrl) {
+        await db
+          .update(contracts)
+          .set({ contractFileUrl: notionUrl })
+          .where(eq(contracts.id, result.id));
+      }
+    } catch (notionErr) {
+      console.error("[contracts] Notion sync failed:", notionErr);
+    }
+
+    return NextResponse.json({
+      ok: true,
+      contract: { ...result, contractFileUrl: notionUrl },
+    });
   } catch (error) {
     console.error("[contracts] POST Error:", error);
     return NextResponse.json(

@@ -631,6 +631,10 @@ export const contracts = pgTable(
     isActive: boolean("is_active").notNull().default(true),
     notes: text("notes"),
 
+    // 契約書保管（Notion permalink）
+    contractFileUrl: text("contract_file_url"),
+    contractFileName: varchar("contract_file_name", { length: 255 }),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

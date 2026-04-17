@@ -93,12 +93,20 @@ export default function ContractsPage() {
     <div className="max-w-5xl mx-auto p-4 sm:p-6">
       <div className="flex items-center justify-between mb-2">
         <h1 className="text-xl font-bold">契約管理</h1>
-        <a
-          href="/admin/contracts/new"
-          className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          新規契約登録
-        </a>
+        <div className="flex gap-2">
+          <a
+            href="/admin/contracts/batch-upload"
+            className="border border-blue-300 text-blue-700 text-sm px-4 py-2 rounded-lg hover:bg-blue-50 transition-colors"
+          >
+            📎 一括取り込み（OCR）
+          </a>
+          <a
+            href="/admin/contracts/new"
+            className="bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            新規契約登録
+          </a>
+        </div>
       </div>
 
       {/* Summary */}

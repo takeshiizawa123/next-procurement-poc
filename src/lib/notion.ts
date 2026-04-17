@@ -291,7 +291,47 @@ export async function reportError(data: {
 // ========================================
 
 /**
+ * ファイルをNotionにアップロードして file_upload_id を返す
+ * 失敗時はnullを返す
+ */
+export async function uploadFileToNotion(
+  buffer: Buffer,
+  filename: string,
+  contentType: string,
+): Promise<string | null> {
+  const notion = getNotionClient();
+  if (!notion) return null;
+
+  try {
+    // single_partモードでアップロード作成
+    const upload = await notion.fileUploads.create({
+      mode: "single_part",
+      filename,
+      content_type: contentType,
+    });
+
+    // ファイル本体を送信（BlobでArrayBufferを渡す）
+    await notion.fileUploads.send({
+      file_upload_id: upload.id,
+      file: {
+        filename,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        data: new Blob([buffer as any], { type: contentType }),
+      },
+    });
+
+    console.log(`[notion] Uploaded file: ${filename} (${upload.id})`);
+    return upload.id;
+  } catch (e) {
+    console.error("[notion] uploadFileToNotion failed:", e);
+    return null;
+  }
+}
+
+/**
  * 契約データをNotion DBに同期
+ * fileUploadIdを渡すと「契約書」プロパティにファイル添付する
+ * 戻り値: Notion page URL（成功時）、null（失敗時）
  */
 export async function syncContract(data: {
   contractNumber: string;
@@ -303,13 +343,14 @@ export async function syncContract(data: {
   startDate: string;
   endDate?: string;
   isActive: boolean;
-}): Promise<boolean> {
+  fileUploadId?: string;
+  fileName?: string;
+}): Promise<string | null> {
   const notion = getNotionClient();
-  if (!notion || !PAGE_IDS.contractDb) return false;
+  if (!notion || !PAGE_IDS.contractDb) return null;
 
   try {
-    // 既存レコードを検索（契約番号のtitleフィルタで正確な重複チェック）
-    // Notion SDK v5: databases.query廃止 → dataSources.query を使用
+    // 既存レコードを検索
     const queryResult = await notion.dataSources.query({
       data_source_id: PAGE_IDS.contractDb,
       filter: {
@@ -335,25 +376,42 @@ export async function syncContract(data: {
       properties["終了日"] = { date: { start: data.endDate } };
     }
 
+    // 契約書ファイルの添付
+    if (data.fileUploadId) {
+      properties["契約書"] = {
+        files: [
+          {
+            type: "file_upload",
+            file_upload: { id: data.fileUploadId },
+            name: data.fileName || `${data.contractNumber}.pdf`,
+          },
+        ],
+      };
+    }
+
+    let pageId: string;
+    let pageUrl: string;
     if (matchedPages.length > 0) {
-      // 更新
-      await notion.pages.update({
+      const updated = await notion.pages.update({
         page_id: matchedPages[0].id,
         properties: properties as never,
       });
+      pageId = updated.id;
+      pageUrl = "url" in updated ? (updated as { url: string }).url : "";
     } else {
-      // 新規作成
-      await notion.pages.create({
+      const created = await notion.pages.create({
         parent: { database_id: PAGE_IDS.contractDb },
         properties: properties as never,
       });
+      pageId = created.id;
+      pageUrl = "url" in created ? (created as { url: string }).url : "";
     }
 
-    console.log(`[notion] Synced contract: ${data.contractNumber}`);
-    return true;
+    console.log(`[notion] Synced contract: ${data.contractNumber} (${pageId})`);
+    return pageUrl || `https://www.notion.so/${pageId.replace(/-/g, "")}`;
   } catch (e) {
     console.error("[notion] syncContract failed:", e);
-    return false;
+    return null;
   }
 }
 
