@@ -146,6 +146,7 @@ export async function POST(request: NextRequest) {
       supplierName,
       hubspotDealId: hubspotDealId ?? null,
       remarks: `日当: ¥${dailyAllowance.toLocaleString()} / 合計見込: ¥${totalEstimate.toLocaleString()}${accommodationPlace ? `\n宿泊先: ${accommodationPlace}` : ""}`,
+      tripAllowance: dailyAllowance,
       voucherStatus: "none",
       isEstimate: !!isEstimate,
     });

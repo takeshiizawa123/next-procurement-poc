@@ -104,6 +104,10 @@ export const employees = pgTable(
     cardHolderName: varchar("card_holder_name", { length: 100 }),
     // MF経費との紐付け（office_member_id）
     mfOfficeMemberId: varchar("mf_office_member_id", { length: 50 }),
+    // MF給与との紐付け（6桁社員コード 000001 形式）
+    payrollCode: varchar("payroll_code", { length: 10 }),
+    // 雇用区分: 正社員/アルバイト/役員/契約社員
+    employmentType: varchar("employment_type", { length: 20 }),
     isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -201,6 +205,10 @@ export const purchaseRequests = pgTable(
 
     // 備考
     remarks: text("remarks"),
+
+    // 出張日当（給与連携用）: TRIP-プレフィックスの場合のみ値あり
+    // 日帰り=1000円、泊まり=3000円×(泊数+1)
+    tripAllowance: integer("trip_allowance"),
 
     // フラグ
     isEstimate: boolean("is_estimate").notNull().default(false),

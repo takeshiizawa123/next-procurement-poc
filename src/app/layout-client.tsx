@@ -28,6 +28,7 @@ function Nav() {
       { href: "/admin/dashboard", label: "📊 ダッシュボード" },
       { href: "/admin/journals", label: "仕訳管理" },
       { href: "/admin/card-matching", label: "カード照合" },
+      { href: "/admin/expense/payroll", label: "給与連携" },
       { href: "/admin/trip-controls", label: "出張統制" },
       { href: "/admin/approval-routes", label: "承認設定" },
       { href: "/admin/contracts", label: "契約管理" },
