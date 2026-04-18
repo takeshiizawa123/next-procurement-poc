@@ -87,7 +87,7 @@ export const handleApprove: SlackActionHandler = async ({
   const info = message?.blocks ? extractRequestInfoFromBlocks(message.blocks) : null;
 
   // GASステータス更新を先に実行（失敗時はSlackメッセージを更新しない）
-  const gasOk = await safeUpdateStatus(client, channelId, messageTs, poNumber, { "発注承認ステータス": "承認済" }, "approve");
+  const gasOk = await safeUpdateStatus(client, channelId, messageTs, poNumber, { "発注承認ステータス": "承認済" }, "approve", userName);
   if (!gasOk) {
     await client.chat.postEphemeral({ channel: channelId, user: userId, text: "⚠️ ステータス更新に失敗しました。もう一度お試しください。" });
     return;
@@ -140,7 +140,7 @@ export const handleApprove: SlackActionHandler = async ({
     await safeUpdateStatus(client, channelId, messageTs, poNumber, {
       "発注ステータス": "発注済",
       "申請区分": "役務",
-    }, "approve-service");
+    }, "approve-service", userName);
     // メッセージブロックを役務モードで再描画（役務完了確認ボタンを表示）
     await client.chat.update({
       channel: channelId,
@@ -160,7 +160,7 @@ export const handleApprove: SlackActionHandler = async ({
     await safeUpdateStatus(client, channelId, messageTs, poNumber, {
       "発注ステータス": "発注済",
       "検収ステータス": "検収済",
-    }, "approve-purchased");
+    }, "approve-purchased", userName);
   } else {
     // 前払い請求書の場合、OPSに先払い依頼を通知
     if (payMethod.includes("前払い")) {
@@ -266,7 +266,7 @@ export const handleOrderComplete: SlackActionHandler = async ({
   }
 
   // GASステータス更新を先に実行
-  const orderGasOk = await safeUpdateStatus(client, channelId, messageTs, poNumber, { "発注ステータス": "発注済" }, "order");
+  const orderGasOk = await safeUpdateStatus(client, channelId, messageTs, poNumber, { "発注ステータス": "発注済" }, "order", userName);
   if (!orderGasOk) {
     await client.chat.postEphemeral({ channel: channelId, user: userId, text: "⚠️ ステータス更新に失敗しました。もう一度お試しください。" });
     return;
@@ -397,7 +397,7 @@ export const handleInspectionComplete: SlackActionHandler = async ({
     "検収日": todayStr,
     "証憑対応": isServiceCompletion ? "要取得" : (ecLinked ? VOUCHER_STATUS_MF_AUTO : "要取得"),
   };
-  const inspGasOk = await safeUpdateStatus(client, channelId, messageTs, poNumber, inspectionUpdates, "inspection");
+  const inspGasOk = await safeUpdateStatus(client, channelId, messageTs, poNumber, inspectionUpdates, "inspection", userName);
   if (!inspGasOk) {
     await client.chat.postEphemeral({ channel: channelId, user: userId, text: "⚠️ ステータス更新に失敗しました。もう一度お試しください。" });
     return;
@@ -683,7 +683,7 @@ export async function handleReturnSubmit(
 
   const status = isPartial ? "一部返品" : "返品";
   const note = `${userName}が${isPartial ? `一部返品(${returnQty}/${quantity})` : "全量返品"}: ${returnReason}`;
-  await safeUpdateStatus(client, channelId, messageTs, poNumber, { "検収ステータス": status, "備考": note }, "return");
+  await safeUpdateStatus(client, channelId, messageTs, poNumber, { "検収ステータス": status, "備考": note }, "return", userName);
 }
 
 /**
@@ -1018,7 +1018,7 @@ const handleAmountDiffApprove: SlackActionHandler = async ({
     text: `金額差異承認済（${userName}）`,
   });
 
-  await safeUpdateStatus(client, channelId, messageTs, prNumber, gasUpdates, "amount_diff_approve");
+  await safeUpdateStatus(client, channelId, messageTs, prNumber, gasUpdates, "amount_diff_approve", userName);
 
   await notifyOps(client, `✅ *金額差異承認* ${prNumber}（${userName}）— 証憑¥${ocrAmount.toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}→ 合計額を税抜¥${ocrSubtotal.toLocaleString()}に更新`);
 
@@ -1057,7 +1057,7 @@ const handleAmountDiffApprove: SlackActionHandler = async ({
       await safeUpdateStatus(client, channelId, messageTs, prNumber, {
         "仕訳ID": String(journalResult.id),
         "Stage": "1",
-      }, "amount_diff_journal");
+      }, "amount_diff_journal", userName);
     } catch (journalErr) {
       console.error(`[amount_diff] Journal creation failed for ${prNumber}:`, journalErr);
       await client.chat.postMessage({
@@ -1106,7 +1106,7 @@ const handleAmountDiffReject: SlackActionHandler = async ({
   await safeUpdateStatus(client, channelId, messageTs, prNumber, {
     "金額照合": `却下（差額却下: ${userName}）`,
     "Stage": "差し戻し",
-  }, "amount_diff_reject");
+  }, "amount_diff_reject", userName);
 
   await notifyOps(client, `❌ *金額差異却下* ${prNumber}（${userName}）— 証憑¥${Number(ocrAmountStr).toLocaleString()} / 申請¥${Number(requestedAmountStr).toLocaleString()}`);
 };

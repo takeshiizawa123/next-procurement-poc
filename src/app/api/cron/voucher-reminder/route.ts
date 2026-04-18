@@ -50,7 +50,30 @@ export async function GET(request: NextRequest) {
       const slackIdMatch = (req.applicant || "").match(/<@(U[A-Z0-9]+)>/);
       const applicantSlackId = slackIdMatch?.[1] || "";
 
-      if (days >= 7) {
+      if (days >= 14) {
+        // Day14+: 管理本部に作業凍結提案通知
+        const opsChannel = process.env.SLACK_OPS_CHANNEL;
+        if (opsChannel) {
+          await client.chat.postMessage({
+            channel: safeDmChannel(opsChannel),
+            text: [
+              `🛑 *作業凍結提案* — 証憑 ${days}日未提出`,
+              `• ${req.prNumber}: ${req.itemName}（申請者: ${req.applicant}）`,
+              `2週間経過しても証憑未添付。申請者に確認の上、`,
+              `  a) 申請取消 b) 証憑なしで仕訳ドラフト作成 c) 継続督促 を判断してください。`,
+            ].join("\n"),
+          });
+        }
+        // 部門長にもDM
+        const route = await resolveApprovalRoute(req.applicant, applicantSlackId, 0);
+        if (route.primaryApprover) {
+          await client.chat.postMessage({
+            channel: safeDmChannel(route.primaryApprover),
+            text: `🛑 *証憑${days}日未提出 — 作業凍結候補*\n${req.applicant} の ${req.prNumber}: ${req.itemName}\n管理本部で作業凍結の判断が必要です。`,
+          });
+          reminded++;
+        }
+      } else if (days >= 7) {
         // Day7+: 部門長にDMエスカレーション
         const route = await resolveApprovalRoute(req.applicant, applicantSlackId, 0);
         if (route.primaryApprover) {

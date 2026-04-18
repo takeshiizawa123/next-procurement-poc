@@ -12,7 +12,10 @@ import { updateStatus } from "./gas-client";
 /** 開発者用: 全承認権限を持つSlack ID */
 export const DEV_ADMIN_SLACK_ID = "U04FBAX6MEK"; // 伊澤 剛志
 
-/** GAS更新を実行し、失敗時にSlackスレッドに警告を投稿する */
+/**
+ * GAS更新を実行し、失敗時にSlackスレッドに警告を投稿する
+ * 成功時は監査ログに変更内容を自動記録する
+ */
 export async function safeUpdateStatus(
   client: WebClient,
   channelId: string,
@@ -20,6 +23,8 @@ export async function safeUpdateStatus(
   poNumber: string,
   updates: Record<string, string>,
   context: string,
+  /** 変更を実行したユーザー（Slack ID or 名前）。auditLog記録用 */
+  changedBy?: string,
 ): Promise<boolean> {
   try {
     const result = await updateStatus(poNumber, updates);
@@ -36,6 +41,24 @@ export async function safeUpdateStatus(
       }).catch(() => {});
       return false;
     }
+
+    // 成功時: 監査ログに記録（失敗しても主フローは止めない）
+    try {
+      const { writeAuditLog } = await import("./db/audit-repo");
+      const entries = Object.entries(updates).map(([field, value]) => ({
+        tableName: "purchase_requests",
+        recordId: poNumber,
+        action: "updated",
+        ...(changedBy ? { changedBy } : {}),
+        fieldName: field,
+        newValue: String(value),
+        metadata: { context, channelId, threadTs },
+      }));
+      await writeAuditLog(entries);
+    } catch (auditErr) {
+      console.warn(`[${context}] audit log write failed:`, auditErr);
+    }
+
     return true;
   } catch (e) {
     const errorMessage = e instanceof Error ? e.message : String(e);
