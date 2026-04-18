@@ -8,6 +8,7 @@ import {
   syncPrompt,
   syncContract,
   FLOW_DEFINITIONS,
+  PROMPT_DEFINITIONS,
 } from "@/lib/notion";
 
 /**
@@ -68,33 +69,11 @@ export const GET = withCronGuard("notion-sync", async (_request: NextRequest) =>
     }
     results.flows = flowResults;
 
-    // AIプロンプト
-    const prompts = [
-      {
-        name: "勘定科目推定プロンプト",
-        module: "src/lib/account-estimator.ts",
-        purpose: "品目名・仕入先・金額から勘定科目をRAGで推定",
-        prompt: "（ソースコード参照）",
-        lastUpdated: now.toISOString().split("T")[0],
-      },
-      {
-        name: "OCR証憑解析プロンプト",
-        module: "src/lib/ocr.ts",
-        purpose: "Gemini Visionで証憑画像から金額・日付・適格請求書番号を抽出",
-        prompt: "（ソースコード参照）",
-        lastUpdated: now.toISOString().split("T")[0],
-      },
-      {
-        name: "Slack AIアシスタントプロンプト",
-        module: "src/app/api/ai/ask/route.ts",
-        purpose: "Claude Haikuで購買・出張に関する質問にRAG応答",
-        prompt: "（ソースコード参照）",
-        lastUpdated: now.toISOString().split("T")[0],
-      },
-    ];
+    // AIプロンプト（PROMPT_DEFINITIONSから全情報同期）
+    const today = now.toISOString().split("T")[0];
     const promptResults: Record<string, boolean> = {};
-    for (const p of prompts) {
-      promptResults[p.name] = await syncPrompt(p);
+    for (const p of PROMPT_DEFINITIONS) {
+      promptResults[p.name] = await syncPrompt({ ...p, lastUpdated: today });
     }
     results.prompts = promptResults;
   }

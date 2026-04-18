@@ -7,6 +7,7 @@ import {
   recordChangelog,
   syncContract,
   FLOW_DEFINITIONS,
+  PROMPT_DEFINITIONS,
 } from "@/lib/notion";
 import { db } from "@/db";
 import { contracts } from "@/db/schema";
@@ -56,33 +57,10 @@ export async function POST(request: NextRequest) {
     // プロンプト同期
     // ========================================
     if (action === "sync-prompts" || action === "sync-all") {
-      const prompts = [
-        {
-          name: "勘定科目推定プロンプト",
-          module: "src/lib/account-estimator.ts",
-          purpose: "品目名・仕入先・金額から勘定科目をRAGで推定。修正履歴をコンテキストに注入して精度向上。",
-          prompt: "（account-estimator.ts のシステムプロンプト — 詳細はソースコード参照）",
-          lastUpdated: new Date().toISOString().split("T")[0],
-        },
-        {
-          name: "OCR証憑解析プロンプト",
-          module: "src/lib/ocr.ts",
-          purpose: "Gemini Visionで証憑画像から金額・日付・適格請求書番号を抽出。税率（10%/8%）を自動判定。",
-          prompt: "（ocr.ts のGemini Visionプロンプト — 詳細はソースコード参照）",
-          lastUpdated: new Date().toISOString().split("T")[0],
-        },
-        {
-          name: "Slack AIアシスタントプロンプト",
-          module: "src/app/api/ai/ask/route.ts",
-          purpose: "Claude Haikuで購買・出張に関する質問にRAG応答。購買データ+仕訳統計をコンテキストに注入。",
-          prompt: "（ask/route.ts のシステムプロンプト — 詳細はソースコード参照）",
-          lastUpdated: new Date().toISOString().split("T")[0],
-        },
-      ];
-
+      const today = new Date().toISOString().split("T")[0];
       const promptResults: Record<string, boolean> = {};
-      for (const p of prompts) {
-        promptResults[p.name] = await syncPrompt(p);
+      for (const p of PROMPT_DEFINITIONS) {
+        promptResults[p.name] = await syncPrompt({ ...p, lastUpdated: today });
       }
       results.prompts = promptResults;
     }
