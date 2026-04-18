@@ -2,10 +2,17 @@ import { getEmployees, type Employee } from "./gas-client";
 
 const DEFAULT_APPROVER = process.env.SLACK_DEFAULT_APPROVER || "";
 const ADMIN_APPROVER = process.env.SLACK_ADMIN_APPROVER || "";
+// 代替承認者（部門長不在時）: カンマ区切りで複数指定可。全員に同時通知して最初に押した人が承認
+const ALTERNATE_APPROVERS = (process.env.SLACK_ALTERNATE_APPROVERS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 export interface ApprovalRoute {
   /** 承認者（部門長）の SlackID */
   primaryApprover: string;
+  /** 代替承認者（部門長不在時に承認可能なメンバー）。primaryを含まない */
+  alternateApprovers: string[];
   /** マッチした従業員情報 */
   employee: Employee | null;
 }
@@ -59,8 +66,16 @@ export async function resolveApprovalRoute(
     // 従業員マスタ取得失敗時はデフォルト承認者を使用
   }
 
+  // 代替承認者: ALTERNATE_APPROVERS + ADMIN_APPROVER から primary を除外
+  const alternateCandidates = [...ALTERNATE_APPROVERS, ADMIN_APPROVER].filter(
+    (id) => id && id !== primaryApprover,
+  );
+  // 重複排除
+  const alternateApprovers = Array.from(new Set(alternateCandidates));
+
   return {
     primaryApprover,
+    alternateApprovers,
     employee,
   };
 }

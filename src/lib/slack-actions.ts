@@ -69,15 +69,19 @@ export const handleApprove: SlackActionHandler = async ({
 }) => {
   const { poNumber, approverSlackId } = parseActionValue(actionValue);
 
-  // 権限チェック: 指定された承認者 or 開発者（承認者未設定の場合も拒否）
+  // 権限チェック: 指定された承認者 or 開発者 or 管理者 or 代替承認者（部門長不在時）
   const adminMembers = (process.env.SLACK_ADMIN_MEMBERS || "").split(",").filter(Boolean);
-  const isAuthorizedApprover = userId === approverSlackId || userId === DEV_ADMIN_SLACK_ID || adminMembers.includes(userId);
+  const alternateApprovers = (process.env.SLACK_ALTERNATE_APPROVERS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const isAuthorizedApprover = userId === approverSlackId
+    || userId === DEV_ADMIN_SLACK_ID
+    || adminMembers.includes(userId)
+    || alternateApprovers.includes(userId);
   if (!isAuthorizedApprover) {
     await client.chat.postEphemeral({
       channel: channelId,
       user: userId,
       text: approverSlackId
-        ? "⚠️ この申請の承認権限がありません。承認者として指定された方のみ操作できます。"
+        ? "⚠️ この申請の承認権限がありません。承認者または代替承認者のみ操作できます。"
         : "⚠️ 承認者が設定されていないため操作できません。管理者に連絡してください。",
     });
     return;
@@ -198,11 +202,16 @@ export const handleReject: SlackActionHandler = async ({
 }) => {
   const { poNumber, approverSlackId } = parseActionValue(actionValue);
 
-  if (approverSlackId && userId !== approverSlackId) {
+  const alternateApproversReject = (process.env.SLACK_ALTERNATE_APPROVERS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const isAuthorizedRejecter = !approverSlackId
+    || userId === approverSlackId
+    || userId === DEV_ADMIN_SLACK_ID
+    || alternateApproversReject.includes(userId);
+  if (!isAuthorizedRejecter) {
     await client.chat.postEphemeral({
       channel: channelId,
       user: userId,
-      text: "⚠️ この申請の差戻し権限がありません。承認者として指定された方のみ操作できます。",
+      text: "⚠️ この申請の差戻し権限がありません。承認者または代替承認者のみ操作できます。",
     });
     return;
   }
@@ -703,11 +712,16 @@ export const handleDmApprove: SlackActionHandler = async ({
   const poNumber = parts[3];
   const approverSlackId = parts[5];
 
-  if (approverSlackId && userId !== approverSlackId && userId !== DEV_ADMIN_SLACK_ID) {
+  const altApproversDm = (process.env.SLACK_ALTERNATE_APPROVERS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const dmApproveAuth = !approverSlackId
+    || userId === approverSlackId
+    || userId === DEV_ADMIN_SLACK_ID
+    || altApproversDm.includes(userId);
+  if (!dmApproveAuth) {
     await client.chat.postEphemeral({
       channel: dmChannelId,
       user: userId,
-      text: "⚠️ この申請の承認権限がありません。",
+      text: "⚠️ この申請の承認権限がありません（代替承認者含む）。",
     });
     return;
   }

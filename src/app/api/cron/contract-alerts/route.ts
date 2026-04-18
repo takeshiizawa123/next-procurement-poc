@@ -45,6 +45,24 @@ export async function GET(request: NextRequest) {
       const daysLeft = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 
       if (daysLeft > 0 && daysLeft <= c.renewalAlertDays) {
+        // エスカレーション段階判定: 60日前/30日前/7日前で強度を上げる
+        let severity: "info" | "warning" | "critical" = "info";
+        let emoji = "📅";
+        let tone = "";
+        if (daysLeft <= 7) {
+          severity = "critical";
+          emoji = "🚨";
+          tone = "期限が迫っています — 至急判断が必要です";
+        } else if (daysLeft <= 30) {
+          severity = "warning";
+          emoji = "⚠️";
+          tone = "更新・解約の判断をお願いします";
+        } else {
+          severity = "info";
+          emoji = "📅";
+          tone = "更新可否を検討ください（余裕あり）";
+        }
+
         renewalAlerts.push({
           contractNumber: c.contractNumber,
           supplierName: c.supplierName,
@@ -53,21 +71,39 @@ export async function GET(request: NextRequest) {
           requester: c.requesterSlackId || "",
         });
 
-        // 担当者にDM通知
+        // 担当者にDM通知（強度に応じて文言を変える）
         if (c.requesterSlackId) {
           try {
             await client.chat.postMessage({
               channel: safeDmChannel(c.requesterSlackId),
               text: [
-                `⚠️ *契約更新のお知らせ*`,
+                `${emoji} *契約更新のお知らせ*`,
                 `${c.contractNumber} ${c.supplierName}`,
                 `契約終了日: ${c.contractEndDate}（あと${daysLeft}日）`,
                 `更新タイプ: ${c.renewalType}`,
                 "",
-                "更新・解約の判断をお願いします",
+                tone,
               ].join("\n"),
             });
           } catch { /* DM失敗は無視 */ }
+        }
+
+        // critical（7日以内）: 管理本部にもエスカレーション
+        if (severity === "critical") {
+          const opsChannel = process.env.SLACK_OPS_CHANNEL;
+          if (opsChannel) {
+            try {
+              await client.chat.postMessage({
+                channel: safeDmChannel(opsChannel),
+                text: [
+                  `🚨 *契約期限目前* ${c.contractNumber} ${c.supplierName}`,
+                  `終了日: ${c.contractEndDate}（あと${daysLeft}日）`,
+                  c.requesterSlackId ? `担当: <@${c.requesterSlackId}>` : `担当者未設定`,
+                  "期限までに更新/解約の意思表示がない場合、自動失効します",
+                ].join("\n"),
+              });
+            } catch { /* 無視 */ }
+          }
         }
       }
     }

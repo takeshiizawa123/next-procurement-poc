@@ -67,14 +67,26 @@ export async function GET(request: NextRequest) {
     let contractMatchCreated = 0;
     let contractMatchUpdated = 0;
     let contractMatchConfident = 0;
+    let contractMatchCandidate = 0;
+    let contractCandidateSamples: Array<{ supplier: string; amount: number; contract: string | null; score: number }> = [];
     try {
       const contractSummary = await matchContractCards(enrichedStatements);
       contractMatchConfident = contractSummary.confident;
+      contractMatchCandidate = contractSummary.candidate;
+      contractCandidateSamples = contractSummary.results
+        .filter((r) => r.status === "candidate")
+        .slice(0, 5)
+        .map((r) => ({
+          supplier: r.statement.remark,
+          amount: r.statement.amount,
+          contract: r.contractNumber,
+          score: r.score,
+        }));
       if (contractSummary.aggregates.length > 0) {
         const applyResult = await applyContractMatches(contractSummary);
         contractMatchCreated = applyResult.created;
         contractMatchUpdated = applyResult.updated;
-        console.log(`[card-reconciliation] Contract match: confident=${contractSummary.confident}, created=${applyResult.created}, updated=${applyResult.updated}`);
+        console.log(`[card-reconciliation] Contract match: confident=${contractSummary.confident}, candidate=${contractSummary.candidate}, created=${applyResult.created}, updated=${applyResult.updated}`);
       }
     } catch (e) {
       console.error("[card-reconciliation] Contract match failed:", e);
@@ -100,6 +112,18 @@ export async function GET(request: NextRequest) {
           "",
           `📋 *契約(カード自動)マッチ: ${contractMatchConfident}件 confident*`,
           `   → 請求書 新規作成: ${contractMatchCreated}件 / 更新: ${contractMatchUpdated}件`,
+        );
+      }
+
+      // 候補マッチ（手動確認待ち）
+      if (contractMatchCandidate > 0) {
+        lines.push(
+          "",
+          `🟡 *候補マッチ: ${contractMatchCandidate}件（手動確認推奨）*`,
+          ...contractCandidateSamples.map((c) =>
+            `  • ${c.supplier} ¥${c.amount.toLocaleString()} → 候補契約: ${c.contract || "なし"}（スコア${c.score}）`,
+          ),
+          `  → /admin/contracts で契約マスタの取引先名を調整してください`,
         );
       }
 
