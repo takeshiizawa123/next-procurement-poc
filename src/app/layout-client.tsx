@@ -25,6 +25,7 @@ function Nav() {
   // クライアント側でマウント後のみ管理メニュー表示（hydration mismatch回避）
   if (mounted && user.isAdmin) {
     links.push(
+      { href: "/admin/dashboard", label: "📊 ダッシュボード" },
       { href: "/admin/journals", label: "仕訳管理" },
       { href: "/admin/card-matching", label: "カード照合" },
       { href: "/admin/trip-controls", label: "出張統制" },
