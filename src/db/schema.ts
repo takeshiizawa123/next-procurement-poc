@@ -20,6 +20,7 @@ import {
   date,
   jsonb,
   index,
+  uniqueIndex,
   primaryKey,
   pgEnum,
   numeric,
@@ -701,6 +702,8 @@ export const contractInvoices = pgTable(
     index("contract_invoices_contract_idx").on(t.contractId),
     index("contract_invoices_month_idx").on(t.billingMonth),
     index("contract_invoices_status_idx").on(t.status),
+    // 二重計上防止: 同一契約×同一月は1行のみ
+    uniqueIndex("contract_invoices_contract_month_unique").on(t.contractId, t.billingMonth),
   ],
 );
 
