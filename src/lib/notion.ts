@@ -48,7 +48,10 @@ const PAGE_IDS = {
 // ========================================
 
 /**
- * Notionページにフロー図（Mermaid/テキスト）を同期
+ * Notionページにフロー図（Mermaid/テキスト）を同期（upsert方式）
+ *
+ * 既存の同名フロー図ブロック群（heading_2 + description + code + divider）を
+ * 削除してから新規追加する。重複防止。
  */
 export async function syncFlowDiagram(
   title: string,
@@ -59,13 +62,55 @@ export async function syncFlowDiagram(
   if (!notion || !PAGE_IDS.flowDiagram) return false;
 
   try {
-    // 既存の子ブロックを取得して、同名のセクションがあれば更新
-    const children = await notion.blocks.children.list({
-      block_id: PAGE_IDS.flowDiagram,
-      page_size: 100,
-    });
+    // ページの全子ブロックを取得（ページネーション対応）
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const allBlocks: any[] = [];
+    let cursor: string | undefined;
+    do {
+      const res = await notion.blocks.children.list({
+        block_id: PAGE_IDS.flowDiagram,
+        page_size: 100,
+        start_cursor: cursor,
+      });
+      allBlocks.push(...res.results);
+      cursor = res.has_more && res.next_cursor ? res.next_cursor : undefined;
+    } while (cursor);
 
-    // 新しいブロックを追加
+    // 同タイトルのheading_2 + 直後のparagraph/code/dividerを削除対象に
+    const toDelete: string[] = [];
+    for (let i = 0; i < allBlocks.length; i++) {
+      const b = allBlocks[i];
+      if (b.type !== "heading_2") continue;
+      const text = b.heading_2?.rich_text?.[0]?.plain_text || "";
+      // 「タイトル (YYYY-MM-DD)」形式。startsWithで判定
+      if (!text.startsWith(title)) continue;
+
+      toDelete.push(b.id);
+      // 次に続くparagraph/code/dividerも削除（dividerで停止）
+      for (let j = 1; j <= 5 && i + j < allBlocks.length; j++) {
+        const next = allBlocks[i + j];
+        if (!next) break;
+        if (next.type === "paragraph" || next.type === "code") {
+          toDelete.push(next.id);
+        } else if (next.type === "divider") {
+          toDelete.push(next.id);
+          break; // dividerで1セット終わり
+        } else {
+          break; // 想定外ブロック → 停止
+        }
+      }
+    }
+
+    // 既存ブロックを削除
+    for (const id of toDelete) {
+      try {
+        await notion.blocks.delete({ block_id: id });
+      } catch (e) {
+        console.warn(`[notion] Delete block ${id} failed:`, e);
+      }
+    }
+
+    // 新規追加
     await notion.blocks.children.append({
       block_id: PAGE_IDS.flowDiagram,
       children: [
@@ -99,7 +144,7 @@ export async function syncFlowDiagram(
       ],
     });
 
-    console.log(`[notion] Synced flow diagram: ${title}`);
+    console.log(`[notion] Upserted flow diagram: ${title} (deleted ${toDelete.length} old blocks)`);
     return true;
   } catch (e) {
     console.error("[notion] syncFlowDiagram failed:", e);
