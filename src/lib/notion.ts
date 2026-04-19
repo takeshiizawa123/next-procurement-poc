@@ -625,62 +625,62 @@ export const FLOW_DEFINITIONS = {
     title: "出張申請フロー",
     description: "出張計画→AI支援でフォーム生成→予約→旅費精算の一気通貫。日当は給与連携フローで別途支給",
     mermaid: `graph TD
-    A[申請者: /trip/new で自然言語入力] --> B[Gemini 2.0 Flash でAI構造化]
-    B --> C[目的地・日程・交通・宿泊を自動生成]
-    C --> D[予約リンク自動生成: Jalan/楽天/SmartEX/えきねっと]
-    D --> E[申請者: 内容確認・編集]
-    E --> F[提出: purchase_requests に出張PO作成]
-    F --> F2[trip_allowance 自動計算: 日帰り1000円 or 泊まり3000円×泊数+1]
-    F2 --> G{部門長: 承認/差戻し}
-    G -->|承認| H[申請者: 外部予約サイトで予約]
+    A["申請者: trip/new で自然言語入力"] --> B["Gemini 2.0 Flash で AI構造化"]
+    B --> C["目的地・日程・交通・宿泊を自動生成"]
+    C --> D["予約リンク自動生成 Jalan 楽天 SmartEX えきねっと"]
+    D --> E["申請者: 内容確認・編集"]
+    E --> F["提出: purchase_requests に出張PO作成"]
+    F --> F2["trip_allowance 自動計算 日帰り1000円 または 泊数プラス1日ぶん3000円"]
+    F2 --> G{"部門長: 承認または差戻し"}
+    G -->|承認| H["申請者: 外部予約サイトで予約"]
     G -->|差戻し| A
-    H --> I[出張実施]
-    I --> J[領収書をSlackスレッドに添付]
-    J --> K[OCR+金額照合 → 仕訳生成]
-    F2 --> L[出張手当: payrollIntegrationFlow で月次集計→MF給与]`,
+    H --> I["出張実施"]
+    I --> J["領収書を Slackスレッドに添付"]
+    J --> K["OCR と金額照合 そして仕訳生成"]
+    F2 --> L["出張手当は payrollIntegrationFlow で月次集計し MF給与へ"]`,
   },
 
   expenseFlow: {
     title: "立替精算フロー",
     description: "従業員が立替払いした経費を精算。承認・発注・検収ステップをスキップ。月次で給与連携",
     mermaid: `graph TD
-    A[従業員: /expense/new で申請] --> B[品目・金額・取引先・支払方法=立替 を入力]
-    B --> C[request_type=購入済で submit]
-    C --> D[承認/発注/検収ステップをスキップ]
-    D --> E[ステータス: 検収済・証憑待ち]
-    E --> F[申請者: 領収書をSlackスレッドに添付]
-    F --> G[Gemini OCR で金額抽出]
-    G --> H[金額照合: 申請額 vs OCR金額]
-    H --> I{±20%以内?}
-    I -->|OK| J[仕訳登録: 借方費用/貸方未払金]
-    I -->|差異大| K[承認者に再承認DM送信]
-    K --> L[再承認後に仕訳]
-    J --> M[月次: payrollIntegrationFlow で集計]
+    A["従業員: expense/new で申請"] --> B["品目 金額 取引先 支払方法=立替 を入力"]
+    B --> C["request_type=購入済で submit"]
+    C --> D["承認 発注 検収ステップをスキップ"]
+    D --> E["ステータス: 検収済 証憑待ち"]
+    E --> F["申請者: 領収書を Slackスレッドに添付"]
+    F --> G["Gemini OCR で金額抽出"]
+    G --> H["金額照合 申請額 vs OCR金額"]
+    H --> I{"誤差 20パーセント以内?"}
+    I -->|OK| J["仕訳登録 借方費用 貸方未払金"]
+    I -->|差異大| K["承認者に再承認DM送信"]
+    K --> L["再承認後に仕訳"]
+    J --> M["月次で payrollIntegrationFlow により集計"]
     L --> M
-    M --> N[MF給与で給与と合算して振込]`,
+    M --> N["MF給与で給与と合算して振込"]`,
   },
 
   payrollIntegrationFlow: {
     title: "給与連携フロー（立替経費+出張手当）",
     description: "月次締め後、立替経費と出張手当を従業員別に集計→MF給与CSVに転記→月次給与と合算して振込",
     mermaid: `graph TD
-    A[購買管理: 立替精算+出張手当が仕訳済] --> B[月末締め]
-    B --> C[管理本部: /admin/expense/payroll で対象月選択]
-    C --> D[集計API: 従業員別に立替経費合計+出張手当合計]
-    D --> E[payroll_code 6桁社員コードで従業員特定]
-    E --> F{社員コード未マッピング?}
-    F -->|あり| G[/admin/employees/payroll-mapping で設定]
-    F -->|なし| H[集計結果を表示]
+    A["購買管理: 立替精算と出張手当が仕訳済"] --> B["月末締め"]
+    B --> C["管理本部: admin/expense/payroll で対象月選択"]
+    C --> D["集計API 従業員別に立替経費合計と出張手当合計"]
+    D --> E["payroll_code 6桁社員コードで従業員特定"]
+    E --> F{"社員コード未マッピング?"}
+    F -->|あり| G["admin/employees/payroll-mapping で設定"]
+    F -->|なし| H["集計結果を表示"]
     G --> H
-    H --> I{出力方式}
-    I -->|即貼付| J[クリップボードコピー: コード TAB 氏名 TAB 立替 TAB 出張手当]
-    I -->|CSV保存| K[CSVダウンロード]
-    J --> L[給与関連一覧表.xlsx の立替経費/出張手当列に貼付]
+    H --> I{"出力方式"}
+    I -->|即貼付| J["クリップボードコピー タブ区切り"]
+    I -->|CSV保存| K["CSVダウンロード"]
+    J --> L["給与関連一覧表.xlsx の立替経費 出張手当列に貼付"]
     K --> L
-    L --> M[MF給与csv用シート.xlsx がVLOOKUPで自動反映]
-    M --> N[MF用シート を CSV保存]
-    N --> O[MF給与にCSVインポート]
-    O --> P[月次給与に合算して振込 月末締め翌月15日支給]`,
+    L --> M["MF給与csv用シート.xlsx が VLOOKUPで自動反映"]
+    M --> N["MF用シートをCSV保存"]
+    N --> O["MF給与にCSVインポート"]
+    O --> P["月次給与に合算して振込 月末締め翌月15日支給"]`,
   },
 
   voucherOcrFlow: {
