@@ -211,6 +211,9 @@ export const purchaseRequests = pgTable(
     // 日帰り=1000円、泊まり=3000円×(泊数+1)
     tripAllowance: integer("trip_allowance"),
 
+    // 金額差異再承認の試行回数（3回超で強制エスカレーション）
+    amountDiffRetryCount: integer("amount_diff_retry_count").notNull().default(0),
+
     // フラグ
     isEstimate: boolean("is_estimate").notNull().default(false),
     isPostReport: boolean("is_post_report").notNull().default(false),

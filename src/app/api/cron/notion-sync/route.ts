@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { withCronGuard } from "@/lib/cron-helper";
+import { withCronGuard, withCronLock } from "@/lib/cron-helper";
 import { db } from "@/db";
 import { contracts } from "@/db/schema";
 import {
@@ -22,13 +22,26 @@ import {
  * - 毎月1日のみ: フロー図 + AIプロンプトも追加同期
  */
 export const GET = withCronGuard("notion-sync", async (_request: NextRequest) => {
+  // 排他ロックで同時実行防止（TTL 10分、同期処理は通常数十秒以内）
+  const lockResult = await withCronLock("notion-sync", 600, async () => {
+    return await runSync();
+  });
+
+  if ("skipped" in lockResult && lockResult.skipped) {
+    return NextResponse.json({ ok: true, skipped: true, reason: lockResult.reason });
+  }
+
+  return NextResponse.json(lockResult as Record<string, unknown>);
+});
+
+async function runSync() {
   const notion = getNotionClient();
   if (!notion) {
-    return NextResponse.json({
+    return {
       ok: true,
       skipped: true,
       reason: "NOTION_API_KEY未設定 — Notion同期スキップ",
-    });
+    };
   }
 
   const now = new Date();
@@ -83,10 +96,10 @@ export const GET = withCronGuard("notion-sync", async (_request: NextRequest) =>
     isFirstOfMonth ? ", monthly sync included" : "",
   );
 
-  return NextResponse.json({
+  return {
     ok: true,
     date: now.toISOString().split("T")[0],
     isFirstOfMonth,
     results,
-  });
-});
+  };
+}

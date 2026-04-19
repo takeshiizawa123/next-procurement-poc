@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { withCronGuard } from "@/lib/cron-helper";
+import { withCronGuard, withCronLock } from "@/lib/cron-helper";
 import { getNotionClient, recordChangelog } from "@/lib/notion";
 
 const GITHUB_REPO = "takeshiizawa123/next-procurement-poc";
@@ -26,13 +26,26 @@ interface GitHubCommit {
  * 認証: GitHub APIはpublicリポジトリのため無認証(60 req/h)で十分
  */
 export const GET = withCronGuard("changelog-sync", async (_request: NextRequest) => {
+  // 排他ロック（TTL 5分）
+  const lockResult = await withCronLock("changelog-sync", 300, async () => {
+    return await runChangelogSync();
+  });
+
+  if ("skipped" in lockResult && lockResult.skipped) {
+    return NextResponse.json({ ok: true, skipped: true, reason: lockResult.reason });
+  }
+
+  return NextResponse.json(lockResult as Record<string, unknown>);
+});
+
+async function runChangelogSync() {
   const notion = getNotionClient();
   if (!notion) {
-    return NextResponse.json({
+    return {
       ok: true,
       skipped: true,
       reason: "NOTION_API_KEY未設定",
-    });
+    };
   }
 
   // 過去25時間のコミットを取得（cron遅延許容）
@@ -85,11 +98,11 @@ export const GET = withCronGuard("changelog-sync", async (_request: NextRequest)
 
   console.log(`[changelog-sync] commits fetched=${commits.length}, recorded=${recorded}, skipped=${skipped}, failed=${failed}`);
 
-  return NextResponse.json({
+  return {
     ok: true,
     since,
     commitsFetched: commits.length,
     recorded,
     failed,
-  });
-});
+  };
+}

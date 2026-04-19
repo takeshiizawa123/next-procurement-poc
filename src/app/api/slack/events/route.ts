@@ -1236,6 +1236,22 @@ async function handleFileSharedInThread(channelId: string, threadTs: string, eve
             confirmLines.push(`消費税: ${taxInfo}`);
           }
 
+          // 複数税率混在の警告
+          if (ocrResult.has_mixed_tax_rates && ocrResult.tax_breakdown) {
+            const breakdown = ocrResult.tax_breakdown
+              .map((b) => `${b.rate}% ¥${b.subtotal.toLocaleString()}（税¥${b.tax.toLocaleString()}）`)
+              .join(" + ");
+            confirmLines.push(`⚠️ *複数税率混在*: ${breakdown}`);
+            confirmLines.push("※仕訳は主税率で登録されます。軽減税率分を別仕訳する場合は管理本部で手動対応が必要です。");
+            // OPSにも通知
+            try {
+              await notifyOps(
+                client,
+                `⚠️ *複数税率混在の証憑* ${prNumber}\n${breakdown}\n仕訳を分割するか確認してください（現状は主税率のみで仕訳）`,
+              );
+            } catch { /* 無視 */ }
+          }
+
           // OCR結果をGASに保存（カラム名に合わせてマッピング）
           const ocrUpdates: Record<string, string> = {};
           // 証憑金額（OCR読み取り税込金額）

@@ -468,6 +468,50 @@ export async function notifyOps(
 }
 
 /**
+ * 承認者がアクティブか確認し、非アクティブなら代替承認者を返す
+ * @returns { slackId: 実際の宛先, isOriginal: 元の承認者か, fallbackReason?: フォールバック理由 }
+ */
+async function resolveActiveApprover(approverSlackId: string): Promise<{
+  slackId: string;
+  isOriginal: boolean;
+  fallbackReason?: string;
+}> {
+  if (!approverSlackId) return { slackId: approverSlackId, isOriginal: true };
+
+  try {
+    const { db } = await import("@/db");
+    const { employees } = await import("@/db/schema");
+    const { eq } = await import("drizzle-orm");
+
+    const [emp] = await db.select().from(employees).where(eq(employees.slackId, approverSlackId)).limit(1);
+
+    // 従業員マスタに存在 + アクティブ → そのまま
+    if (emp && emp.isActive) {
+      return { slackId: approverSlackId, isOriginal: true };
+    }
+
+    // 非アクティブ or 未登録 → 代替承認者を選択
+    const alternates = (process.env.SLACK_ALTERNATE_APPROVERS || "")
+      .split(",").map((s) => s.trim()).filter(Boolean);
+    const defaultApprover = process.env.SLACK_DEFAULT_APPROVER || "";
+
+    const fallbackTarget = alternates[0] || defaultApprover;
+    if (!fallbackTarget) return { slackId: approverSlackId, isOriginal: true }; // フォールバック先なし、元のまま
+
+    return {
+      slackId: fallbackTarget,
+      isOriginal: false,
+      fallbackReason: emp
+        ? `承認者 ${emp.name} は非アクティブ（退職・休職等）`
+        : `承認者 ${approverSlackId} が従業員マスタに未登録`,
+    };
+  } catch (e) {
+    console.warn("[sendApprovalDM] resolveActiveApprover failed:", e);
+    return { slackId: approverSlackId, isOriginal: true };
+  }
+}
+
+/**
  * 承認者にDMで承認依頼を送信
  */
 export async function sendApprovalDM(
@@ -477,6 +521,22 @@ export async function sendApprovalDM(
   messageTs: string,
 ): Promise<void> {
   if (!info.approverSlackId) return;
+
+  // アクティブ承認者を解決（非アクティブなら代替承認者に切替）
+  const resolved = await resolveActiveApprover(info.approverSlackId);
+  const targetApprover = resolved.slackId;
+
+  // フォールバック時はOPS通知
+  if (!resolved.isOriginal && resolved.fallbackReason) {
+    console.warn(`[sendApprovalDM] Fallback to ${targetApprover} (${resolved.fallbackReason})`);
+    try {
+      const { notifyOps } = await import("./slack-messages");
+      await notifyOps(
+        slackClient,
+        `⚠️ *承認者フォールバック発生* ${info.poNumber}\n理由: ${resolved.fallbackReason}\n元承認者: <@${info.approverSlackId}> → 代替: <@${targetApprover}>`,
+      );
+    } catch { /* 通知失敗は無視 */ }
+  }
 
   const av = buildActionValue(info);
   const channelLink = `https://slack.com/archives/${channelId}/p${messageTs.replace(".", "")}`;
@@ -550,7 +610,7 @@ export async function sendApprovalDM(
   ];
 
   await slackClient.chat.postMessage({
-    channel: safeDmChannel(info.approverSlackId),
+    channel: safeDmChannel(targetApprover),
     text: `📋 承認依頼: ${info.poNumber} ${info.itemName} ${info.amount}（申請者: ${info.applicant}）${pendingWarning}`,
     blocks: allBlocks,
   });

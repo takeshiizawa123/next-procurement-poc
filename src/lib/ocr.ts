@@ -19,7 +19,7 @@ export interface OcrResult {
   document_type: "delivery_note" | "invoice" | "receipt" | "unknown";
   date: string;           // YYYY-MM-DD
   amount: number;         // 税込合計
-  tax_rate?: number;      // 消費税率（10, 8, 0）
+  tax_rate?: number;      // 消費税率（10, 8, 0） - 主税率
   tax_amount?: number;    // 消費税額
   subtotal?: number;      // 税抜金額
   vendor_name: string;
@@ -28,6 +28,10 @@ export interface OcrResult {
   invoice_number?: string;
   is_qualified_invoice?: boolean;
   registration_number?: string; // T+13桁
+  /** 複数税率混在フラグ: 10%と8%が同一証憑に混在している場合true */
+  has_mixed_tax_rates?: boolean;
+  /** 混在税率の内訳 (混在時のみ) */
+  tax_breakdown?: Array<{ rate: number; subtotal: number; tax: number }>;
 }
 
 export interface OcrMatchResult {
@@ -66,7 +70,10 @@ const OCR_PROMPT = `この証憑（請求書・領収書・納品書）から以
 - 確信度は読み取り品質に基づいて0-1で設定
 - 適格請求書発行事業者の登録番号: 「T」で始まる13桁の数字（例: T1234567890123）。ヘッダー、フッター、欄外の小さな文字も注意深く探すこと。「登録番号」「適格請求書発行事業者」等のラベル近くに記載されていることが多い
 - is_qualified_invoice: 登録番号が見つかればtrue、なければfalse
-- 税率: 10%対象と8%（軽減税率）対象が混在する場合、金額が大きい方の税率を設定
+- 税率: 10%対象と8%（軽減税率）対象が混在する場合、金額が大きい方の税率を tax_rate に設定
+- **複数税率混在検知**: 10%と8%が同一証憑に混在している場合、has_mixed_tax_rates=true として、tax_breakdown に各税率の内訳を返す:
+    例: { "has_mixed_tax_rates": true, "tax_breakdown": [{"rate":10,"subtotal":5000,"tax":500},{"rate":8,"subtotal":3000,"tax":240}] }
+  混在なし（単一税率のみ）の場合は has_mixed_tax_rates=false、tax_breakdown は省略
 - JSONのみ出力（説明文は不要）`;
 
 /**
@@ -150,6 +157,8 @@ export async function extractFromImage(imageBase64: string, mimeType: string): P
     invoice_number: parsed.invoice_number,
     is_qualified_invoice: parsed.is_qualified_invoice,
     registration_number: parsed.registration_number,
+    has_mixed_tax_rates: parsed.has_mixed_tax_rates === true,
+    tax_breakdown: Array.isArray(parsed.tax_breakdown) ? parsed.tax_breakdown : undefined,
   };
 }
 

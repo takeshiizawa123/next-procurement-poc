@@ -924,6 +924,8 @@ export const handleJournalRegister: SlackActionHandler = async ({
 
 /**
  * 金額差異の再承認リクエストを承認者に送信
+ *
+ * 3回超で強制エスカレーション: 自動再承認フローを停止し、OPS通知のみ行う
  */
 export async function sendAmountDiffApproval(
   client: WebClient,
@@ -936,6 +938,49 @@ export async function sendAmountDiffApproval(
   approverSlackId: string,
   ocrSubtotal?: number,
 ): Promise<void> {
+  // 試行回数チェック: 3回超は強制エスカレーション
+  const MAX_RETRY = 3;
+  let retryCount = 0;
+  try {
+    const { db } = await import("@/db");
+    const { purchaseRequests } = await import("@/db/schema");
+    const { eq } = await import("drizzle-orm");
+    const [pr] = await db
+      .select({ count: purchaseRequests.amountDiffRetryCount })
+      .from(purchaseRequests)
+      .where(eq(purchaseRequests.poNumber, prNumber))
+      .limit(1);
+    retryCount = pr?.count ?? 0;
+
+    // インクリメント
+    await db
+      .update(purchaseRequests)
+      .set({ amountDiffRetryCount: retryCount + 1, updatedAt: new Date() })
+      .where(eq(purchaseRequests.poNumber, prNumber));
+  } catch (e) {
+    console.warn("[sendAmountDiffApproval] retry count check failed:", e);
+  }
+
+  if (retryCount >= MAX_RETRY) {
+    // 3回超: 自動フロー停止、OPSに強制エスカレーション
+    await notifyOps(
+      client,
+      [
+        `🛑 *金額差異再承認の試行回数上限（${MAX_RETRY}回）に達しました*`,
+        `• ${prNumber}`,
+        `• 証憑¥${ocrAmount.toLocaleString()} / 申請¥${requestedAmount.toLocaleString()} / 差額${difference > 0 ? "+" : ""}¥${difference.toLocaleString()}`,
+        `自動再承認フローを停止しました。管理本部で手動対応してください。`,
+        `判断例: a) 証憑金額で手動仕訳 b) 申請者に差戻し c) 仕訳延期`,
+      ].join("\n"),
+    );
+    await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: `🛑 金額差異再承認の試行が${MAX_RETRY}回を超えました。管理本部に手動対応を依頼しています。`,
+    });
+    return;
+  }
+
   const pctDiff = requestedAmount > 0 ? Math.abs(difference) / requestedAmount * 100 : 0;
   const diffSign = difference > 0 ? "+" : "";
   const actionValue = `${prNumber}|${approverSlackId}|${ocrAmount}|${requestedAmount}|${ocrSubtotal ?? ""}`;
