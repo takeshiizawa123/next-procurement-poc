@@ -97,16 +97,23 @@ let client: WebClient | null = null;
  *
  * 本番切替時の手順:
  * 1. ユーザーの明示的な指示を受ける
- * 2. FORCE_TEST_MODE を false に変更
- * 3. Vercel環境変数 TEST_MODE を false に変更
- * 4. 段階的に特定ユーザーのみ解除してテスト
+ * 2. 段階的切替: ALLOWED_PRODUCTION_USERS 環境変数に対象者Slack IDを追加
+ *    （該当ユーザー宛DMのみ本番送信、他は継続でリダイレクト）
+ * 3. FORCE_TEST_MODE を false に変更
+ * 4. Vercel環境変数 TEST_MODE を false に変更
  */
 const FORCE_TEST_MODE = true; // ★ 本番切替まで絶対に変更禁止
 const TEST_MODE = FORCE_TEST_MODE || process.env.TEST_MODE === "true";
 // テスト専用プライベートチャンネル（自分だけが見える）
 const TEST_PRIVATE_CHANNEL = "C0A2HJ6S19P";
-// テスト中に許可するユーザー（自分のみ）
+// テスト中に許可する開発者（常に許可）
 const TEST_ALLOWED_USER = "U04FBAX6MEK"; // 伊澤
+// 段階的切替: このリストに含まれるSlack IDのユーザー宛DMは実際に送信される
+// Week 2: 試験ユーザー1人を追加、Week 3: 部門長5-10人に拡大
+const ALLOWED_PRODUCTION_USERS = (process.env.ALLOWED_PRODUCTION_USERS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 /**
  * 全Slack送信先を安全なチャンネルにリダイレクトする。
@@ -121,14 +128,17 @@ export function safeDmChannel(channel: string): string {
 
   // ユーザーID宛DM（U始まり）
   if (channel.startsWith("U")) {
-    // 自分宛のDMはそのまま許可
-    if (channel === TEST_ALLOWED_USER) return channel;
+    // 開発者本人 or 段階切替の許可ユーザー → 本番送信
+    if (channel === TEST_ALLOWED_USER || ALLOWED_PRODUCTION_USERS.includes(channel)) {
+      return channel;
+    }
     // それ以外は全てテストチャンネルにリダイレクト
     console.log(`[slack] TEST_MODE: redirecting DM ${channel} → ${TEST_PRIVATE_CHANNEL}`);
     return TEST_PRIVATE_CHANNEL;
   }
 
   // チャンネル投稿（C始まり）— テストプライベートチャンネル以外はリダイレクト
+  // Note: チャンネル投稿はWeek 4まで全てリダイレクト（段階切替では DM限定で本番動作）
   if (channel.startsWith("C") && channel !== TEST_PRIVATE_CHANNEL) {
     console.log(`[slack] TEST_MODE: redirecting channel ${channel} → ${TEST_PRIVATE_CHANNEL}`);
     return TEST_PRIVATE_CHANNEL;
