@@ -300,30 +300,46 @@ export interface JournalListItem {
 }
 
 /**
- * 仕訳一覧を取得
+ * 仕訳一覧を取得（cursor-based pagination 全件取得）
+ *
+ * MF API はデフォルトlimit=1000/page。next_cursor を使って全ページを取得する。
  *
  * @param params.from 開始日 (YYYY-MM-DD)
  * @param params.to   終了日 (YYYY-MM-DD)
  * @param params.enteredBy "none" で自動仕訳（カード明細由来 = Stage 2）のみ取得
+ * @param params.maxPages ページ取得上限（デフォルト20 = 最大20,000件）
  */
 export async function getJournals(params: {
   from: string;
   to: string;
   enteredBy?: string;
+  maxPages?: number;
 }): Promise<JournalListItem[]> {
-  const query = new URLSearchParams({
-    start_date: params.from,
-    end_date: params.to,
-    ...(params.enteredBy ? { entered_by: params.enteredBy } : {}),
-  });
-  const data = await retryWithBackoff(
-    () => authenticatedRequest<{ journals: JournalListItem[] }>(
-      "GET",
-      `/journals?${query.toString()}`,
-    ),
-    { maxRetries: 2, taskName: "MF getJournals" },
-  );
-  return data.journals || [];
+  const maxPages = params.maxPages ?? 20;
+  const allJournals: JournalListItem[] = [];
+  let cursor: string | undefined;
+
+  for (let page = 1; page <= maxPages; page++) {
+    const query = new URLSearchParams({
+      start_date: params.from,
+      end_date: params.to,
+      limit: "1000",
+      ...(params.enteredBy ? { entered_by: params.enteredBy } : {}),
+      ...(cursor ? { cursor } : {}),
+    });
+    const data = await retryWithBackoff(
+      () => authenticatedRequest<{ journals: JournalListItem[]; next_cursor: string | null }>(
+        "GET",
+        `/journals?${query.toString()}`,
+      ),
+      { maxRetries: 2, taskName: `MF getJournals p${page}` },
+    );
+    allJournals.push(...(data.journals || []));
+    if (!data.next_cursor) break; // 最終ページ
+    cursor = data.next_cursor;
+  }
+
+  return allJournals;
 }
 
 /**
