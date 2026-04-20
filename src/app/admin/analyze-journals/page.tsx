@@ -4,6 +4,32 @@ import { useState } from "react";
 import { apiFetch } from "@/lib/api-client";
 import { useUser } from "@/lib/user-context";
 
+interface DetailResult {
+  ok: boolean;
+  filter: { debitKeyword: string; creditKeyword: string };
+  summary: { filteredCount: number; totalAmount: number };
+  byDebitAccount: Array<{ accountName: string; count: number; total: number }>;
+  byCounterparty: Array<{ counterpartyName: string; count: number; total: number; accountCount: number; accountNames: string[] }>;
+  repeatedPatterns: Array<{
+    accountName: string;
+    counterpartyName: string;
+    count: number;
+    total: number;
+    avgAmount: number;
+    minAmount: number;
+    maxAmount: number;
+    isFixed: boolean;
+  }>;
+  samples: Array<{
+    id: number;
+    date: string;
+    debitAccount: string;
+    counterparty: string;
+    amount: number;
+    memo: string;
+  }>;
+}
+
 interface AnalysisResult {
   ok: boolean;
   period: { from: string; to: string };
@@ -55,6 +81,41 @@ export default function AnalyzeJournalsPage() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<DetailResult | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailTitle, setDetailTitle] = useState<string>("");
+
+  async function loadDetail(type: string) {
+    setDetailLoading(true);
+    setDetailTitle(type);
+    try {
+      // typeに応じてフィルタを決定
+      let debitKw = "";
+      let creditKw = "";
+      if (type === "範囲外/未払費用計上(決算)") { creditKw = "未払費用"; }
+      else if (type === "範囲外/未払費用支払") { debitKw = "未払費用"; }
+      else if (type === "範囲外/支払消込") { debitKw = "未払金"; }
+      else if (type === "範囲外/源泉税等納付") { debitKw = "預り金"; }
+      else if (type === "範囲外/前払費用") { debitKw = "前払費用"; }
+      else if (type.startsWith("範囲外/")) { /* その他は集計不可 */ return; }
+      else {
+        // 対象内の場合は借方科目名で検索（分類ルールの最初のkeyword推測は難しいので type から推測）
+        debitKw = type.split("/")[0]; // ex: "役務" or "通信" or "SaaS"
+      }
+      const params = new URLSearchParams({ month });
+      if (debitKw) params.set("debitKeyword", debitKw);
+      if (creditKw) params.set("creditKeyword", creditKw);
+      const res = await apiFetch(`/api/admin/analyze-journal-detail?${params}`);
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error || "詳細取得失敗");
+        return;
+      }
+      setDetail(await res.json());
+    } finally {
+      setDetailLoading(false);
+    }
+  }
 
   async function analyze() {
     setLoading(true);
@@ -179,6 +240,7 @@ export default function AnalyzeJournalsPage() {
                   <th className="px-3 py-2 text-right text-xs font-medium">件数</th>
                   <th className="px-3 py-2 text-right text-xs font-medium">金額</th>
                   <th className="px-3 py-2 text-left text-xs font-medium">対応フロー</th>
+                  <th className="px-3 py-2 text-center text-xs font-medium">内訳</th>
                 </tr>
               </thead>
               <tbody>
@@ -191,11 +253,125 @@ export default function AnalyzeJournalsPage() {
                     <td className="px-3 py-2 text-right">{t.count}</td>
                     <td className="px-3 py-2 text-right">¥{t.totalAmount.toLocaleString()}</td>
                     <td className="px-3 py-2 text-xs text-gray-600">{t.flow}</td>
+                    <td className="px-3 py-2 text-center">
+                      <button
+                        onClick={() => loadDetail(t.type)}
+                        disabled={detailLoading}
+                        className="text-xs text-blue-600 hover:underline disabled:text-gray-400"
+                      >
+                        詳細
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+
+          {/* 詳細内訳パネル */}
+          {detailLoading && (
+            <div className="bg-white border rounded-xl p-4 mb-4 text-center text-sm text-gray-400">
+              詳細取得中…
+            </div>
+          )}
+          {detail && !detailLoading && (
+            <div className="bg-white border-2 border-blue-300 rounded-xl p-4 mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-bold text-sm">
+                  📊 詳細内訳: {detailTitle}（{detail.summary.filteredCount}件 ¥{detail.summary.totalAmount.toLocaleString()}）
+                </h3>
+                <button onClick={() => setDetail(null)} className="text-xs text-gray-500 hover:underline">
+                  閉じる
+                </button>
+              </div>
+
+              {/* 借方科目別 */}
+              <div className="mb-4">
+                <h4 className="text-xs font-bold text-gray-700 mb-1">借方科目別</h4>
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-2 py-1 text-left">借方科目</th>
+                      <th className="px-2 py-1 text-right">件数</th>
+                      <th className="px-2 py-1 text-right">金額</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detail.byDebitAccount.map((a) => (
+                      <tr key={a.accountName} className="border-b">
+                        <td className="px-2 py-1">{a.accountName}</td>
+                        <td className="px-2 py-1 text-right">{a.count}</td>
+                        <td className="px-2 py-1 text-right">¥{a.total.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 繰り返しパターン（契約化候補） */}
+              {detail.repeatedPatterns.length > 0 && (
+                <div className="mb-4">
+                  <h4 className="text-xs font-bold text-gray-700 mb-1">
+                    🎯 繰り返しパターン（{detail.repeatedPatterns.length}件 — 契約化候補）
+                  </h4>
+                  <p className="text-xs text-gray-500 mb-1">
+                    同じ借方科目×取引先で複数回発生。契約マスタに登録すれば月次見積計上で自動化できる可能性。
+                  </p>
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 border-b">
+                      <tr>
+                        <th className="px-2 py-1 text-left">借方科目</th>
+                        <th className="px-2 py-1 text-left">取引先</th>
+                        <th className="px-2 py-1 text-right">件数</th>
+                        <th className="px-2 py-1 text-right">合計</th>
+                        <th className="px-2 py-1 text-right">平均</th>
+                        <th className="px-2 py-1 text-center">定額/従量</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detail.repeatedPatterns.map((p, i) => (
+                        <tr key={i} className="border-b">
+                          <td className="px-2 py-1">{p.accountName}</td>
+                          <td className="px-2 py-1">{p.counterpartyName}</td>
+                          <td className="px-2 py-1 text-right">{p.count}</td>
+                          <td className="px-2 py-1 text-right">¥{p.total.toLocaleString()}</td>
+                          <td className="px-2 py-1 text-right">¥{p.avgAmount.toLocaleString()}</td>
+                          <td className="px-2 py-1 text-center">
+                            {p.isFixed ? <span className="text-blue-600">固定</span> : <span className="text-orange-600">従量</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* 取引先別 */}
+              <div className="mb-4">
+                <h4 className="text-xs font-bold text-gray-700 mb-1">取引先別（上位30）</h4>
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-2 py-1 text-left">取引先</th>
+                      <th className="px-2 py-1 text-right">件数</th>
+                      <th className="px-2 py-1 text-right">金額</th>
+                      <th className="px-2 py-1 text-left">使用科目</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detail.byCounterparty.map((c) => (
+                      <tr key={c.counterpartyName} className="border-b">
+                        <td className="px-2 py-1">{c.counterpartyName}</td>
+                        <td className="px-2 py-1 text-right">{c.count}</td>
+                        <td className="px-2 py-1 text-right">¥{c.total.toLocaleString()}</td>
+                        <td className="px-2 py-1 text-xs text-gray-600">{c.accountNames.slice(0, 3).join(", ")}{c.accountCount > 3 ? `…+${c.accountCount - 3}` : ""}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* 未対応サンプル */}
           {data.notHandledSamples.length > 0 && (
