@@ -98,6 +98,8 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       "autoAccrue",
       "isActive",
       "notes",
+      "contractFileUrl",
+      "contractFileName",
     ];
 
     for (const field of allowedFields) {

@@ -43,6 +43,27 @@ const PAGE_IDS = {
   contractDb: (process.env.NOTION_CONTRACT_DB_ID || "").trim(),
 };
 
+// data_source_id は database_id と異なる場合があるため、runtime で解決してキャッシュ
+const dataSourceCache = new Map<string, string>();
+async function resolveDataSourceId(databaseId: string): Promise<string | null> {
+  if (!databaseId) return null;
+  const cached = dataSourceCache.get(databaseId);
+  if (cached) return cached;
+  const notion = getNotionClient();
+  if (!notion) return null;
+  try {
+    const db = await notion.databases.retrieve({ database_id: databaseId });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dataSources = (db as any).data_sources as Array<{ id: string }> | undefined;
+    const id = dataSources?.[0]?.id || databaseId;
+    dataSourceCache.set(databaseId, id);
+    return id;
+  } catch (e) {
+    console.error("[notion] resolveDataSourceId failed:", e);
+    return null;
+  }
+}
+
 // ========================================
 // 1. 業務フロー図の同期
 // ========================================
@@ -455,9 +476,15 @@ export async function syncContract(data: {
   if (!notion || !PAGE_IDS.contractDb) return null;
 
   try {
+    const dataSourceId = await resolveDataSourceId(PAGE_IDS.contractDb);
+    if (!dataSourceId) {
+      console.error("[notion] syncContract: data_source_id resolution failed");
+      return null;
+    }
+
     // 既存レコードを検索
     const queryResult = await notion.dataSources.query({
-      data_source_id: PAGE_IDS.contractDb,
+      data_source_id: dataSourceId,
       filter: {
         property: "契約番号",
         title: { equals: data.contractNumber },
@@ -505,7 +532,8 @@ export async function syncContract(data: {
       pageUrl = "url" in updated ? (updated as { url: string }).url : "";
     } else {
       const created = await notion.pages.create({
-        parent: { database_id: PAGE_IDS.contractDb },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        parent: { type: "data_source_id", data_source_id: dataSourceId } as any,
         properties: properties as never,
       });
       pageId = created.id;
