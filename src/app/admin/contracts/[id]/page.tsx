@@ -6,23 +6,25 @@ import { useUser } from "@/lib/user-context";
 import { useParams } from "next/navigation";
 
 interface Contract {
-  id: string;
-  contract_number: string;
+  id: number;
+  contractNumber: string;
   category: string;
-  billing_type: string;
-  vendor_name: string;
-  monthly_amount: number | null;
-  annual_amount: number | null;
-  budget_limit: number | null;
-  contract_start_date: string;
-  contract_end_date: string | null;
-  renewal_type: string;
-  account_title: string;
+  billingType: string;
+  supplierName: string;
+  monthlyAmount: number | null;
+  annualAmount: number | null;
+  budgetAmount: number | null;
+  contractStartDate: string;
+  contractEndDate: string | null;
+  renewalType: string;
+  accountTitle: string;
   department: string;
   notes: string | null;
-  auto_approve_fixed: boolean;
-  is_active: boolean;
-  created_at: string;
+  autoApprove: boolean;
+  isActive: boolean;
+  contractFileUrl: string | null;
+  contractFileName: string | null;
+  createdAt: string;
 }
 
 interface Invoice {
@@ -127,10 +129,10 @@ export default function ContractDetailPage() {
       const res = await apiFetch(`/api/admin/contracts/${contractId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ is_active: false }),
+        body: JSON.stringify({ isActive: false }),
       });
       if (!res.ok) throw new Error("更新に失敗しました");
-      setContract((prev) => prev ? { ...prev, is_active: false } : prev);
+      setContract((prev) => prev ? { ...prev, isActive: false } : prev);
       setActionResult({ type: "success", message: "契約を終了しました" });
     } catch (e) {
       setActionResult({ type: "error", message: e instanceof Error ? e.message : "通信エラー" });
@@ -197,20 +199,20 @@ export default function ContractDetailPage() {
   }
 
   const detailRows = [
-    { label: "契約番号", value: contract.contract_number },
+    { label: "契約番号", value: contract.contractNumber },
     { label: "カテゴリ", value: contract.category },
-    { label: "請求タイプ", value: contract.billing_type },
-    { label: "取引先", value: contract.vendor_name },
-    { label: "月額", value: formatAmount(contract.monthly_amount) },
-    { label: "年額", value: formatAmount(contract.annual_amount) },
-    { label: "予算上限", value: formatAmount(contract.budget_limit) },
-    { label: "契約開始日", value: formatDate(contract.contract_start_date) },
-    { label: "契約終了日", value: formatDate(contract.contract_end_date) },
-    { label: "更新タイプ", value: contract.renewal_type },
-    { label: "勘定科目", value: contract.account_title },
+    { label: "請求タイプ", value: contract.billingType },
+    { label: "取引先", value: contract.supplierName },
+    { label: "月額", value: formatAmount(contract.monthlyAmount) },
+    { label: "年額", value: formatAmount(contract.annualAmount) },
+    { label: "予算上限", value: formatAmount(contract.budgetAmount) },
+    { label: "契約開始日", value: formatDate(contract.contractStartDate) },
+    { label: "契約終了日", value: formatDate(contract.contractEndDate) },
+    { label: "更新タイプ", value: contract.renewalType },
+    { label: "勘定科目", value: contract.accountTitle },
     { label: "部門", value: contract.department },
-    { label: "自動承認", value: contract.auto_approve_fixed ? "有効" : "無効" },
-    { label: "登録日", value: formatDate(contract.created_at) },
+    { label: "自動承認", value: contract.autoApprove ? "有効" : "無効" },
+    { label: "登録日", value: formatDate(contract.createdAt) },
   ];
 
   return (
@@ -218,11 +220,11 @@ export default function ContractDetailPage() {
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <a href="/admin/contracts" className="text-sm text-gray-400 hover:text-gray-600">&larr; 一覧</a>
-        <h1 className="text-xl font-bold">{contract.vendor_name}</h1>
+        <h1 className="text-xl font-bold">{contract.supplierName}</h1>
         <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-          contract.is_active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+          contract.isActive ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
         }`}>
-          {contract.is_active ? "契約中" : "終了"}
+          {contract.isActive ? "契約中" : "終了"}
         </span>
       </div>
 
@@ -239,13 +241,23 @@ export default function ContractDetailPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-bold text-gray-800">契約情報</h2>
           <div className="flex gap-2">
+            {contract.contractFileUrl && (
+              <a
+                href={contract.contractFileUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs px-3 py-1.5 border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50"
+              >
+                📄 契約書を見る
+              </a>
+            )}
             <a
               href={`/admin/contracts/${contractId}/edit`}
               className="text-xs px-3 py-1.5 border rounded-lg text-gray-600 hover:bg-gray-50"
             >
               編集
             </a>
-            {contract.is_active && (
+            {contract.isActive && (
               <button
                 onClick={handleTerminate}
                 disabled={actionLoading}
@@ -279,7 +291,7 @@ export default function ContractDetailPage() {
         <h2 className="font-bold text-gray-800 mb-4">月次請求</h2>
 
         {/* New invoice form — billing_type別 */}
-        {contract.billing_type === "カード自動" ? (
+        {contract.billingType === "カード自動" ? (
           /* カード自動: フォームなし、マッチング状況を表示 */
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
             <p className="text-sm text-blue-800 font-medium mb-1">カード明細マッチング</p>
@@ -315,7 +327,7 @@ export default function ContractDetailPage() {
               </div>
 
               {/* 従量系: 稼働時間・数量・報告メモ */}
-              {contract.billing_type === "従量" && (
+              {contract.billingType === "従量" && (
                 <>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">稼働時間</label>
@@ -346,14 +358,14 @@ export default function ContractDetailPage() {
 
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">
-                  {contract.billing_type === "従量" ? "稼働報告書/タイムシート" : "証憑ファイル"}
+                  {contract.billingType === "従量" ? "稼働報告書/タイムシート" : "証憑ファイル"}
                 </label>
                 <input
                   type="file"
                   onChange={(e) => setNewFile(e.target.files?.[0] || null)}
                   className="text-sm text-gray-600"
                   accept=".pdf,.png,.jpg,.jpeg,.csv,.xlsx"
-                  required={contract.billing_type === "従量"}
+                  required={contract.billingType === "従量"}
                 />
               </div>
               <button
@@ -366,7 +378,7 @@ export default function ContractDetailPage() {
             </div>
 
             {/* 従量系: 報告メモ */}
-            {contract.billing_type === "従量" && (
+            {contract.billingType === "従量" && (
               <div className="mt-3">
                 <label className="block text-xs font-medium text-gray-600 mb-1">報告メモ</label>
                 <textarea
@@ -389,13 +401,13 @@ export default function ContractDetailPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-gray-500">請求月</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-gray-500">予定額</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-gray-500">請求額</th>
-                {contract.billing_type === "固定" && (
+                {contract.billingType === "固定" && (
                   <th className="text-center px-4 py-3 text-xs font-medium text-gray-500">定額一致</th>
                 )}
-                {contract.billing_type === "従量" && (
+                {contract.billingType === "従量" && (
                   <th className="text-right px-4 py-3 text-xs font-medium text-gray-500">時間/数量</th>
                 )}
-                {contract.billing_type !== "固定" && contract.billing_type !== "従量" && (
+                {contract.billingType !== "固定" && contract.billingType !== "従量" && (
                   <th className="text-right px-4 py-3 text-xs font-medium text-gray-500">差額</th>
                 )}
                 <th className="text-center px-4 py-3 text-xs font-medium text-gray-500">ステータス</th>
@@ -408,7 +420,7 @@ export default function ContractDetailPage() {
                   <td className="px-4 py-3 text-gray-700">{inv.invoice_month}</td>
                   <td className="px-4 py-3 text-right text-gray-600">{formatAmount(inv.expected_amount)}</td>
                   <td className="px-4 py-3 text-right text-gray-800">{formatAmount(inv.actual_amount)}</td>
-                  {contract.billing_type === "固定" ? (
+                  {contract.billingType === "固定" ? (
                     <td className="px-4 py-3 text-center">
                       {inv.actual_amount != null && inv.expected_amount != null ? (
                         inv.actual_amount === inv.expected_amount
@@ -416,7 +428,7 @@ export default function ContractDetailPage() {
                           : <span className="text-red-600 font-medium" title={`差額: ${formatAmount((inv.actual_amount || 0) - (inv.expected_amount || 0))}`}>&#10007;</span>
                       ) : <span className="text-gray-400">-</span>}
                     </td>
-                  ) : contract.billing_type === "従量" ? (
+                  ) : contract.billingType === "従量" ? (
                     <td className="px-4 py-3 text-right text-gray-600 text-xs">
                       {inv.hours ? `${inv.hours}h` : ""}
                       {inv.hours && inv.units ? " / " : ""}

@@ -5,17 +5,18 @@ import { apiFetch } from "@/lib/api-client";
 import { useUser } from "@/lib/user-context";
 
 interface Contract {
-  id: string;
-  contract_number: string;
+  id: number;
+  contractNumber: string;
   category: string;
-  vendor_name: string;
-  monthly_amount: number | null;
-  annual_amount: number | null;
-  contract_start_date: string;
-  contract_end_date: string | null;
-  is_active: boolean;
-  billing_type: string;
-  renewal_type: string;
+  supplierName: string;
+  monthlyAmount: number | null;
+  annualAmount: number | null;
+  contractStartDate: string;
+  contractEndDate: string | null;
+  isActive: boolean;
+  billingType: string;
+  renewalType: string;
+  contractFileUrl?: string | null;
 }
 
 export default function ContractsPage() {
@@ -67,21 +68,26 @@ export default function ContractsPage() {
   }
 
   const filtered = contracts.filter((c) => {
-    if (filter === "active") return c.is_active;
-    if (filter === "inactive") return !c.is_active;
+    if (filter === "active") return c.isActive;
+    if (filter === "inactive") return !c.isActive;
     return true;
   });
 
-  const activeContracts = contracts.filter((c) => c.is_active);
-  const totalMonthly = activeContracts.reduce((sum, c) => sum + (c.monthly_amount || 0), 0);
+  const activeContracts = contracts.filter((c) => c.isActive);
+  const totalMonthly = activeContracts.reduce((sum, c) => sum + (c.monthlyAmount || 0), 0);
 
   const today = new Date();
   const sixtyDaysFromNow = new Date(today.getTime() + 60 * 24 * 60 * 60 * 1000);
 
   function isRenewalSoon(c: Contract): boolean {
-    if (!c.is_active || !c.contract_end_date) return false;
-    const endDate = new Date(c.contract_end_date);
+    if (!c.isActive || !c.contractEndDate) return false;
+    const endDate = new Date(c.contractEndDate);
     return endDate <= sixtyDaysFromNow && endDate >= today;
+  }
+
+  function isExpired(c: Contract): boolean {
+    if (!c.contractEndDate) return false;
+    return new Date(c.contractEndDate) < today;
   }
 
   function formatDate(dateStr: string | null): string {
@@ -169,23 +175,28 @@ export default function ContractsPage() {
                   className="border-b last:border-b-0 hover:bg-gray-50 cursor-pointer transition-colors"
                   onClick={() => { window.location.href = `/admin/contracts/${c.id}`; }}
                 >
-                  <td className="px-4 py-3 font-mono text-xs text-gray-700">{c.contract_number}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-gray-700">{c.contractNumber}</td>
                   <td className="px-4 py-3 text-gray-700">{c.category}</td>
-                  <td className="px-4 py-3 text-gray-800 font-medium">{c.vendor_name}</td>
+                  <td className="px-4 py-3 text-gray-800 font-medium">{c.supplierName}</td>
                   <td className="px-4 py-3 text-right text-gray-800">
-                    {c.monthly_amount != null ? `\u00a5${c.monthly_amount.toLocaleString()}` : "-"}
+                    {c.monthlyAmount != null ? `\u00a5${c.monthlyAmount.toLocaleString()}` : "-"}
                   </td>
                   <td className="px-4 py-3 text-gray-600 text-xs">
-                    {formatDate(c.contract_start_date)} ~ {formatDate(c.contract_end_date)}
+                    {formatDate(c.contractStartDate)} ~ {formatDate(c.contractEndDate)}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium ${
-                      c.is_active
+                      c.isActive
                         ? "bg-green-100 text-green-700"
                         : "bg-gray-100 text-gray-500"
                     }`}>
-                      {c.is_active ? "契約中" : "終了"}
+                      {c.isActive ? "契約中" : "終了"}
                     </span>
+                    {isExpired(c) && c.isActive && (
+                      <span className="ml-1 inline-block text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+                        🚨 期間切れ
+                      </span>
+                    )}
                     {isRenewalSoon(c) && (
                       <span className="ml-1 inline-block text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-medium">
                         更新間近
