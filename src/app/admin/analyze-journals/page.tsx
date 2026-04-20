@@ -11,11 +11,15 @@ interface AnalysisResult {
     totalJournals: number;
     regularJournals: number;
     adjustingEntries: number;
+    inScopeCount: number;
+    outOfScopeCount: number;
     handledCount: number;
-    notHandledCount: number;
+    unclassifiedCount: number;
     totalAmount: number;
+    inScopeAmount: number;
+    outOfScopeAmount: number;
     handledAmount: number;
-    notHandledAmount: number;
+    unclassifiedAmount: number;
     coverageRate: number;
     coverageRateByAmount: number;
   };
@@ -24,6 +28,7 @@ interface AnalysisResult {
     count: number;
     totalAmount: number;
     canHandle: boolean;
+    isOutOfScope: boolean;
     flow: string;
   }>;
   notHandledSamples: Array<{
@@ -129,21 +134,35 @@ export default function AnalyzeJournalsPage() {
               sub={`決算整理 ${data.summary.adjustingEntries}件除外`}
             />
             <KpiCard
-              title="対応可"
+              title="購買管理 対象内"
+              value={`${data.summary.inScopeCount}件`}
+              sub={`¥${data.summary.inScopeAmount.toLocaleString()}`}
+            />
+            <KpiCard
+              title="範囲外"
+              value={`${data.summary.outOfScopeCount}件`}
+              sub={`¥${data.summary.outOfScopeAmount.toLocaleString()} (経理直接/財務等)`}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <KpiCard
+              title="✅ 新システム対応可"
               value={`${data.summary.handledCount}件`}
               sub={`¥${data.summary.handledAmount.toLocaleString()}`}
               color="green"
             />
             <KpiCard
-              title="未対応"
-              value={`${data.summary.notHandledCount}件`}
-              sub={`¥${data.summary.notHandledAmount.toLocaleString()}`}
-              color={data.summary.notHandledCount > 0 ? "red" : undefined}
+              title="⚠️ 未分類（要ルール追加）"
+              value={`${data.summary.unclassifiedCount}件`}
+              sub={`¥${data.summary.unclassifiedAmount.toLocaleString()}`}
+              color={data.summary.unclassifiedCount > 0 ? "red" : undefined}
             />
           </div>
 
           <div className="bg-white border rounded-xl p-4 mb-4">
-            <h3 className="font-bold text-sm mb-2">カバー率</h3>
+            <h3 className="font-bold text-sm mb-1">購買管理 対象内のカバー率</h3>
+            <p className="text-xs text-gray-500 mb-2">範囲外（売掛金入金・支払消込・借入・税務等）を除いた割合</p>
             <div className="space-y-2 text-sm">
               <ProgressBar label="件数ベース" value={data.summary.coverageRate} />
               <ProgressBar label="金額ベース" value={data.summary.coverageRateByAmount} />
@@ -164,9 +183,10 @@ export default function AnalyzeJournalsPage() {
               </thead>
               <tbody>
                 {data.typeBreakdown.map((t) => (
-                  <tr key={t.type} className="border-b">
+                  <tr key={t.type} className={`border-b ${t.isOutOfScope ? "bg-gray-50 text-gray-500" : ""}`}>
                     <td className="px-3 py-2">
-                      {t.canHandle ? "✅" : "⚠️"} <span className="font-medium">{t.type}</span>
+                      {t.canHandle ? "✅" : t.isOutOfScope ? "⬜" : "⚠️"}{" "}
+                      <span className="font-medium">{t.type}</span>
                     </td>
                     <td className="px-3 py-2 text-right">{t.count}</td>
                     <td className="px-3 py-2 text-right">¥{t.totalAmount.toLocaleString()}</td>

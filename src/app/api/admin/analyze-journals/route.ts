@@ -17,6 +17,7 @@ interface ClassifiedJournal {
   type: string;
   flow: string;
   canHandle: boolean;
+  isOutOfScope: boolean; // true なら購買管理の範囲外（経理直接/財務/税務等）
   refNumber: string | null;
   debitAccount: string;
   creditAccount: string;
@@ -61,6 +62,56 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
   const ref = (memo + " " + remark).match(/(PO-\d{4,6}-\d{4}|PR-\d{4}|CT-\d{6,8}-\d{4}|TRIP-\d{6,8}-\d{4})/);
   const refNumber = ref?.[1] || null;
 
+  // ===== STEP 1: 購買管理システムの対象外を先に除外 =====
+  // 資金移動・消込・決算調整等は経理が直接処理するもの。購買管理の対象ではない。
+  const outOfScopeRules: Array<{ match: (d: string, c: string) => boolean; type: string; flow: string }> = [
+    // 売上・収益（貸方が売掛金・売上）
+    { match: (d, c) => d.includes("普通預金") && c.includes("売掛金"), type: "範囲外/売上入金", flow: "対象外(経理直接)" },
+    { match: (d, c) => d.includes("売掛金"), type: "範囲外/売上計上", flow: "対象外(経理直接)" },
+    { match: (d, _c) => d.includes("売上") && !d.includes("売上原価"), type: "範囲外/売上", flow: "対象外(経理直接)" },
+    // 支払・消込（Stage3自動処理 or 経理直接）
+    { match: (d, c) => d.includes("未払金") && c.includes("普通預金"), type: "範囲外/支払消込", flow: "対象外(Stage3自動 or 経理直接)" },
+    { match: (d, c) => d.includes("買掛金") && c.includes("普通預金"), type: "範囲外/買掛金支払", flow: "対象外(Stage3自動 or 経理直接)" },
+    { match: (d, c) => d.includes("未払金") && c.includes("現金"), type: "範囲外/現金支払", flow: "対象外(経理直接)" },
+    // 借入金・財務
+    { match: (d, _c) => d.includes("借入金") || d.includes("返済"), type: "範囲外/借入返済", flow: "対象外(財務)" },
+    { match: (d, _c) => d.includes("支払利息"), type: "範囲外/支払利息", flow: "対象外(財務)" },
+    { match: (_d, c) => c.includes("借入金"), type: "範囲外/借入金受入", flow: "対象外(財務)" },
+    // 税務・源泉
+    { match: (d, c) => d.includes("預り金") && c.includes("普通預金"), type: "範囲外/源泉税等納付", flow: "対象外(税務)" },
+    { match: (_d, c) => c.includes("預り金"), type: "範囲外/預り金発生", flow: "対象外(給与/税務)" },
+    // 決算調整・繰延
+    { match: (d, _c) => d.includes("前払費用") || d.includes("長期前払費用"), type: "範囲外/前払費用", flow: "対象外(決算)" },
+    { match: (_d, c) => c.includes("前払費用") || c.includes("長期前払費用"), type: "範囲外/前払費用洗替", flow: "対象外(決算)" },
+    { match: (d, _c) => d.includes("仮払") || d.includes("仮受"), type: "範囲外/仮勘定", flow: "対象外(経理直接)" },
+    // 資金移動
+    { match: (d, c) => d.includes("普通預金") && c.includes("普通預金"), type: "範囲外/資金移動", flow: "対象外(経理直接)" },
+    { match: (d, c) => (d.includes("現金") && c.includes("普通預金")) || (d.includes("普通預金") && c.includes("現金")), type: "範囲外/現金預金移動", flow: "対象外(経理直接)" },
+    // 振替仕訳（同一科目など）
+    { match: (d, c) => d.includes("立替金") && c.includes("普通預金"), type: "範囲外/立替金精算", flow: "対象外(経理直接)" },
+  ];
+
+  for (const rule of outOfScopeRules) {
+    if (rule.match(debitAccount, creditAccount)) {
+      return {
+        id: journal.id,
+        date: journal.transaction_date,
+        type: rule.type,
+        flow: rule.flow,
+        canHandle: false,
+        isOutOfScope: true,
+        refNumber,
+        debitAccount,
+        creditAccount,
+        amount,
+        memo: memo.slice(0, 150),
+        remark: remark.slice(0, 150),
+        journalType: journal.journal_type,
+      };
+    }
+  }
+
+  // ===== STEP 2: 購買管理システムで扱える仕訳を分類 =====
   const rules: Array<{ keywords: string[]; type: string; flow: string }> = [
     { keywords: ["消耗品費", "事務用品費"], type: "物品購買", flow: "purchaseFlow" },
     { keywords: ["工具器具備品", "備品"], type: "物品購買(固定資産)", flow: "purchaseFlow+固定資産登録" },
@@ -79,10 +130,10 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
     { keywords: ["福利厚生費"], type: "福利厚生", flow: "purchaseFlow or 立替" },
     { keywords: ["広告宣伝費"], type: "広告", flow: "purchaseFlow or contractFlow" },
     { keywords: ["研修費", "教育費"], type: "研修", flow: "serviceFlow or purchaseFlow" },
-    { keywords: ["租税公課"], type: "税金", flow: "対象外(経理直接)" },
-    { keywords: ["給料", "役員報酬", "給与手当"], type: "給与", flow: "対象外(MF給与)" },
-    { keywords: ["法定福利費"], type: "社会保険", flow: "対象外(MF給与)" },
-    { keywords: ["減価償却費"], type: "償却", flow: "対象外(MF固定資産)" },
+    { keywords: ["租税公課"], type: "範囲外/税金", flow: "対象外(経理直接)" },
+    { keywords: ["給料", "役員報酬", "給与手当"], type: "範囲外/給与", flow: "対象外(MF給与)" },
+    { keywords: ["法定福利費"], type: "範囲外/社会保険", flow: "対象外(MF給与)" },
+    { keywords: ["減価償却費"], type: "範囲外/償却", flow: "対象外(MF固定資産)" },
     { keywords: ["雑費"], type: "雑費", flow: "purchaseFlow(他に該当なしの場合)" },
   ];
 
@@ -90,12 +141,14 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
     if (rule.keywords.some((k) => debitAccount.includes(k))) {
       const isReimbursement = (creditAccount.includes("未払金") || creditAccount.includes("立替"))
         && (memo.includes("立替") || remark.includes("立替"));
+      const isOutOfScope = rule.flow.startsWith("対象外");
       return {
         id: journal.id,
         date: journal.transaction_date,
         type: isReimbursement ? `${rule.type}(立替)` : rule.type,
         flow: isReimbursement ? "expenseFlow" : rule.flow,
-        canHandle: !rule.flow.startsWith("対象外"),
+        canHandle: !isOutOfScope,
+        isOutOfScope,
         refNumber,
         debitAccount,
         creditAccount,
@@ -113,6 +166,7 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
     type: "未分類",
     flow: "要ルール追加",
     canHandle: false,
+    isOutOfScope: false,
     refNumber,
     debitAccount,
     creditAccount,
@@ -151,18 +205,24 @@ export async function GET(request: NextRequest) {
 
     const regular = results.filter((r) => r.journalType !== "adjusting_entry");
     const adjusting = results.filter((r) => r.journalType === "adjusting_entry");
-    const handled = regular.filter((r) => r.canHandle);
-    const notHandled = regular.filter((r) => !r.canHandle);
+
+    // 購買管理の「対象内」のみを対象にカバー率計算
+    const outOfScope = regular.filter((r) => r.isOutOfScope);
+    const inScope = regular.filter((r) => !r.isOutOfScope);
+    const handled = inScope.filter((r) => r.canHandle);
+    const unclassified = inScope.filter((r) => !r.canHandle); // 未分類のみ
 
     const totalAmount = regular.reduce((s, r) => s + r.amount, 0);
+    const inScopeAmount = inScope.reduce((s, r) => s + r.amount, 0);
     const handledAmount = handled.reduce((s, r) => s + r.amount, 0);
+    const outOfScopeAmount = outOfScope.reduce((s, r) => s + r.amount, 0);
 
     // 種別集計
-    const typeSummary: Record<string, { count: number; totalAmount: number; canHandle: boolean; flow: string }> = {};
+    const typeSummary: Record<string, { count: number; totalAmount: number; canHandle: boolean; isOutOfScope: boolean; flow: string }> = {};
     for (const r of regular) {
       const key = r.type;
       if (!typeSummary[key]) {
-        typeSummary[key] = { count: 0, totalAmount: 0, canHandle: r.canHandle, flow: r.flow };
+        typeSummary[key] = { count: 0, totalAmount: 0, canHandle: r.canHandle, isOutOfScope: r.isOutOfScope, flow: r.flow };
       }
       typeSummary[key].count++;
       typeSummary[key].totalAmount += r.amount;
@@ -178,16 +238,22 @@ export async function GET(request: NextRequest) {
         totalJournals: results.length,
         regularJournals: regular.length,
         adjustingEntries: adjusting.length,
+        inScopeCount: inScope.length,
+        outOfScopeCount: outOfScope.length,
         handledCount: handled.length,
-        notHandledCount: notHandled.length,
+        unclassifiedCount: unclassified.length,
         totalAmount,
+        inScopeAmount,
+        outOfScopeAmount,
         handledAmount,
-        notHandledAmount: totalAmount - handledAmount,
-        coverageRate: regular.length > 0 ? (handled.length / regular.length) * 100 : 0,
-        coverageRateByAmount: totalAmount > 0 ? (handledAmount / totalAmount) * 100 : 0,
+        unclassifiedAmount: inScopeAmount - handledAmount,
+        // 購買管理対象内でのカバー率
+        coverageRate: inScope.length > 0 ? (handled.length / inScope.length) * 100 : 0,
+        coverageRateByAmount: inScopeAmount > 0 ? (handledAmount / inScopeAmount) * 100 : 0,
       },
       typeBreakdown: sortedTypes,
-      notHandledSamples: notHandled.slice(0, 20).map((r) => ({
+      // 未分類のみをサンプルとして返す（対象外は「想定通り」なので除外）
+      notHandledSamples: unclassified.slice(0, 20).map((r) => ({
         id: r.id,
         date: r.date,
         type: r.type,
