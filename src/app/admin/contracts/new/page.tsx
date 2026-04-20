@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
 import { useUser } from "@/lib/user-context";
 
@@ -45,6 +45,31 @@ export default function NewContractPage() {
   const [form, setForm] = useState<FormData>(initialForm);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [prefilled, setPrefilled] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("prefill") !== "1") return;
+
+    const category = params.get("category");
+    const billingType = params.get("billingType");
+    const supplierName = params.get("supplierName");
+    const accountTitle = params.get("accountTitle");
+    const monthlyAmount = params.get("monthlyAmount");
+    const department = params.get("department");
+
+    setForm((prev) => ({
+      ...prev,
+      category: category && CATEGORIES.includes(category as typeof CATEGORIES[number]) ? category : prev.category,
+      billing_type: billingType && BILLING_TYPES.includes(billingType as typeof BILLING_TYPES[number]) ? billingType : prev.billing_type,
+      vendor_name: supplierName || prev.vendor_name,
+      account_title: accountTitle || prev.account_title,
+      monthly_amount: monthlyAmount || prev.monthly_amount,
+      department: department || prev.department,
+    }));
+    setPrefilled(true);
+  }, []);
 
   if (user.loaded && !user.isAdmin) {
     return (
@@ -131,6 +156,12 @@ export default function NewContractPage() {
         <a href="/admin/contracts" className="text-sm text-gray-400 hover:text-gray-600">&larr; 一覧に戻る</a>
         <h1 className="text-xl font-bold">新規契約登録</h1>
       </div>
+
+      {prefilled && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 mb-4 text-sm text-blue-800">
+          💡 候補リストから値を自動入力しました。内容を確認して「登録する」を押してください。
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-4 text-sm text-red-700">
