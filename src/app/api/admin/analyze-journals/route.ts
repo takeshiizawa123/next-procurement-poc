@@ -30,9 +30,14 @@ interface ClassifiedJournal {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function classifyJournal(journal: any, accountIdToName: Map<number, string>): ClassifiedJournal {
   const branches = journal.branches || [];
+  // 多行仕訳対応: 最初に account_id が非nullの借方/貸方を採用
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const firstDebitBranch = branches.find((b: any) => b?.debitor?.account_id != null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const firstCreditBranch = branches.find((b: any) => b?.creditor?.account_id != null);
   const firstBranch = branches[0];
-  const debitId = firstBranch?.debitor?.account_id;
-  const creditId = firstBranch?.creditor?.account_id;
+  const debitId = firstDebitBranch?.debitor?.account_id;
+  const creditId = firstCreditBranch?.creditor?.account_id;
   const debitAccount = debitId != null ? (accountIdToName.get(debitId) || `account_id=${debitId}`) : "";
   const creditAccount = creditId != null ? (accountIdToName.get(creditId) || `account_id=${creditId}`) : "";
   const memo = journal.memo || "";
@@ -71,6 +76,10 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
     { match: (d, c) => d.includes("売掛金"), type: "範囲外/売上計上", flow: "対象外(経理直接)" },
     { match: (d, _c) => d.includes("売上") && !d.includes("売上原価"), type: "範囲外/売上", flow: "対象外(経理直接)" },
     { match: (_d, c) => c.includes("受取利息") || c.includes("雑収入") || c.includes("営業外収益"), type: "範囲外/収益", flow: "対象外(経理直接)" },
+    { match: (_d, c) => c.includes("売上高"), type: "範囲外/売上計上", flow: "対象外(経理直接)" },
+    // 契約負債・前受金（収益認識）
+    { match: (d, _c) => d.includes("契約負債") || d.includes("前受"), type: "範囲外/契約負債取崩", flow: "対象外(経理直接)" },
+    { match: (_d, c) => c.includes("契約負債") || c.includes("前受"), type: "範囲外/前受金計上", flow: "対象外(経理直接)" },
     // 支払・消込（Stage3自動処理 or 経理直接）
     { match: (d, c) => d.includes("未払金") && c.includes("普通預金"), type: "範囲外/支払消込", flow: "対象外(Stage3自動 or 経理直接)" },
     { match: (d, c) => d.includes("買掛金") && c.includes("普通預金"), type: "範囲外/買掛金支払", flow: "対象外(Stage3自動 or 経理直接)" },
@@ -129,7 +138,7 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
     { keywords: ["派遣"], type: "役務/派遣", flow: "contractFlow(従量)" },
     { keywords: ["支払報酬料", "顧問料"], type: "役務/顧問", flow: "contractFlow(固定)" },
     { keywords: ["地代家賃", "賃借料", "リース料"], type: "契約/賃貸", flow: "contractFlow(固定)" },
-    { keywords: ["通信費", "サーバー費", "クラウド"], type: "通信/SaaS", flow: "contractFlow(固定/カード自動)" },
+    { keywords: ["通信費", "サーバー費", "クラウド", "ライセンス費", "ライセンス料"], type: "通信/SaaS", flow: "contractFlow(固定/カード自動)" },
     { keywords: ["水道光熱費", "電気料", "ガス料", "水道料"], type: "光熱費", flow: "contractFlow(固定)" },
     { keywords: ["支払手数料"], type: "SaaS/手数料", flow: "contractFlow or purchaseFlow" },
     { keywords: ["会議費"], type: "会議費", flow: "purchaseFlow or 立替" },
@@ -145,7 +154,7 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
     { keywords: ["材料仕入高", "材料費"], type: "製造/材料仕入", flow: "purchaseFlow(製造) or 別システム" },
     { keywords: ["仕入高", "商品仕入"], type: "商品仕入", flow: "purchaseFlow(仕入) or 別システム" },
     { keywords: ["車両費", "ガソリン"], type: "車両費", flow: "purchaseFlow or 立替" },
-    { keywords: ["荷造運賃", "運送費", "発送費"], type: "配送費", flow: "purchaseFlow" },
+    { keywords: ["荷造運賃", "運送費", "発送費", "発送配達費", "配達費"], type: "配送費", flow: "purchaseFlow" },
     { keywords: ["消耗工具器具備品"], type: "消耗工具", flow: "purchaseFlow" },
     { keywords: ["租税公課"], type: "範囲外/税金", flow: "対象外(経理直接)" },
     { keywords: ["給料", "役員報酬", "給与手当", "賞与"], type: "範囲外/給与", flow: "対象外(MF給与)" },
