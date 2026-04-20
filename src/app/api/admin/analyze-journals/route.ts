@@ -70,14 +70,20 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
     { match: (d, c) => d.includes("普通預金") && c.includes("売掛金"), type: "範囲外/売上入金", flow: "対象外(経理直接)" },
     { match: (d, c) => d.includes("売掛金"), type: "範囲外/売上計上", flow: "対象外(経理直接)" },
     { match: (d, _c) => d.includes("売上") && !d.includes("売上原価"), type: "範囲外/売上", flow: "対象外(経理直接)" },
+    { match: (_d, c) => c.includes("受取利息") || c.includes("雑収入") || c.includes("営業外収益"), type: "範囲外/収益", flow: "対象外(経理直接)" },
     // 支払・消込（Stage3自動処理 or 経理直接）
     { match: (d, c) => d.includes("未払金") && c.includes("普通預金"), type: "範囲外/支払消込", flow: "対象外(Stage3自動 or 経理直接)" },
     { match: (d, c) => d.includes("買掛金") && c.includes("普通預金"), type: "範囲外/買掛金支払", flow: "対象外(Stage3自動 or 経理直接)" },
     { match: (d, c) => d.includes("未払金") && c.includes("現金"), type: "範囲外/現金支払", flow: "対象外(経理直接)" },
+    // 未払費用の支払・洗替（期末・期首の調整）
+    { match: (d, c) => d.includes("未払費用") && (c.includes("普通預金") || c.includes("現金")), type: "範囲外/未払費用支払", flow: "対象外(経理直接)" },
+    { match: (d, _c) => d.includes("未払費用"), type: "範囲外/未払費用調整", flow: "対象外(決算/経理直接)" },
+    { match: (_d, c) => c.includes("未払費用"), type: "範囲外/未払費用計上(決算)", flow: "対象外(決算)" },
     // 借入金・財務
     { match: (d, _c) => d.includes("借入金") || d.includes("返済"), type: "範囲外/借入返済", flow: "対象外(財務)" },
-    { match: (d, _c) => d.includes("支払利息"), type: "範囲外/支払利息", flow: "対象外(財務)" },
+    { match: (d, _c) => d.includes("支払利息") || d.includes("利息費用"), type: "範囲外/支払利息", flow: "対象外(財務)" },
     { match: (_d, c) => c.includes("借入金"), type: "範囲外/借入金受入", flow: "対象外(財務)" },
+    { match: (_d, c) => c.includes("資産除去債務") || c.includes("社債"), type: "範囲外/長期負債", flow: "対象外(財務)" },
     // 税務・源泉
     { match: (d, c) => d.includes("預り金") && c.includes("普通預金"), type: "範囲外/源泉税等納付", flow: "対象外(税務)" },
     { match: (_d, c) => c.includes("預り金"), type: "範囲外/預り金発生", flow: "対象外(給与/税務)" },
@@ -88,7 +94,7 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
     // 資金移動
     { match: (d, c) => d.includes("普通預金") && c.includes("普通預金"), type: "範囲外/資金移動", flow: "対象外(経理直接)" },
     { match: (d, c) => (d.includes("現金") && c.includes("普通預金")) || (d.includes("普通預金") && c.includes("現金")), type: "範囲外/現金預金移動", flow: "対象外(経理直接)" },
-    // 振替仕訳（同一科目など）
+    // 振替仕訳
     { match: (d, c) => d.includes("立替金") && c.includes("普通預金"), type: "範囲外/立替金精算", flow: "対象外(経理直接)" },
   ];
 
@@ -113,29 +119,40 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
   }
 
   // ===== STEP 2: 購買管理システムで扱える仕訳を分類 =====
+  // 部分一致で製造業の (製) (変) (固) サフィックス付きにも対応
   const rules: Array<{ keywords: string[]; type: string; flow: string }> = [
-    { keywords: ["消耗品費", "事務用品費"], type: "物品購買", flow: "purchaseFlow" },
+    { keywords: ["消耗品費", "事務用品"], type: "物品購買", flow: "purchaseFlow" },
     { keywords: ["工具器具備品", "備品"], type: "物品購買(固定資産)", flow: "purchaseFlow+固定資産登録" },
     { keywords: ["旅費交通費", "交通費"], type: "出張/旅費", flow: "tripFlow or 立替" },
-    { keywords: ["外注費", "業務委託費"], type: "役務/外注", flow: "serviceFlow or contractFlow" },
-    { keywords: ["派遣料", "派遣費"], type: "役務/派遣", flow: "contractFlow(従量)" },
+    // 製造業: 外注加工費(変)/(固)も拾えるよう「外注」「加工費」「業務委託」で拡張
+    { keywords: ["外注", "加工費", "業務委託"], type: "役務/外注", flow: "serviceFlow or contractFlow" },
+    { keywords: ["派遣"], type: "役務/派遣", flow: "contractFlow(従量)" },
     { keywords: ["支払報酬料", "顧問料"], type: "役務/顧問", flow: "contractFlow(固定)" },
-    { keywords: ["地代家賃", "賃借料"], type: "契約/賃貸", flow: "contractFlow(固定)" },
-    { keywords: ["通信費"], type: "通信/SaaS", flow: "contractFlow(固定/カード自動)" },
+    { keywords: ["地代家賃", "賃借料", "リース料"], type: "契約/賃貸", flow: "contractFlow(固定)" },
+    { keywords: ["通信費", "サーバー費", "クラウド"], type: "通信/SaaS", flow: "contractFlow(固定/カード自動)" },
     { keywords: ["水道光熱費", "電気料", "ガス料", "水道料"], type: "光熱費", flow: "contractFlow(固定)" },
     { keywords: ["支払手数料"], type: "SaaS/手数料", flow: "contractFlow or purchaseFlow" },
     { keywords: ["会議費"], type: "会議費", flow: "purchaseFlow or 立替" },
     { keywords: ["接待交際費"], type: "交際費", flow: "立替 or purchaseFlow" },
-    { keywords: ["新聞図書費"], type: "書籍/購読", flow: "purchaseFlow or contractFlow" },
+    { keywords: ["新聞図書費", "図書研究費", "図書費"], type: "書籍/購読", flow: "purchaseFlow or contractFlow" },
     { keywords: ["修繕費", "保守料"], type: "保守/修繕", flow: "contractFlow(固定) or serviceFlow" },
-    { keywords: ["福利厚生費"], type: "福利厚生", flow: "purchaseFlow or 立替" },
-    { keywords: ["広告宣伝費"], type: "広告", flow: "purchaseFlow or contractFlow" },
+    { keywords: ["福利厚生費", "厚生費"], type: "福利厚生", flow: "purchaseFlow or 立替" },
+    { keywords: ["広告宣伝費", "広告費"], type: "広告", flow: "purchaseFlow or contractFlow" },
     { keywords: ["研修費", "教育費"], type: "研修", flow: "serviceFlow or purchaseFlow" },
+    { keywords: ["採用費"], type: "採用", flow: "contractFlow(広告) or purchaseFlow" },
+    { keywords: ["研究開発費"], type: "研究開発", flow: "purchaseFlow or serviceFlow" },
+    // 製造業: 材料仕入高(製)等
+    { keywords: ["材料仕入高", "材料費"], type: "製造/材料仕入", flow: "purchaseFlow(製造) or 別システム" },
+    { keywords: ["仕入高", "商品仕入"], type: "商品仕入", flow: "purchaseFlow(仕入) or 別システム" },
+    { keywords: ["車両費", "ガソリン"], type: "車両費", flow: "purchaseFlow or 立替" },
+    { keywords: ["荷造運賃", "運送費", "発送費"], type: "配送費", flow: "purchaseFlow" },
+    { keywords: ["消耗工具器具備品"], type: "消耗工具", flow: "purchaseFlow" },
     { keywords: ["租税公課"], type: "範囲外/税金", flow: "対象外(経理直接)" },
-    { keywords: ["給料", "役員報酬", "給与手当"], type: "範囲外/給与", flow: "対象外(MF給与)" },
+    { keywords: ["給料", "役員報酬", "給与手当", "賞与"], type: "範囲外/給与", flow: "対象外(MF給与)" },
     { keywords: ["法定福利費"], type: "範囲外/社会保険", flow: "対象外(MF給与)" },
     { keywords: ["減価償却費"], type: "範囲外/償却", flow: "対象外(MF固定資産)" },
-    { keywords: ["雑費"], type: "雑費", flow: "purchaseFlow(他に該当なしの場合)" },
+    { keywords: ["貸倒引当金", "引当金"], type: "範囲外/引当金", flow: "対象外(決算)" },
+    { keywords: ["雑費", "雑損失"], type: "雑費", flow: "purchaseFlow(他に該当なしの場合)" },
   ];
 
   for (const rule of rules) {
