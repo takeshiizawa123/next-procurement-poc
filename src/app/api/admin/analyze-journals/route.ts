@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminAuth } from "@/lib/api-auth";
-import { getJournals } from "@/lib/mf-accounting";
+import { getJournals, getAccounts } from "@/lib/mf-accounting";
 
 /**
  * 新システムの対応範囲分析:
@@ -27,10 +27,13 @@ interface ClassifiedJournal {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function classifyJournal(journal: any): ClassifiedJournal {
+function classifyJournal(journal: any, accountIdToName: Map<number, string>): ClassifiedJournal {
   const branches = journal.branches || [];
-  const debitAccount = branches[0]?.debitor?.account_name || "";
-  const creditAccount = branches[0]?.creditor?.account_name || "";
+  const firstBranch = branches[0];
+  const debitId = firstBranch?.debitor?.account_id;
+  const creditId = firstBranch?.creditor?.account_id;
+  const debitAccount = debitId != null ? (accountIdToName.get(debitId) || `account_id=${debitId}`) : "";
+  const creditAccount = creditId != null ? (accountIdToName.get(creditId) || `account_id=${creditId}`) : "";
   const memo = journal.memo || "";
   const remark = branches[0]?.remark || "";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -136,8 +139,15 @@ export async function GET(request: NextRequest) {
     const from = `${yStr}-${mStr}-01`;
     const to = new Date(y, m, 0).toISOString().split("T")[0];
 
+    // 勘定科目マスタを取得して ID → 名前 lookup テーブルを構築
+    const accounts = await getAccounts();
+    const accountIdToName = new Map<number, string>();
+    for (const a of accounts) {
+      accountIdToName.set(a.id, a.name);
+    }
+
     const journals = await getJournals({ from, to });
-    const results = journals.map((j) => classifyJournal(j));
+    const results = journals.map((j) => classifyJournal(j, accountIdToName));
 
     const regular = results.filter((r) => r.journalType !== "adjusting_entry");
     const adjusting = results.filter((r) => r.journalType === "adjusting_entry");
