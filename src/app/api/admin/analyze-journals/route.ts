@@ -87,7 +87,8 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
     // 未払費用の支払・洗替（期末・期首の調整）
     { match: (d, c) => d.includes("未払費用") && (c.includes("普通預金") || c.includes("現金")), type: "範囲外/未払費用支払", flow: "対象外(経理直接)" },
     { match: (d, _c) => d.includes("未払費用"), type: "範囲外/未払費用調整", flow: "対象外(決算/経理直接)" },
-    { match: (_d, c) => c.includes("未払費用"), type: "範囲外/未払費用計上(決算)", flow: "対象外(決算)" },
+    // NOTE: 貸方=未払費用のルールは STEP 2 で借方科目を判定した後に適用
+    // （借方が旅費交通費・消耗品費等の費用科目なら対象内のStage1仕訳として処理可能）
     // 借入金・財務
     { match: (d, _c) => d.includes("借入金") || d.includes("返済"), type: "範囲外/借入返済", flow: "対象外(財務)" },
     { match: (d, _c) => d.includes("支払利息") || d.includes("利息費用"), type: "範囲外/支払利息", flow: "対象外(財務)" },
@@ -168,11 +169,12 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
     if (rule.keywords.some((k) => debitAccount.includes(k))) {
       const isReimbursement = (creditAccount.includes("未払金") || creditAccount.includes("立替"))
         && (memo.includes("立替") || remark.includes("立替"));
+      const isAccrual = creditAccount.includes("未払費用"); // 月末計上タイミング
       const isOutOfScope = rule.flow.startsWith("対象外");
       return {
         id: journal.id,
         date: journal.transaction_date,
-        type: isReimbursement ? `${rule.type}(立替)` : rule.type,
+        type: isReimbursement ? `${rule.type}(立替)` : isAccrual ? `${rule.type}(月末計上)` : rule.type,
         flow: isReimbursement ? "expenseFlow" : rule.flow,
         canHandle: !isOutOfScope,
         isOutOfScope,
@@ -185,6 +187,25 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
         journalType: journal.journal_type,
       };
     }
+  }
+
+  // ===== STEP 3: 借方で分類できなかったが、貸方=未払費用なら月末計上仕訳として範囲外 =====
+  if (creditAccount.includes("未払費用")) {
+    return {
+      id: journal.id,
+      date: journal.transaction_date,
+      type: "範囲外/未払費用計上(借方不明)",
+      flow: "対象外(決算)",
+      canHandle: false,
+      isOutOfScope: true,
+      refNumber,
+      debitAccount,
+      creditAccount,
+      amount,
+      memo: memo.slice(0, 150),
+      remark: remark.slice(0, 150),
+      journalType: journal.journal_type,
+    };
   }
 
   return {
