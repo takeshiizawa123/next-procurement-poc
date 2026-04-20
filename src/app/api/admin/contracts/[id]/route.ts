@@ -136,3 +136,37 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     );
   }
 }
+
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  const authError = requireAdminAuth(request);
+  if (authError) return authError;
+
+  try {
+    const { id } = await context.params;
+    const contractId = parseInt(id, 10);
+    if (isNaN(contractId)) {
+      return NextResponse.json({ error: "Invalid contract ID" }, { status: 400 });
+    }
+
+    const [existing] = await db
+      .select()
+      .from(contracts)
+      .where(eq(contracts.id, contractId));
+
+    if (!existing) {
+      return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+    }
+
+    await db.delete(contractInvoices).where(eq(contractInvoices.contractId, contractId));
+    await db.delete(contracts).where(eq(contracts.id, contractId));
+
+    console.log(`[contracts/[id]] Deleted: ${existing.contractNumber}`);
+    return NextResponse.json({ ok: true, deleted: existing.contractNumber });
+  } catch (error) {
+    console.error("[contracts/[id]] DELETE Error:", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      { status: 500 },
+    );
+  }
+}
