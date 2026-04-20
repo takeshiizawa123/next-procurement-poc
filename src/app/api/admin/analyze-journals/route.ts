@@ -48,6 +48,7 @@ function classifyJournal(journal: any, accountIdToName: Map<number, string>): Cl
       type: "決算整理",
       flow: "対象外",
       canHandle: false,
+      isOutOfScope: true,
       refNumber: null,
       debitAccount,
       creditAccount,
