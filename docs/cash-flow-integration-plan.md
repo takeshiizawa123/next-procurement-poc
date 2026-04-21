@@ -24,21 +24,41 @@
 
 ## 次回支払日の算出ロジック
 
+### 基本ルール
+- `paymentDay` は約定日（契約上の支払日）
+- 約定日が休日・祝日の場合は**翌銀行営業日**に繰延
+- `paymentDay = 31` は月末扱い
+
+### 休日繰延の具体例
+- MFビジネスカード支払: paymentDay=20
+  - 2026年3月20日(金) 春分の日 → 実引落は 3月23日(月)
+  - 2026年4月20日(月) 平日 → そのまま 4月20日
+- 実装時は `@holiday-jp/holidays_jp` や銀行カレンダーAPIを利用
+
 ```typescript
 function nextPaymentDate(contract: Contract, from: Date): Date | null {
   if (!contract.paymentDay) return null;
   const day = contract.paymentDay;
   let target = new Date(from.getFullYear(), from.getMonth(), day);
-  // 月末扱い（31）は各月末に調整
+  // 月末扱い（31）
   if (day === 31) target = endOfMonth(from);
   // 既に過去日なら翌月
   if (target < from) {
     target = new Date(target.getFullYear(), target.getMonth() + 1, day);
     if (day === 31) target = endOfMonth(target);
   }
+  // 休日繰延（土日祝は翌銀行営業日）
+  target = shiftToNextBusinessDay(target);
   // 契約終了日を超える場合はnull
   if (contract.contractEndDate && target > new Date(contract.contractEndDate)) return null;
   return target;
+}
+
+function shiftToNextBusinessDay(date: Date): Date {
+  while (isHoliday(date) || date.getDay() === 0 || date.getDay() === 6) {
+    date.setDate(date.getDate() + 1);
+  }
+  return date;
 }
 ```
 

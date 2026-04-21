@@ -101,6 +101,12 @@ export default function ContractsPage() {
         <h1 className="text-xl font-bold">契約管理</h1>
         <div className="flex gap-2">
           <a
+            href="/admin/payments/schedule"
+            className="border border-green-300 text-green-700 text-sm px-4 py-2 rounded-lg hover:bg-green-50 transition-colors"
+          >
+            💰 支払スケジュール
+          </a>
+          <a
             href="/admin/contract-candidates"
             className="border border-purple-300 text-purple-700 text-sm px-4 py-2 rounded-lg hover:bg-purple-50 transition-colors"
           >
