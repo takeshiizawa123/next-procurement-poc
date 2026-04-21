@@ -7,6 +7,7 @@ import { useUser } from "@/lib/user-context";
 const CATEGORIES = ["派遣", "外注", "SaaS", "顧問", "賃貸", "保守", "清掃", "その他"] as const;
 const BILLING_TYPES = ["固定", "従量", "カード自動"] as const;
 const RENEWAL_TYPES = ["自動更新", "都度更新", "期間満了"] as const;
+const PAYMENT_METHODS = ["", "振込", "口座引落", "MFビジネスカード", "クレジットカード", "その他"] as const;
 
 interface FormData {
   category: string;
@@ -20,6 +21,8 @@ interface FormData {
   renewal_type: string;
   account_title: string;
   department: string;
+  payment_method: string;
+  payment_day: string;
   notes: string;
   auto_approve_fixed: boolean;
 }
@@ -36,6 +39,8 @@ const initialForm: FormData = {
   renewal_type: "自動更新",
   account_title: "",
   department: "",
+  payment_method: "",
+  payment_day: "",
   notes: "",
   auto_approve_fixed: false,
 };
@@ -113,18 +118,20 @@ export default function NewContractPage() {
     try {
       const body = {
         category: form.category,
-        billing_type: form.billing_type,
-        vendor_name: form.vendor_name.trim(),
-        monthly_amount: form.monthly_amount ? Number(form.monthly_amount) : null,
-        annual_amount: form.annual_amount ? Number(form.annual_amount) : null,
-        budget_limit: form.budget_limit ? Number(form.budget_limit) : null,
-        contract_start_date: form.contract_start_date,
-        contract_end_date: form.contract_end_date || null,
-        renewal_type: form.renewal_type,
-        account_title: form.account_title.trim(),
+        billingType: form.billing_type,
+        supplierName: form.vendor_name.trim(),
+        monthlyAmount: form.monthly_amount ? Number(form.monthly_amount) : null,
+        annualAmount: form.annual_amount ? Number(form.annual_amount) : null,
+        budgetAmount: form.budget_limit ? Number(form.budget_limit) : null,
+        contractStartDate: form.contract_start_date,
+        contractEndDate: form.contract_end_date || null,
+        renewalType: form.renewal_type,
+        accountTitle: form.account_title.trim(),
         department: form.department.trim(),
+        paymentMethod: form.payment_method || null,
+        paymentDay: form.payment_day ? Number(form.payment_day) : null,
         notes: form.notes.trim(),
-        auto_approve_fixed: form.auto_approve_fixed,
+        autoApprove: form.auto_approve_fixed,
       };
 
       const res = await apiFetch("/api/admin/contracts", {
@@ -331,6 +338,40 @@ export default function NewContractPage() {
                 placeholder="例: 開発部"
                 required
               />
+            </div>
+          </div>
+        </div>
+
+        {/* Payment */}
+        <div className="bg-white border rounded-xl p-4 sm:p-6">
+          <h2 className="font-bold text-gray-800 mb-4">支払情報</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className={labelClass}>支払方法</label>
+              <select
+                value={form.payment_method}
+                onChange={(e) => updateField("payment_method", e.target.value)}
+                className={inputClass}
+              >
+                {PAYMENT_METHODS.map((p) => (
+                  <option key={p} value={p}>{p || "未設定"}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className={labelClass}>支払日（毎月）</label>
+              <select
+                value={form.payment_day}
+                onChange={(e) => updateField("payment_day", e.target.value)}
+                className={inputClass}
+              >
+                <option value="">未設定</option>
+                {Array.from({ length: 30 }, (_, i) => i + 1).map((d) => (
+                  <option key={d} value={String(d)}>毎月{d}日</option>
+                ))}
+                <option value="31">月末</option>
+              </select>
             </div>
           </div>
         </div>

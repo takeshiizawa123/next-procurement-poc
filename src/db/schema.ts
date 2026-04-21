@@ -635,6 +635,10 @@ export const contracts = pgTable(
     requesterSlackId: varchar("requester_slack_id", { length: 30 }),
     approverSlackId: varchar("approver_slack_id", { length: 30 }),
 
+    // 支払情報
+    paymentMethod: varchar("payment_method", { length: 30 }),
+    paymentDay: integer("payment_day"),
+
     // 自動化
     autoApprove: boolean("auto_approve").notNull().default(false),
     autoAccrue: boolean("auto_accrue").notNull().default(true),

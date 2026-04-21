@@ -100,6 +100,8 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       "notes",
       "contractFileUrl",
       "contractFileName",
+      "paymentMethod",
+      "paymentDay",
     ];
 
     for (const field of allowedFields) {

@@ -61,7 +61,8 @@ export async function POST(request: NextRequest) {
           key === "monthlyAmount" ||
           key === "annualAmount" ||
           key === "budgetAmount" ||
-          key === "renewalAlertDays"
+          key === "renewalAlertDays" ||
+          key === "paymentDay"
         ) {
           body[key] = value ? Number(value) : null;
         } else {
@@ -164,6 +165,8 @@ export async function POST(request: NextRequest) {
         department,
         requesterSlackId: (body.requesterSlackId as string) || null,
         approverSlackId: (body.approverSlackId as string) || null,
+        paymentMethod: (body.paymentMethod as string) || null,
+        paymentDay: (body.paymentDay as number) ?? null,
         autoApprove: (body.autoApprove as boolean) ?? false,
         autoAccrue: (body.autoAccrue as boolean) ?? true,
         isActive: (body.isActive as boolean) ?? true,

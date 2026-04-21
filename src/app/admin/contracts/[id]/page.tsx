@@ -24,6 +24,8 @@ interface Contract {
   isActive: boolean;
   contractFileUrl: string | null;
   contractFileName: string | null;
+  paymentMethod: string | null;
+  paymentDay: number | null;
   createdAt: string;
 }
 
@@ -211,6 +213,8 @@ export default function ContractDetailPage() {
     { label: "更新タイプ", value: contract.renewalType },
     { label: "勘定科目", value: contract.accountTitle },
     { label: "部門", value: contract.department },
+    { label: "支払方法", value: contract.paymentMethod || "-" },
+    { label: "支払日", value: contract.paymentDay ? (contract.paymentDay === 31 ? "月末" : `毎月${contract.paymentDay}日`) : "-" },
     { label: "自動承認", value: contract.autoApprove ? "有効" : "無効" },
     { label: "登録日", value: formatDate(contract.createdAt) },
   ];
